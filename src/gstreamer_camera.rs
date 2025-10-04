@@ -32,36 +32,27 @@ impl GStreamerCamera {
     
     pub fn list_cameras() -> Result<Vec<CameraInfo>, String> {
         gst::init().map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
-
+        
         let mut cameras = Vec::new();
-
+        
         // On Windows, use GStreamer device monitor to enumerate real cameras
         #[cfg(target_os = "windows")]
         {
             use gstreamer::DeviceMonitor;
-
-            // Temporarily suppress GStreamer warnings during enumeration
-            let old_level = gst::log::get_default_threshold();
-            gst::log::set_default_threshold(gst::DebugLevel::Error);
-
+            
             let monitor = DeviceMonitor::new();
-
+            
             // Add filter for video sources
             let caps = gst::Caps::builder("video/x-raw").build();
             monitor.add_filter(Some("Video/Source"), Some(&caps));
-
+            
             // Start monitoring to get active devices
             if monitor.start().is_err() {
-                gst::log::set_default_threshold(old_level);
                 println!("[GStreamer] Failed to start device monitor");
                 return Ok(cameras);
             }
-
+            
             let devices = monitor.devices();
-            monitor.stop();
-
-            // Restore logging level before processing devices
-            gst::log::set_default_threshold(old_level);
             
             let mut device_index = 0;
             // Filter only devices that have valid capabilities (working cameras)
@@ -126,8 +117,12 @@ impl GStreamerCamera {
                 });
             }
         }
-
+        
         Ok(cameras)
+    }
+    
+    pub fn start(&mut self, device_id: &str) -> Result<(), String> {
+        self.start_with_quality(device_id, "high")
     }
     
     pub fn start_with_quality(&mut self, device_id: &str, quality: &str) -> Result<(), String> {
@@ -305,6 +300,9 @@ impl GStreamerCamera {
         Ok(())
     }
     
+    pub fn is_running(&self) -> bool {
+        *self.is_running.read()
+    }
 }
 
 impl Drop for GStreamerCamera {
