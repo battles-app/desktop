@@ -89,23 +89,23 @@ impl GStreamerComposite {
     }
     
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
-        println!("[Composite] Starting camera-only pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-
+        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+        
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
             let _ = pipeline.set_state(gst::State::Null);
         }
-
+        
         *self.is_running.write() = true;
-
+        
         // Store pipeline dimensions and FPS
         *self.pipeline_fps.write() = fps;
         *self.pipeline_width.write() = width;
         *self.pipeline_height.write() = height;
-
+        
         let device_index: u32 = camera_device_id.parse()
             .map_err(|_| "Invalid camera device ID")?;
-
+        
         // Map rotation degrees to videoflip method
         // 0 = none, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
         let videoflip_method = match rotation {
@@ -114,172 +114,87 @@ impl GStreamerComposite {
             270 => "counterclockwise",
             _ => "none",
         };
-
-        // Start with simple camera-only pipeline (no compositor initially)
-        // This ensures camera feed works immediately
-        self.start_camera_only_pipeline(device_index, width, height, videoflip_method)
-    }
-
-    fn switch_to_composite_mode(&mut self, pipeline: gst::Pipeline) -> Result<gst::Element, String> {
-        println!("[Composite] 🔄 Switching from camera-only to composite mode");
-
-        // Set pipeline to NULL state for reconfiguration
-        pipeline.set_state(gst::State::Null)
-            .map_err(|e| format!("Failed to pause pipeline for reconfiguration: {:?}", e))?;
-
-        // Get the current tee element
-        let tee = pipeline.by_name("t")
-            .ok_or("Failed to find tee element in pipeline")?;
-
-        // Get the camera source pad from tee
-        let tee_src_pad = tee.static_pad("src_0")
-            .ok_or("Failed to get tee src_0 pad")?;
-
-        // Find the current sink of the tee (should be the preview branch)
-        let current_peers: Vec<_> = tee_src_pad.iterate_internal_links().into_iter().collect();
-        if current_peers.len() != 2 {
-            return Err(format!("Expected 2 tee outputs, found {}", current_peers.len()));
-        }
-
-        // Create compositor
-        use gstreamer::ElementFactory;
-        let compositor = ElementFactory::make("compositor")
-            .name("comp")
-            .property("background", "black")
-            .build()
-            .map_err(|e| format!("Failed to create compositor: {}", e))?;
-
-        let videoconvert = ElementFactory::make("videoconvert")
-            .name("comp_convert")
-            .build()
-            .map_err(|_| "Failed to create videoconvert")?;
-
-        // Add compositor to pipeline
-        pipeline.add_many(&[&compositor, &videoconvert])
-            .map_err(|_| "Failed to add compositor elements")?;
-
-        // Link compositor -> videoconvert
-        gst::Element::link_many(&[&compositor, &videoconvert])
-            .map_err(|_| "Failed to link compositor chain")?;
-
-        // Find where the preview branch connects (should be a queue)
-        let preview_queue = pipeline.by_name("t")
-            .and_then(|t| t.static_pad("src_1"))
-            .and_then(|pad| pad.peer())
-            .and_then(|peer| peer.parent_element())
-            .ok_or("Failed to find preview branch")?;
-
-        // Disconnect preview branch from tee
-        let preview_sink_pad = preview_queue.static_pad("sink")
-            .ok_or("Failed to get preview queue sink pad")?;
-        tee_src_pad.unlink(&preview_sink_pad)
-            .map_err(|_| "Failed to unlink preview branch")?;
-
-        // Connect compositor output to preview branch
-        let comp_src_pad = videoconvert.static_pad("src")
-            .ok_or("Failed to get compositor output pad")?;
-        comp_src_pad.link(&preview_sink_pad)
-            .map_err(|_| "Failed to link compositor to preview")?;
-
-        // Connect camera to compositor sink_0
-        let comp_sink_pad = compositor.request_pad_simple("sink_0")
-            .ok_or("Failed to get compositor sink_0")?;
-
-        // Find the camera output (from tee src_0)
-        let camera_pad = tee_src_pad.peer()
-            .ok_or("Failed to find camera pad")?;
-
-        // Insert videoconvert between camera and compositor
-        let camera_convert = ElementFactory::make("videoconvert")
-            .name("camera_convert")
-            .build()
-            .map_err(|_| "Failed to create camera convert")?;
-
-        pipeline.add(&camera_convert)
-            .map_err(|_| "Failed to add camera convert")?;
-
-        // Link camera -> convert -> compositor
-        camera_pad.unlink(&tee_src_pad)
-            .map_err(|_| "Failed to unlink camera from tee")?;
-
-        gst::Element::link_many(&[&camera_convert, &compositor])
-            .map_err(|_| "Failed to link camera to compositor")?;
-
-        let convert_sink_pad = camera_convert.static_pad("sink")
-            .ok_or("Failed to get convert sink pad")?;
-        camera_pad.link(&convert_sink_pad)
-            .map_err(|_| "Failed to link camera to convert")?;
-
-        // Restart pipeline
-        pipeline.set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to restart pipeline: {:?}", e))?;
-
-        println!("[Composite] ✅ Successfully switched to composite mode");
-        Ok(compositor)
-    }
-
-    fn start_camera_only_pipeline(&mut self, device_index: u32, width: u32, height: u32, videoflip_method: &str) -> Result<(), String> {
-        // Simple camera-only pipeline - no compositor until FX are played
-        // This ensures camera feed works immediately without compositor complications
-
+        
+        // Build GStreamer composite pipeline with compositor element
+        // The compositor element combines multiple video streams with alpha blending
+        // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
+        
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
-                "mfvideosrc device-index={} ! \
-                 video/x-raw,framerate=60/1 ! \
+                "compositor name=comp \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
+                 videoconvert ! \
+                 video/x-raw,format=BGRx,width={},height={} ! \
+                 tee name=t \
+                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! {} \
+                 mfvideosrc device-index={} ! \
                  videoflip method={} ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=RGBA ! \
-                 tee name=t \
-                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
-                     videoconvert ! video/x-raw,format=RGB ! \
-                     jpegenc quality=90 ! \
-                     appsink name=preview emit-signals=true max-buffers=2 drop=true sync=true \
-                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {}",
+                 video/x-raw,width={},height={},format=BGRA ! \
+                 comp.sink_0", 
+                self.layers.read().camera_opacity,
+                self.layers.read().overlay_opacity,
+                width,
+                height,
+                self.get_output_branch(),
                 device_index,
                 videoflip_method,
                 width,
-                height,
-                self.get_output_branch()
+                height
             )
         } else {
             format!(
-                "mfvideosrc device-index={} ! \
-                 video/x-raw,framerate=60/1 ! \
+                "compositor name=comp \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
+                 videoconvert ! \
+                 video/x-raw,format=BGRx,width={},height={} ! \
+                 tee name=t \
+                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! {} \
+                 mfvideosrc device-index={} ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=RGBA ! \
-                 tee name=t \
-                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
-                     videoconvert ! video/x-raw,format=RGB ! \
-                     jpegenc quality=90 ! \
-                     appsink name=preview emit-signals=true max-buffers=2 drop=true sync=true \
-                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {}",
-                device_index,
+                 video/x-raw,width={},height={},format=BGRA ! \
+                 comp.sink_0", 
+                self.layers.read().camera_opacity,
+                self.layers.read().overlay_opacity,
                 width,
                 height,
-                self.get_output_branch()
+                self.get_output_branch(),
+                device_index,
+                width,
+                height
             )
         };
-
+        
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "v4l2src device=/dev/video{} ! \
-             video/x-raw,framerate=60/1 ! \
+            "compositor name=comp \
+               sink_0::zorder=0 sink_0::alpha={} \
+               sink_1::zorder=1 sink_1::alpha={} ! \
+             videoconvert ! \
+             video/x-raw,format=BGRx,width={},height={} ! \
+             tee name=t \
+             t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+             t. ! queue ! {} \
+             v4l2src device=/dev/video{} ! \
              videoconvert ! \
              videoscale ! \
-             video/x-raw,width={},height={},format=RGBA ! \
-             tee name=t \
-             t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
-                 videoconvert ! video/x-raw,format=RGB ! \
-                 jpegenc quality=90 ! \
-                 appsink name=preview emit-signals=true max-buffers=2 drop=true sync=true \
-             t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {}",
-            device_index,
+             video/x-raw,width={},height={},format=BGRA ! \
+             comp.sink_0",
+            self.layers.read().camera_opacity,
+            self.layers.read().overlay_opacity,
             width,
             height,
-            self.get_output_branch()
+            self.get_output_branch(),
+            device_index,
+            width,
+            height
         );
         
         println!("[Composite] Pipeline: {}", pipeline_str);
@@ -295,10 +210,7 @@ impl GStreamerComposite {
             .ok_or("Failed to get preview appsink")?
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
-
-        // Appsink receives RGB data after videoconvert for JPEG encoding
-        // (compositor outputs RGBA, we convert to RGB for appsink)
-
+        
         // Set up callbacks for preview frames
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
@@ -405,7 +317,9 @@ impl GStreamerComposite {
         println!("[Composite FX] ⚡ File: {}", file_path);
         println!("[Composite FX] ⚡ Chroma key: {} (color: {}, tolerance: {:.2}, similarity: {:.2})",
                  use_chroma_key, keycolor, tolerance, similarity);
-
+        println!("[Composite FX] ⚡ Pipeline FPS: {}, Width: {}, Height: {}",
+                 *self.pipeline_fps.read(), *self.pipeline_width.read(), *self.pipeline_height.read());
+        
         // Store FX state
         *self.fx_state.write() = Some(FxPlaybackState {
             file_url: file_path.clone(),
@@ -414,35 +328,36 @@ impl GStreamerComposite {
             similarity,
             use_chroma_key,
         });
-
+        
         // Parse hex color to RGB (e.g., "#00ff00" -> R=0, G=255, B=0)
         let rgb = Self::hex_to_rgb(&keycolor)?;
         println!("[Composite FX] 📊 Chroma key RGB: R={}, G={}, B={} (tolerance={:.3}, similarity={:.3})",
                  rgb.0, rgb.1, rgb.2, tolerance, similarity);
-
-        // Check if we need to add compositor (camera-only pipeline doesn't have it)
-        let compositor = if let Some(ref pipeline) = self.pipeline {
-            println!("[Composite FX] ✅ Pipeline found - state: {:?}", pipeline.current_state());
-
-            match pipeline.by_name("comp") {
-                Some(c) => {
-                    println!("[Composite FX] ✅ Compositor element found (already in composite mode)");
-                    c
-                },
-                None => {
-                    println!("[Composite FX] 🔄 No compositor found - switching to composite mode");
-                    self.switch_to_composite_mode(pipeline.clone())?
-                }
+        
+        // Get the pipeline
+        let pipeline = match &self.pipeline {
+            Some(p) => {
+                println!("[Composite FX] ✅ Pipeline found - state: {:?}", p.current_state());
+                p
+            },
+            None => {
+                println!("[Composite FX] ❌ No pipeline running - please select a camera first!");
+                return Err("[Composite FX] ❌ No pipeline running - please select a camera first!".to_string());
             }
-        } else {
-            println!("[Composite FX] ❌ No pipeline running - please select a camera first!");
-            return Err("[Composite FX] ❌ No pipeline running - please select a camera first!".to_string());
         };
 
-        // Get pipeline reference for cleanup
-        let pipeline = self.pipeline.as_ref()
-            .ok_or("Pipeline not available for FX cleanup")?;
-
+        // Get compositor element
+        let compositor = match pipeline.by_name("comp") {
+            Some(c) => {
+                println!("[Composite FX] ✅ Compositor element found");
+                c
+            },
+            None => {
+                println!("[Composite FX] ❌ Compositor element not found!");
+                return Err("Failed to get compositor element".to_string());
+            }
+        };
+        
         // Stop any existing FX first (with proper cleanup)
         if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
             println!("[Composite FX] 🧹 Removing existing FX bin and freeing memory...");
@@ -497,82 +412,52 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to create decodebin: {}", e))?;
         println!("[Composite FX] ✅ Decodebin created successfully");
 
-        // Create post-decode elements - normalize to 60fps BEFORE keying
-        // decodebin → queue → videoscale → videoconvert → video/x-raw,format=RGBA,width=1280,height=720 → videorate → video/x-raw,framerate=60/1 → [chromakey if used] → identity sync=true → queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 → compositor.sink_N
-
-        // First queue after decodebin
-        let decode_queue = ElementFactory::make("queue")
-            .name("fxdecodequeue")
-            .property("max-size-buffers", 0u32)
-            .property("max-size-bytes", 0u32)
-            .property("max-size-time", 20000000u64) // 20ms
+        // Create post-decode elements
+        let videoconvert = ElementFactory::make("videoconvert")
+            .name("fxconvert")
             .build()
-            .map_err(|_| "Failed to create decode queue")?;
+            .map_err(|_| "Failed to create videoconvert")?;
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        let videoconvert = ElementFactory::make("videoconvert")
-            .name("fxconvert")
-            .build()
-            .map_err(|_| "Failed to create videoconvert")?;
-
-        // Create caps filter for RGBA matching pipeline dimensions (no framerate yet)
-        let rgba_caps = gst::Caps::builder("video/x-raw")
-            .field("format", "RGBA")
-            .field("width", *self.pipeline_width.read() as i32)
-            .field("height", *self.pipeline_height.read() as i32)
-            .build();
-
-        // Add videorate to normalize to 60fps BEFORE keying
-        let videorate = ElementFactory::make("videorate")
-            .name("fxvideorate")
-            .build()
-            .map_err(|_| "Failed to create videorate")?;
-
-        // Create caps filter for 60fps
-        let fps_caps = gst::Caps::builder("video/x-raw")
-            .field("framerate", gst::Fraction::new(60, 1))
-            .build();
-
-        // Add identity element with sync=true (normalized timing)
+        // Add identity element with sync=false to allow natural FX playback speed
+        // Compositor handles timing - FX should play at native frame rate without clock interference
         let identity = ElementFactory::make("identity")
             .name("fxidentity")
-            .property("sync", true) // Sync to normalized 60fps timeline
+            .property("sync", false) // Don't sync to pipeline clock - natural playback speed
             .build()
             .map_err(|_| "Failed to create identity")?;
 
-        // Add leaky queue before compositor
-        let leaky_queue = ElementFactory::make("queue")
-            .name("fxleakyqueue")
-            .property("max-size-buffers", 1u32)
-            .property("max-size-time", 0u64)
-            .property("max-size-bytes", 0u32)
-            .property_from_str("leaky", "downstream")
+        // Add queue for buffering - minimal for low latency FX playback
+        let queue = ElementFactory::make("queue")
+            .name("fxqueue")
+            .property("max-size-buffers", 2u32) // Minimal buffer for low latency
+            .property("max-size-time", 100000000u64) // 100ms buffer only
+            .property_from_str("leaky", "downstream") // Drop old frames if buffer full
             .build()
-            .map_err(|_| "Failed to create leaky queue")?;
+            .map_err(|_| "Failed to create queue")?;
 
-        println!("[Composite FX] 🎬 Normalized to 60fps RGBA format with leaky queue");
+        // Create caps filter to match compositor format (BGRA with alpha channel)
+        // NO FRAME RATE specification - FX plays at natural speed!
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "BGRA")
+            .build();
 
-        // Create capsfilters for RGBA and FPS
-        let rgba_capsfilter = ElementFactory::make("capsfilter")
-            .name("fxrgbacaps")
-            .property("caps", &rgba_caps)
+        println!("[Composite FX] 🎬 Natural FPS without clock sync, format: BGRA");
+
+        let capsfilter = ElementFactory::make("capsfilter")
+            .name("fxcaps")
+            .property("caps", &caps)
             .build()
-            .map_err(|_| "Failed to create RGBA capsfilter")?;
-
-        let fps_capsfilter = ElementFactory::make("capsfilter")
-            .name("fxfpscaps")
-            .property("caps", &fps_caps)
-            .build()
-            .map_err(|_| "Failed to create FPS capsfilter")?;
+            .map_err(|_| "Failed to create capsfilter")?;
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Add alpha element if chroma keying is enabled (AFTER normalization)
+        // Add alpha element if chroma keying is enabled
         let (chroma_element, has_alpha) = if use_chroma_key {
             let alpha = ElementFactory::make("alpha")
                 .name("fxalpha")
@@ -588,15 +473,12 @@ impl GStreamerComposite {
             (None, false)
         };
 
-        // Add all elements to bin - proper order for 60fps normalization
-        let base_elements = &[&filesrc, &decodebin, &decode_queue, &videoscale, &videoconvert, &rgba_capsfilter, &videorate, &fps_capsfilter, &identity, &leaky_queue];
+        // Add all elements to bin (filesrc + decodebin pipeline)
         if let Some(ref alpha) = chroma_element {
-            let mut all_elements: Vec<&gst::Element> = base_elements.iter().cloned().collect();
-            all_elements.insert(all_elements.len() - 1, alpha); // Insert alpha before leaky_queue
-            fx_bin.add_many(&all_elements)
-                .map_err(|_| "Failed to add elements to FX bin with alpha")?;
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter])
+                .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(base_elements)
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
@@ -606,33 +488,25 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to link filesrc to decodebin")?;
         println!("[Composite FX] ✅ Filesrc → decodebin linked");
 
-        // Link decodebin output to normalization chain
-        println!("[Composite FX] 🔗 Linking decode → decode_queue → videoscale → videoconvert → rgba_capsfilter...");
-        gst::Element::link_many(&[&decode_queue, &videoscale, &videoconvert, &rgba_capsfilter])
-            .map_err(|_| "Failed to link decode to RGBA normalization")?;
-        println!("[Composite FX] ✅ Decode chain linked to RGBA normalization");
+        println!("[Composite FX] 🔗 Linking videoconvert → videoscale...");
+        gst::Element::link_many(&[&videoconvert, &videoscale])
+            .map_err(|_| "Failed to link videoconvert to post-processing")?;
+        println!("[Composite FX] ✅ Videoconvert → videoscale linked");
 
-        // Link RGBA to 60fps normalization
-        println!("[Composite FX] 🔗 Linking rgba_capsfilter → videorate → fps_capsfilter...");
-        gst::Element::link_many(&[&rgba_capsfilter, &videorate, &fps_capsfilter])
-            .map_err(|_| "Failed to link RGBA to 60fps normalization")?;
-        println!("[Composite FX] ✅ RGBA → 60fps normalization linked");
-
-        // Link 60fps normalized output to final chain
-        println!("[Composite FX] 🔗 Linking 60fps normalized output...");
+        println!("[Composite FX] 🔗 Linking post-processing chain...");
         if has_alpha {
             let alpha_elem = chroma_element.as_ref().unwrap();
-            gst::Element::link_many(&[&fps_capsfilter, alpha_elem, &identity, &leaky_queue])
-                .map_err(|_| "Failed to link 60fps to final chain with alpha")?;
-            println!("[Composite FX] ✅ 60fps → alpha → identity → leaky_queue linked");
+            gst::Element::link_many(&[&videoscale, alpha_elem, &identity, &queue, &capsfilter])
+                .map_err(|_| "Failed to link FX elements with alpha")?;
+            println!("[Composite FX] ✅ Chain linked with alpha: videoscale → alpha → identity → queue → capsfilter");
         } else {
-            gst::Element::link_many(&[&fps_capsfilter, &identity, &leaky_queue])
-                .map_err(|_| "Failed to link 60fps to final chain")?;
-            println!("[Composite FX] ✅ 60fps → identity → leaky_queue linked");
+            gst::Element::link_many(&[&videoscale, &identity, &queue, &capsfilter])
+                .map_err(|_| "Failed to link FX elements")?;
+            println!("[Composite FX] ✅ Chain linked: videoscale → identity → queue → capsfilter");
         }
         
-        let final_element = leaky_queue.clone();
-
+        let final_element = capsfilter.clone();
+        
         // Create ghost pad on the bin
         let final_src_pad = final_element.static_pad("src")
             .ok_or("Failed to get final element src pad")?;
@@ -640,14 +514,14 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to create ghost pad")?;
         ghost_pad.set_active(true).ok();
         fx_bin.add_pad(&ghost_pad).map_err(|_| "Failed to add ghost pad to bin")?;
-
+        
         // Add bin to pipeline
         pipeline.add(&fx_bin)
             .map_err(|_| "Failed to add FX bin to pipeline")?;
-
-        // Connect decodebin's dynamic pads to decode_queue (for decoded video)
+        
+        // Connect decodebin's dynamic pads to videoconvert (for decoded video)
         println!("[Composite FX] 👂 Setting up decodebin pad-added handler...");
-        let decode_queue_clone = decode_queue.clone();
+        let videoconvert_clone = videoconvert.clone();
         let filesrc_name = filesrc.name().to_string();
         decodebin.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 ===== DECODEBIN PAD ADDED =====");
@@ -684,23 +558,23 @@ impl GStreamerComposite {
                 return;
             }
 
-            // Check if decode_queue sink is already linked (only link once)
-            let sink_pad = decode_queue_clone.static_pad("sink").expect("No sink pad");
-            println!("[Composite FX] 🔗 Decode queue sink pad exists: {}", sink_pad.is_linked());
+            // Check if videoconvert sink is already linked (only link once)
+            let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
+            println!("[Composite FX] 🔗 Videoconvert sink pad exists: {}", sink_pad.is_linked());
 
             if sink_pad.is_linked() {
-                println!("[Composite FX] ⚠️ Decode queue sink already linked - ignoring duplicate");
+                println!("[Composite FX] ⚠️ Videoconvert sink already linked - ignoring duplicate");
                 return;
             }
 
-            // Link decoded video pad to decode_queue
+            // Link decoded video pad to videoconvert
             match src_pad.link(&sink_pad) {
                 Ok(_) => {
-                    println!("[Composite FX] ✅ ===== SUCCESS: DECODEBIN → DECODE_QUEUE LINKED =====");
+                    println!("[Composite FX] ✅ ===== SUCCESS: DECODEBIN → VIDEOCONVERT LINKED =====");
                     println!("[Composite FX] 🎬 ===== FX PIPELINE READY - SHOULD BE PLAYING =====");
                 },
                 Err(e) => {
-                    println!("[Composite FX] ❌ ===== FAILED TO LINK DECODEBIN → DECODE_QUEUE =====");
+                    println!("[Composite FX] ❌ ===== FAILED TO LINK DECODEBIN → VIDEOCONVERT =====");
                     println!("[Composite FX] ❌ Error: {:?}", e);
                 }
             }

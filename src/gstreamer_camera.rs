@@ -147,40 +147,39 @@ impl GStreamerCamera {
         
         println!("[GStreamer] Resolution: {}x{}, JPEG quality: {}", width, height, jpeg_quality);
         
-        // Build GStreamer pipeline for camera capture
-        // Keep camera branch simple and real-time: [videosrc] ! video/x-raw,framerate=60/1 ! videoconvert ! queue ! compositor.sink_0
-        // But for camera preview, we still need JPEG encoding for WebSocket streaming
-
+        // Build GStreamer pipeline
+        // Windows: mfvideosrc (Media Foundation - modern, replaces deprecated ksvideosrc)
+        // Linux: v4l2src ! videoconvert ! video/x-raw,format=RGB ! jpegenc ! appsink
+        // macOS: avfvideosrc ! videoconvert ! video/x-raw,format=RGB ! jpegenc ! appsink
+        
         #[cfg(target_os = "windows")]
         let pipeline_str = format!(
             "mfvideosrc device-index={} ! \
-             video/x-raw,framerate=60/1 ! \
              videoconvert ! \
-             queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
+             videoscale ! \
+             video/x-raw,width={},height={} ! \
              jpegenc quality={} ! \
-             appsink name=sink emit-signals=true max-buffers=2 drop=true sync=true",
-            device_index, jpeg_quality
+             appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
+            device_index, width, height, jpeg_quality
         );
-
+        
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
             "v4l2src device=/dev/video{} ! \
-             video/x-raw,framerate=60/1 ! \
              videoconvert ! \
-             queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
+             video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
              jpegenc quality=80 ! \
-             appsink name=sink emit-signals=true max-buffers=2 drop=true sync=true",
+             appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index
         );
-
+        
         #[cfg(target_os = "macos")]
         let pipeline_str = format!(
             "avfvideosrc device-index={} ! \
-             video/x-raw,framerate=60/1 ! \
              videoconvert ! \
-             queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
+             video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
              jpegenc quality=80 ! \
-             appsink name=sink emit-signals=true max-buffers=2 drop=true sync=true",
+             appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index
         );
         
