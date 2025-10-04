@@ -262,7 +262,17 @@ impl GStreamerComposite {
             .set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start pipeline: {}", e))?;
         
-        println!("[Composite] ✅ Composite pipeline started successfully!");
+        // CRITICAL: Wait for pipeline to reach PLAYING state
+        println!("[Composite] ⏳ Waiting for pipeline to reach PLAYING state...");
+        let state_change = pipeline.state(Some(gst::ClockTime::from_seconds(5)));
+        match state_change {
+            (Ok(_), gst::State::Playing, _) => {
+                println!("[Composite] ✅ Pipeline reached PLAYING state successfully!");
+            },
+            (_, current_state, pending_state) => {
+                println!("[Composite] ⚠️ Pipeline state: {:?}, pending: {:?}", current_state, pending_state);
+            }
+        }
         
         self.pipeline = Some(pipeline);
         Ok(())
@@ -697,34 +707,55 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
 
-        // Set FX bin base time to match pipeline for proper sync
-        if let Some(base_time) = pipeline.base_time() {
-            fx_bin.set_base_time(base_time);
-            println!("[Composite FX] ⏱️ Set FX base time: {:?}", base_time);
+        // CRITICAL: Ensure main pipeline is in PLAYING state first
+        let current_pipeline_state = pipeline.current_state();
+        if current_pipeline_state != gst::State::Playing {
+            println!("[Composite FX] ⚠️ Pipeline not in Playing state ({:?}), transitioning...", current_pipeline_state);
+            pipeline.set_state(gst::State::Playing)
+                .map_err(|e| format!("Failed to set pipeline to Playing: {}", e))?;
+            
+            // Wait for pipeline to reach Playing
+            let state_change = pipeline.state(Some(gst::ClockTime::from_seconds(3)));
+            match state_change {
+                (Ok(_), gst::State::Playing, _) => {
+                    println!("[Composite FX] ✅ Pipeline transitioned to PLAYING");
+                },
+                (_, state, pending) => {
+                    println!("[Composite FX] ⚠️ Pipeline state: {:?}, pending: {:?}", state, pending);
+                }
+            }
         } else {
-            println!("[Composite FX] ⚠️ No base time available from pipeline");
+            println!("[Composite FX] ✅ Pipeline already in PLAYING state");
         }
-
-        // Set FX bin to run asynchronously for natural playback
-        // From GStreamer docs: use async state changes for independent elements
-        println!("[Composite FX] 🔄 Setting FX bin to async Playing state...");
 
         // Set base time to match pipeline for proper timing reference
         if let Some(pipeline_base_time) = pipeline.base_time() {
             fx_bin.set_base_time(pipeline_base_time);
-            println!("[Composite FX] ⏱️ FX bin base time set to match pipeline");
+            println!("[Composite FX] ⏱️ FX bin base time set to match pipeline: {:?}", pipeline_base_time);
         }
 
-        // Try to set clock to NULL first (may be refused by some elements)
-        let clock_result = fx_bin.set_clock(None::<&gst::Clock>);
-        match clock_result {
-            Ok(_) => println!("[Composite FX] 🕒 FX bin clock set to NULL successfully"),
-            Err(e) => println!("[Composite FX] ⚠️ FX bin clock NULL refused: {:?} (expected for some elements)", e),
+        // IMPORTANT: Use pipeline clock, NOT NULL clock (for proper sync)
+        if let Some(pipeline_clock) = pipeline.clock() {
+            fx_bin.set_clock(Some(&pipeline_clock))
+                .map_err(|e| format!("Failed to set FX bin clock: {}", e))?;
+            println!("[Composite FX] 🕒 FX bin using pipeline clock for sync");
         }
 
-        // Set state for independent playback
-        let _ = fx_bin.set_state(gst::State::Playing);
-        println!("[Composite FX] ✅ FX bin state change initiated to Playing");
+        // Set FX bin to Playing and WAIT for it to reach Playing
+        println!("[Composite FX] 🔄 Setting FX bin to Playing state...");
+        fx_bin.set_state(gst::State::Playing)
+            .map_err(|e| format!("Failed to set FX bin to Playing: {}", e))?;
+        
+        // Wait for FX bin to reach Playing state
+        let fx_state_change = fx_bin.state(Some(gst::ClockTime::from_seconds(3)));
+        match fx_state_change {
+            (Ok(_), gst::State::Playing, _) => {
+                println!("[Composite FX] ✅ FX bin reached PLAYING state!");
+            },
+            (_, state, pending) => {
+                println!("[Composite FX] ⚠️ FX bin state: {:?}, pending: {:?}", state, pending);
+            }
+        }
 
         // Check final states
         println!("[Composite FX] 📊 Final states:");
