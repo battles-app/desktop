@@ -427,7 +427,6 @@ impl GStreamerComposite {
         let identity = ElementFactory::make("identity")
             .name("fxidentity")
             .property("sync", true) // Sync to pipeline clock for proper compositing
-            .property("drop-buffer-flags", 0u32) // Don't drop buffers
             .build()
             .map_err(|_| "Failed to create identity")?;
 
