@@ -9,6 +9,8 @@ use parking_lot::RwLock;
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
     frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
+    camera_frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
+    overlay_frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     is_running: Arc<RwLock<bool>>,
     output_format: Arc<RwLock<OutputFormat>>,
     layers: Arc<RwLock<LayerSettings>>,
@@ -63,6 +65,8 @@ impl GStreamerComposite {
         Ok(Self {
             pipeline: None,
             frame_sender: Arc::new(RwLock::new(None)),
+            camera_frame_sender: Arc::new(RwLock::new(None)),
+            overlay_frame_sender: Arc::new(RwLock::new(None)),
             is_running: Arc::new(RwLock::new(false)),
             output_format: Arc::new(RwLock::new(OutputFormat::Preview)),
             layers: Arc::new(RwLock::new(LayerSettings::default())),
@@ -75,6 +79,14 @@ impl GStreamerComposite {
     
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.frame_sender.write() = Some(sender);
+    }
+
+    pub fn set_camera_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
+        *self.camera_frame_sender.write() = Some(sender);
+    }
+
+    pub fn set_overlay_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
+        *self.overlay_frame_sender.write() = Some(sender);
     }
     
     pub fn update_layers(&self, camera: (bool, f64), overlay: (bool, f64)) {
@@ -118,7 +130,7 @@ impl GStreamerComposite {
         // Build GStreamer composite pipeline with compositor element
         // The compositor element combines multiple video streams with alpha blending
         // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
-        
+
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
@@ -130,17 +142,23 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
+                 tee name=camera_tee \
+                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! queue ! {} \
                  mfvideosrc device-index={} ! \
                  videoflip method={} ! \
                  videoconvert ! \
                  videoscale ! \
                  video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0", 
+                 tee name=overlay_tee \
+                 overlay_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=overlay_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 overlay_tee. ! comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
                 self.get_output_branch(),
+                self.get_output_branch(), // Second branch for camera tee
                 device_index,
                 videoflip_method,
                 width,
@@ -156,16 +174,22 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
+                 tee name=camera_tee \
+                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! queue ! {} \
                  mfvideosrc device-index={} ! \
                  videoconvert ! \
                  videoscale ! \
                  video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0", 
+                 tee name=overlay_tee \
+                 overlay_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=overlay_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 overlay_tee. ! comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
                 self.get_output_branch(),
+                self.get_output_branch(), // Second branch for camera tee
                 device_index,
                 width,
                 height
@@ -182,16 +206,22 @@ impl GStreamerComposite {
              tee name=t \
              t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              t. ! queue ! {} \
+             tee name=camera_tee \
+             camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+             camera_tee. ! queue ! {} \
              v4l2src device=/dev/video{} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,width={},height={},format=BGRA ! \
-             comp.sink_0",
+             tee name=overlay_tee \
+             overlay_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=overlay_layer emit-signals=true sync=false max-buffers=2 drop=true \
+             overlay_tee. ! comp.sink_0",
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
             width,
             height,
             self.get_output_branch(),
+            self.get_output_branch(), // Second branch for camera tee
             device_index,
             width,
             height
@@ -210,29 +240,96 @@ impl GStreamerComposite {
             .ok_or("Failed to get preview appsink")?
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
-        
+
+        // Get the appsinks for individual layers
+        let camera_appsink = pipeline
+            .by_name("camera_layer")
+            .ok_or("Failed to get camera layer appsink")?
+            .dynamic_cast::<AppSink>()
+            .map_err(|_| "Failed to cast camera layer to AppSink")?;
+
+        let overlay_appsink = pipeline
+            .by_name("overlay_layer")
+            .ok_or("Failed to get overlay layer appsink")?
+            .dynamic_cast::<AppSink>()
+            .map_err(|_| "Failed to cast overlay layer to AppSink")?;
+
         // Set up callbacks for preview frames
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        
+
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
                     if !*is_running.read() {
                         return Ok(gst::FlowSuccess::Ok);
                     }
-                    
+
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-                    
+
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
                         }
                     }
-                    
+
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+
+        // Set up callbacks for camera layer frames
+        let camera_frame_sender = self.camera_frame_sender.clone();
+        let is_running_camera = self.is_running.clone();
+
+        camera_appsink.set_callbacks(
+            gstreamer_app::AppSinkCallbacks::builder()
+                .new_sample(move |appsink| {
+                    if !*is_running_camera.read() {
+                        return Ok(gst::FlowSuccess::Ok);
+                    }
+
+                    let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+
+                    let jpeg_data = map.as_slice();
+                    if jpeg_data.len() > 100 {
+                        if let Some(sender) = camera_frame_sender.read().as_ref() {
+                            let _ = sender.send(jpeg_data.to_vec());
+                        }
+                    }
+
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+
+        // Set up callbacks for overlay layer frames
+        let overlay_frame_sender = self.overlay_frame_sender.clone();
+        let is_running_overlay = self.is_running.clone();
+
+        overlay_appsink.set_callbacks(
+            gstreamer_app::AppSinkCallbacks::builder()
+                .new_sample(move |appsink| {
+                    if !*is_running_overlay.read() {
+                        return Ok(gst::FlowSuccess::Ok);
+                    }
+
+                    let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+
+                    let jpeg_data = map.as_slice();
+                    if jpeg_data.len() > 100 {
+                        if let Some(sender) = overlay_frame_sender.read().as_ref() {
+                            let _ = sender.send(jpeg_data.to_vec());
+                        }
+                    }
+
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
