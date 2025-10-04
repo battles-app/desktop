@@ -403,10 +403,11 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to create filesrc: {}", e))?;
         println!("[Composite FX] ✅ Filesrc created successfully");
 
-        // Create decodebin for decoding
+        // Create decodebin for decoding with timestamp preservation
         println!("[Composite FX] 🔧 Creating decodebin element...");
         let decodebin = ElementFactory::make("decodebin")
             .name("fxdecode")
+            .property("force-sw-decoders", true) // Ensure consistent decoding
             .build()
             .map_err(|e| format!("Failed to create decodebin: {}", e))?;
         println!("[Composite FX] ✅ Decodebin created successfully");
@@ -581,10 +582,25 @@ impl GStreamerComposite {
         
         // Request sink_1 pad from compositor
         println!("[Composite FX] 🎭 Requesting compositor sink_1 pad...");
+
+        // Debug: List all pads on compositor
+        println!("[Composite FX] 📋 Current compositor pads:");
+        let pads = compositor.pads();
+        for pad in pads {
+            println!("[Composite FX]   - Pad: {}", pad.name());
+        }
+
+        // First check if sink_1 already exists and try to release it
+        if let Some(existing_pad) = compositor.static_pad("sink_1") {
+            println!("[Composite FX] ⚠️ Found existing sink_1 pad, attempting to release...");
+            compositor.release_request_pad(&existing_pad);
+            println!("[Composite FX] ✅ Existing sink_1 pad released");
+        }
+
         let comp_sink_pad = compositor
             .request_pad_simple("sink_1")
             .ok_or("Failed to request compositor sink_1 pad")?;
-        println!("[Composite FX] ✅ Compositor sink_1 pad obtained");
+        println!("[Composite FX] ✅ Compositor sink_1 pad obtained: {}", comp_sink_pad.name());
 
         // Get pipeline dimensions
         let comp_width = *self.pipeline_width.read() as i32;
@@ -609,7 +625,7 @@ impl GStreamerComposite {
         println!("[Composite FX] 📐 FX positioning: {}x{} at ({}, {}) in {}x{} canvas",
                  fx_width, fx_height, fx_xpos, fx_ypos, comp_width, comp_height);
 
-        // Set z-order, alpha, and positioning for overlay layer
+        // Set z-order, alpha, positioning, and disable sync for natural playback
         println!("[Composite FX] 🎛️ Setting compositor properties...");
         comp_sink_pad.set_property("zorder", 1u32);
         comp_sink_pad.set_property("alpha", self.layers.read().overlay_opacity);
@@ -617,7 +633,10 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("ypos", fx_ypos);
         comp_sink_pad.set_property("width", fx_width);
         comp_sink_pad.set_property("height", fx_height);
-        println!("[Composite FX] ✅ Compositor properties set (zorder=1, alpha={:.2})",
+
+        // Disable synchronization on this compositor sink for natural FX playback
+        comp_sink_pad.set_property("sync", false);
+        println!("[Composite FX] ✅ Compositor properties set (zorder=1, alpha={:.2}, sync=false)",
                  self.layers.read().overlay_opacity);
 
         // Link FX bin to compositor
@@ -703,8 +722,11 @@ impl GStreamerComposite {
                 // Unlink from compositor
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
+                        println!("[Composite FX] 🔗 Unlinking ghost pad from compositor sink");
                         ghost_pad.unlink(&peer_pad).ok();
+                        println!("[Composite FX] 🔓 Releasing compositor request pad");
                         compositor.release_request_pad(&peer_pad);
+                        println!("[Composite FX] ✅ Compositor pad released");
                     }
                 }
                 
@@ -713,10 +735,12 @@ impl GStreamerComposite {
                 
                 // Remove bin from pipeline
                 pipeline.remove(&fx_bin).ok();
-                
-                // Give GStreamer time to cleanup
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                
+                println!("[Composite FX] 🗑️ FX bin removed from pipeline");
+
+                // Give GStreamer more time to cleanup
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                println!("[Composite FX] ⏳ Cleanup delay completed");
+
                 println!("[Composite FX] ✅ FX branch removed and memory freed");
             }
         } else {
