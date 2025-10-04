@@ -2,9 +2,11 @@
 use gstreamer::prelude::*;
 use gstreamer::{self as gst, Pipeline};
 use gstreamer_app::AppSink;
+use glib::ControlFlow;
 use tokio::sync::broadcast;
 use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
@@ -131,19 +133,16 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-lateness=40000000 \
                  t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {} \
-                 mfvideosrc device-index={} ! \
-                 videoflip method={} ! \
+                 videotestsrc pattern=smpte ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
+                 video/x-raw,width={},height={},format=BGRA,framerate=30/1 ! \
                  comp.sink_0", 
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
                 self.get_output_branch(),
-                device_index,
-                videoflip_method,
                 width,
                 height
             )
@@ -158,17 +157,16 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-lateness=40000000 \
                  t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {} \
-                 mfvideosrc device-index={} ! \
+                 videotestsrc pattern=smpte ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0", 
+                 video/x-raw,width={},height={},format=BGRA,framerate=30/1 ! \
+                 comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
                 self.get_output_branch(),
-                device_index,
                 width,
                 height
             )
@@ -229,16 +227,28 @@ impl GStreamerComposite {
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                     
                     let jpeg_data = map.as_slice();
-                    println!("[Composite] 📸 Appsink produced frame: {} bytes", jpeg_data.len());
+                    static mut FRAME_COUNT: u32 = 0;
+                    unsafe {
+                        FRAME_COUNT += 1;
+                        if FRAME_COUNT % 30 == 0 {  // Log every 30 frames (~1 second at 30fps)
+                            println!("[Composite] 📸 Appsink produced frame #{}: {} bytes", FRAME_COUNT, jpeg_data.len());
+                        }
+                    }
                     if jpeg_data.len() > 100 {
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
-                            println!("[Composite] 📤 Frame sent to WebSocket channel");
+                            static mut SENT_COUNT: u32 = 0;
+                            unsafe {
+                                SENT_COUNT += 1;
+                                if SENT_COUNT % 30 == 0 {
+                                    println!("[Composite] 📤 Frame #{} sent to WebSocket channel", SENT_COUNT);
+                                }
+                            }
                         } else {
                             println!("[Composite] ❌ No frame sender available");
                         }
                     } else {
-                        println!("[Composite] ⚠️ Frame too small, skipping");
+                        println!("[Composite] ⚠️ Frame too small ({} bytes), skipping", jpeg_data.len());
                     }
                     
                     Ok(gst::FlowSuccess::Ok)
@@ -246,14 +256,57 @@ impl GStreamerComposite {
                 .build(),
         );
         
+        // Set up bus to catch GStreamer messages
+        let bus = pipeline.bus().unwrap();
+        let _bus_watch = bus.add_watch(move |_, msg| {
+            use gst::MessageView;
+            match msg.view() {
+                MessageView::Error(err) => {
+                    let debug = err.debug().unwrap_or_else(|| glib::GString::from(""));
+                    println!("[Composite] ❌ GStreamer Error: {} ({})", err.error(), debug);
+                    ControlFlow::Break
+                },
+                MessageView::Warning(warn) => {
+                    let debug = warn.debug().unwrap_or_else(|| glib::GString::from(""));
+                    println!("[Composite] ⚠️ GStreamer Warning: {} ({})", warn.error(), debug);
+                    ControlFlow::Continue
+                },
+                MessageView::StateChanged(state) => {
+                    println!("[Composite] 🔄 State changed: {:?} -> {:?}", state.old(), state.current());
+                    ControlFlow::Continue
+                },
+                MessageView::Eos(_) => {
+                    println!("[Composite] 🛑 End of stream");
+                    ControlFlow::Break
+                },
+                _ => ControlFlow::Continue,
+            }
+        }).map_err(|_| "Failed to add bus watch")?;
+
         // Start pipeline
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to start pipeline: {}", e))?;
-        
-        println!("[Composite] ✅ Composite pipeline started successfully!");
-        
+        let result = pipeline.set_state(gst::State::Playing);
+        println!("[Composite] 🚀 Pipeline set_state result: {:?}", result);
+
+        match result {
+            Ok(success) => {
+                println!("[Composite] ✅ Composite pipeline started successfully! Result: {:?}", success);
+            },
+            Err(error) => {
+                println!("[Composite] ❌ Failed to start pipeline: {:?}", error);
+                return Err(format!("Failed to start pipeline: {:?}", error));
+            }
+        }
+
         self.pipeline = Some(pipeline);
+
+        // Check pipeline state after a short delay
+        let pipeline_clone = self.pipeline.as_ref().unwrap().clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            let state = pipeline_clone.current_state();
+            println!("[Composite] 📊 Pipeline state after 2s: {:?}", state);
+        });
+
         Ok(())
     }
     
