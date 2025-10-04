@@ -129,8 +129,8 @@ impl GStreamerComposite {
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {} \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-lateness=40000000 \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {} \
                  mfvideosrc device-index={} ! \
                  videoflip method={} ! \
                  videoconvert ! \
@@ -156,8 +156,8 @@ impl GStreamerComposite {
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {} \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-lateness=40000000 \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {} \
                  mfvideosrc device-index={} ! \
                  videoconvert ! \
                  videoscale ! \
