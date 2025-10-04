@@ -431,11 +431,11 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create identity")?;
 
-        // Add queue for buffering and smooth playback
+        // Add queue for buffering - minimal for low latency FX playback
         let queue = ElementFactory::make("queue")
             .name("fxqueue")
-            .property("max-size-buffers", 10u32) // Moderate buffer
-            .property("max-size-time", 500000000u64) // 500ms buffer
+            .property("max-size-buffers", 2u32) // Minimal buffer for low latency
+            .property("max-size-time", 100000000u64) // 100ms buffer only
             .property_from_str("leaky", "downstream") // Drop old frames if buffer full
             .build()
             .map_err(|_| "Failed to create queue")?;
@@ -625,7 +625,7 @@ impl GStreamerComposite {
         println!("[Composite FX] 📐 FX positioning: {}x{} at ({}, {}) in {}x{} canvas",
                  fx_width, fx_height, fx_xpos, fx_ypos, comp_width, comp_height);
 
-        // Set z-order, alpha, positioning, and disable sync for natural playback
+        // Set z-order, alpha, and positioning for overlay layer
         println!("[Composite FX] 🎛️ Setting compositor properties...");
         comp_sink_pad.set_property("zorder", 1u32);
         comp_sink_pad.set_property("alpha", self.layers.read().overlay_opacity);
@@ -633,10 +633,7 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("ypos", fx_ypos);
         comp_sink_pad.set_property("width", fx_width);
         comp_sink_pad.set_property("height", fx_height);
-
-        // Disable synchronization on this compositor sink for natural FX playback
-        comp_sink_pad.set_property("sync", false);
-        println!("[Composite FX] ✅ Compositor properties set (zorder=1, alpha={:.2}, sync=false)",
+        println!("[Composite FX] ✅ Compositor properties set (zorder=1, alpha={:.2})",
                  self.layers.read().overlay_opacity);
 
         // Link FX bin to compositor
@@ -654,20 +651,25 @@ impl GStreamerComposite {
             println!("[Composite FX] ⚠️ No base time available from pipeline");
         }
 
-        // Sync FX bin state with pipeline first, then override clock for natural playback
-        println!("[Composite FX] 🔄 Syncing FX bin state with pipeline...");
-        let sync_result = fx_bin.sync_state_with_parent();
-        match sync_result {
-            Ok(_) => println!("[Composite FX] ✅ FX bin state synchronized"),
-            Err(e) => {
-                println!("[Composite FX] ❌ Failed to sync FX bin state: {:?}", e);
-                return Err(format!("Failed to sync FX bin state: {:?}", e));
-            }
+        // Set FX bin state directly without pipeline synchronization for natural playback
+        // From GStreamer docs: don't sync with parent clock for independent playback
+        println!("[Composite FX] 🔄 Setting FX bin state to Playing (no clock sync)...");
+
+        // Set base time first
+        if let Some(pipeline_base_time) = pipeline.base_time() {
+            fx_bin.set_base_time(pipeline_base_time);
+            println!("[Composite FX] ⏱️ FX bin base time set to match pipeline");
         }
 
-        // Override the clock to NULL to allow asynchronous playback at natural speed
-        let _ = fx_bin.set_clock(None::<&gst::Clock>);
-        println!("[Composite FX] 🕒 FX bin clock set to NULL for natural playback speed");
+        // Set state to Playing without clock synchronization
+        let state_result = fx_bin.set_state(gst::State::Playing);
+        match state_result {
+            Ok(_) => println!("[Composite FX] ✅ FX bin state set to Playing"),
+            Err(e) => {
+                println!("[Composite FX] ❌ Failed to set FX bin state: {:?}", e);
+                return Err(format!("Failed to set FX bin state: {:?}", e));
+            }
+        }
 
         // Check final states
         println!("[Composite FX] 📊 Final states:");
