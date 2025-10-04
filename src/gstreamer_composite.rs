@@ -394,29 +394,21 @@ impl GStreamerComposite {
         // Create filesrc with typefind for instant format detection
         use gstreamer::ElementFactory;
 
-        // Use filesrc + qtdemux for progressive MP4 playback (doesn't load entire file)
-        println!("[Composite FX] 📂 Creating filesrc element...");
-        let filesrc = ElementFactory::make("filesrc")
-            .name("fxfilesrc")
-            .property("location", &file_path)
-            .build()
-            .map_err(|e| format!("Failed to create filesrc: {}", e))?;
-        println!("[Composite FX] ✅ Filesrc created successfully");
+        // Uridecodebin handles the source internally - no need for separate filesrc
 
-        println!("[Composite FX] 🎬 Creating qtdemux element...");
-        let qtdemux = ElementFactory::make("qtdemux")
-            .name("fxdemux")
-            .build()
-            .map_err(|e| format!("Failed to create qtdemux: {}", e))?;
-        println!("[Composite FX] ✅ Qtdemux created successfully");
+        // Try uridecodebin again but with proper progressive settings
+        println!("[Composite FX] 🎬 Creating uridecodebin for progressive MP4 playback...");
+        let file_uri = format!("file:///{}", file_path.replace("\\", "/"));
+        println!("[Composite FX] 📁 File URI: {}", file_uri);
 
-        // Create decodebin for post-demux decoding
-        println!("[Composite FX] 🔧 Creating decodebin element...");
-        let decodebin = ElementFactory::make("decodebin")
+        let uridecodebin = ElementFactory::make("uridecodebin")
             .name("fxdecode")
+            .property("uri", &file_uri)
+            .property("use-buffering", false) // Disable buffering for progressive playback
+            .property("download", false) // Don't download entire file
             .build()
-            .map_err(|e| format!("Failed to create decodebin: {}", e))?;
-        println!("[Composite FX] ✅ Decodebin created successfully");
+            .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
+        println!("[Composite FX] ✅ Uridecodebin created successfully");
 
         // Create post-decode elements
         let videoconvert = ElementFactory::make("videoconvert")
@@ -429,11 +421,12 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add identity element WITHOUT sync to allow natural playback speed
-        // Let videos play at their native rate without pipeline clock interference
+        // Add identity element with sync=true but with proper handling
+        // Use sync=true to ensure proper compositing timing, but let natural speed through
         let identity = ElementFactory::make("identity")
             .name("fxidentity")
-            .property("sync", false) // Don't sync to pipeline clock - natural speed
+            .property("sync", true) // Sync to pipeline clock for proper compositing
+            .property("drop-buffer-flags", 0u32) // Don't drop buffers
             .build()
             .map_err(|_| "Failed to create identity")?;
 
@@ -479,22 +472,16 @@ impl GStreamerComposite {
             (None, false)
         };
 
-        // Add all elements to bin (filesrc + qtdemux + decodebin for progressive playback)
+        // Add all elements to bin (uridecodebin handles source internally)
         if let Some(ref alpha) = chroma_element {
-            fx_bin.add_many(&[&filesrc, &qtdemux, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter])
+            fx_bin.add_many(&[&uridecodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &qtdemux, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter])
+            fx_bin.add_many(&[&uridecodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
-        // Link static elements (qtdemux and decodebin will link dynamically)
-        println!("[Composite FX] 🔗 Linking filesrc → qtdemux...");
-        gst::Element::link_many(&[&filesrc, &qtdemux])
-            .map_err(|_| "Failed to link filesrc to qtdemux")?;
-        println!("[Composite FX] ✅ Filesrc → qtdemux linked");
-
-        // Link decodebin output to post-processing (decodebin has dynamic pads)
+        // Link static elements (uridecodebin will link dynamically)
         println!("[Composite FX] 🔗 Linking videoconvert → videoscale...");
         gst::Element::link_many(&[&videoconvert, &videoscale])
             .map_err(|_| "Failed to link videoconvert to post-processing")?;
@@ -526,54 +513,20 @@ impl GStreamerComposite {
         pipeline.add(&fx_bin)
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
-        // Connect qtdemux's dynamic pads to decodebin (for video only)
-        println!("[Composite FX] 👂 Setting up qtdemux pad-added handler...");
-        let decodebin_clone = decodebin.clone();
-        qtdemux.connect_pad_added(move |_demux, src_pad| {
-            println!("[Composite FX] 🔗 QTDEMUX PAD ADDED: {} (caps: {:?})", src_pad.name(), src_pad.current_caps());
-
-            // Only link video pads (ignore audio, text, etc.)
-            if !src_pad.name().starts_with("video_") {
-                println!("[Composite FX] ⏭️ Skipping non-video pad: {}", src_pad.name());
-                return;
-            }
-
-            // Check if decodebin sink is already linked (only link once)
-            let sink_pad = decodebin_clone.static_pad("sink").expect("No sink pad");
-            if sink_pad.is_linked() {
-                println!("[Composite FX] ⚠️ Decodebin sink already linked - ignoring duplicate");
-                return;
-            }
-
-            // Link video pad to decodebin
-            match src_pad.link(&sink_pad) {
-                Ok(_) => {
-                    println!("[Composite FX] ✅ SUCCESS: {} linked to decodebin", src_pad.name());
-                    // Log capabilities for debugging
-                    if let Some(caps) = src_pad.current_caps() {
-                        println!("[Composite FX] 📊 Video caps: {}", caps);
-                    }
-                },
-                Err(e) => {
-                    println!("[Composite FX] ❌ FAILED to link {} to decodebin: {:?}", src_pad.name(), e);
-                }
-            }
-        });
-
-        // Connect decodebin's dynamic pads to videoconvert (for decoded video)
-        println!("[Composite FX] 👂 Setting up decodebin pad-added handler...");
+        // Connect uridecodebin's dynamic pads to videoconvert (for video only)
+        println!("[Composite FX] 👂 Setting up uridecodebin pad-added handler...");
         let videoconvert_clone = videoconvert.clone();
-        decodebin.connect_pad_added(move |_dbin, src_pad| {
-            println!("[Composite FX] 🔗 DECODEBIN PAD ADDED: {} (caps: {:?})", src_pad.name(), src_pad.current_caps());
+        uridecodebin.connect_pad_added(move |_dbin, src_pad| {
+            println!("[Composite FX] 🔗 URIDECODEBIN PAD ADDED: {} (caps: {:?})", src_pad.name(), src_pad.current_caps());
 
             // Only link video pads (ignore audio, text, etc.)
             let caps = match src_pad.current_caps() {
                 Some(caps) => {
-                    println!("[Composite FX] 📊 Decodebin caps: {}", caps);
+                    println!("[Composite FX] 📊 Uridecodebin caps: {}", caps);
                     caps
                 },
                 None => {
-                    println!("[Composite FX] ⚠️ Decodebin pad has no caps yet - waiting...");
+                    println!("[Composite FX] ⚠️ Uridecodebin pad has no caps yet - waiting...");
                     return;
                 },
             };
@@ -581,7 +534,7 @@ impl GStreamerComposite {
             let structure = match caps.structure(0) {
                 Some(s) => s,
                 None => {
-                    println!("[Composite FX] ⚠️ Decodebin pad caps has no structure");
+                    println!("[Composite FX] ⚠️ Uridecodebin pad caps has no structure");
                     return;
                 },
             };
@@ -591,7 +544,7 @@ impl GStreamerComposite {
 
             if !name.starts_with("video/") {
                 // Skip non-video pads (audio, subtitles, etc.)
-                println!("[Composite FX] ⏭️ Skipping non-video pad from decodebin: {}", name);
+                println!("[Composite FX] ⏭️ Skipping non-video pad: {}", name);
                 return;
             }
 
@@ -602,14 +555,14 @@ impl GStreamerComposite {
                 return;
             }
 
-            // Link decoded video pad to videoconvert
+            // Link video pad to videoconvert
             match src_pad.link(&sink_pad) {
                 Ok(_) => {
-                    println!("[Composite FX] ✅ SUCCESS: Decodebin video pad linked to videoconvert");
+                    println!("[Composite FX] ✅ SUCCESS: Uridecodebin video pad linked to videoconvert");
                     println!("[Composite FX] 🎬 ===== FX PIPELINE READY - SHOULD BE PLAYING =====");
                 },
                 Err(e) => {
-                    println!("[Composite FX] ❌ FAILED to link decodebin video pad to videoconvert: {:?}", e);
+                    println!("[Composite FX] ❌ FAILED to link uridecodebin video pad to videoconvert: {:?}", e);
                 }
             }
         });
