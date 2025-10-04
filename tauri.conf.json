@@ -1,0 +1,139 @@
+{
+  "app": {
+    "security": {
+      "pattern": {
+        "use": "brownfield"
+      }
+    },
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "useHttpsScheme": true,
+        "label": "main",
+        "acceptFirstMouse": true,
+        "additionalBrowserArgs": null,
+        "alwaysOnTop": true,
+        "contentProtected": false,
+        "decorations": true,
+        "focus": true,
+        "fullscreen": false,
+        "width": 1110,
+        "height": 1030,
+        "hiddenTitle": false,
+        "incognito": false,
+        "maxHeight": 2000,
+        "maxWidth": 1920,
+        "minHeight": 1280,
+        "minWidth": 410,
+        "resizable": true,
+        "shadow": true,
+        "theme": "Dark",
+        "title": "Battles",
+        "titleBarStyle": "Overlay",
+        "transparent": true,
+        "url": "https://local.battles.app:3000/",
+        "visible": true,
+        "windowEffects": {
+          "effects": [
+            "hudWindow",
+            "acrylic",
+            "mica"
+          ],
+          "state": "active"
+        },
+        "x": 0,
+        "y": 0
+      },
+      {
+        "label": "tv-monitor",
+        "title": "TV Monitor",
+        "url": "https://local.battles.app:3000/stream/tv-monitor/loading",
+        "decorations": false,
+        "resizable": false,
+        "fullscreen": false,
+        "alwaysOnTop": true,
+        "visible": false,
+        "transparent": false
+      }
+    ],
+    "withGlobalTauri": true
+  },
+  "build": {
+    "devUrl": "https://local.battles.app:3000/",
+    "frontendDist": "https://local.battles.app:3000/"
+  },
+  "bundle": {
+    "active": true,
+    "category": null,
+    "copyright": "BATTLES™ ©2025",
+    "icon": [
+      "favicon.ico"
+    ],
+    "longDescription": "Pro TikTok Tools",
+    "macOS": {
+      "entitlements": "Release.entitlements",
+      "exceptionDomain": "",
+      "frameworks": [],
+      "minimumSystemVersion": "14.0",
+      "providerShortName": null,
+      "signingIdentity": "Apple Distribution: Battles App (6S87K97Y8M)"
+    },
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "msi"
+    ],
+    "windows": {
+      "signCommand": null,
+      "allowDowngrades": true,
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "nsis": {
+        "compression": "bzip2",
+        "headerImage": null,
+        "installMode": "perMachine"
+      },
+      "timestampUrl": "https://timestamp.comodoca.com",
+      "wix": {
+        "language": "en-GB"
+      }
+    },
+    "createUpdaterArtifacts": false,
+    "resources": [
+      "assets/sounds",
+      "src"
+    ]
+  },
+  "identifier": "io.cliqer",
+  "productName": "cliqer",
+    "plugins": {
+      "deep-link": {
+      "mobile": [
+        {
+          "host": "battles.app",
+          "pathPrefix": [
+            "/open"
+          ]
+        },
+        {
+          "host": "battles.app"
+        }
+      ],
+      "desktop": {
+        "schemes": [
+          "cliqer"
+        ]
+      }
+    },
+    "updater": {
+      "active": false,
+      "endpoints": [
+        "https://battles.app/update/v2/check"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY5RjAwMUEwQjFGMzBFODUKUldTRkR2T3hvQUh3YVVEVFFTY2I3YnB5cUxjbzFqZnlDQmNJME1FTTVSdktSdVArM213dzZyWFYK"
+    }
+  },
+  "version": "2.0.1"
+}

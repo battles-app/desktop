@@ -1,0 +1,49 @@
+﻿# Rust/Cargo
+target/
+**/*.rs.bk
+*.pdb
+
+# Tauri
+src-tauri/target
+src-tauri/WixTools
+
+# Node
+node_modules/
+
+# Build outputs
+dist/
+gen/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Lock files (keep bun.lock if using bun)
+package-lock.json
+yarn.lock
+
+# Build artifacts
+build_output.txt
+
+# Temporary files
+*.tmp
+*.temp

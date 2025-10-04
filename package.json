@@ -1,0 +1,20 @@
+{
+  "name": "battles-desktop",
+  "version": "2.0.1",
+  "description": "Pro TikTok Tools",
+  "author": "BATTLES™",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "check": "cargo check",
+    "tauri": "tauri"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}
+
+
+

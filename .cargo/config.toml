@@ -1,0 +1,12 @@
+﻿# Cargo configuration for GStreamer environment
+# This automatically sets environment variables when running cargo commands
+# No need for build.ps1 or manual environment variable setup!
+
+[env]
+PKG_CONFIG_PATH = "E:\\gstreamer\\1.0\\msvc_x86_64\\lib\\pkgconfig"
+GSTREAMER_1_0_ROOT_MSVC_X86_64 = "E:\\gstreamer\\1.0\\msvc_x86_64\\"
+
+# Now you can use regular commands:
+# - cargo tauri dev
+# - cargo tauri build
+# - cargo check

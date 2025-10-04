@@ -1,0 +1,24 @@
+# Add directories or file patterns to ignore during indexing (e.g. foo/ or *.csv)
+node_modules
+templates
+*.log
+.nuxt
+nuxt.d.ts
+.output
+.env*
+.*
+!.env
+bun.lockb
+/dist/
+.data
+*/*cache
+*/*logs
+*/*temp
+*/*tmp
+*/*build
+*/*dist
+*/*node_modules
+*/*public
+*/*src
+*/*test
+target

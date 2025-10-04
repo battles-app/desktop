@@ -1,0 +1,12 @@
+{
+  "identifier": "tv-monitor-capability",
+  "description": "Capability for the TV monitor window",
+  "windows": ["tv-monitor"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-emit"
+  ]
+}
+
+
+
