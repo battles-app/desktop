@@ -651,25 +651,26 @@ impl GStreamerComposite {
             println!("[Composite FX] ⚠️ No base time available from pipeline");
         }
 
-        // Set FX bin state directly without pipeline synchronization for natural playback
-        // From GStreamer docs: don't sync with parent clock for independent playback
-        println!("[Composite FX] 🔄 Setting FX bin state to Playing (no clock sync)...");
+        // Set FX bin to run asynchronously for natural playback
+        // From GStreamer docs: use async state changes for independent elements
+        println!("[Composite FX] 🔄 Setting FX bin to async Playing state...");
 
-        // Set base time first
+        // Set base time to match pipeline for proper timing reference
         if let Some(pipeline_base_time) = pipeline.base_time() {
             fx_bin.set_base_time(pipeline_base_time);
             println!("[Composite FX] ⏱️ FX bin base time set to match pipeline");
         }
 
-        // Set state to Playing without clock synchronization
-        let state_result = fx_bin.set_state(gst::State::Playing);
-        match state_result {
-            Ok(_) => println!("[Composite FX] ✅ FX bin state set to Playing"),
-            Err(e) => {
-                println!("[Composite FX] ❌ Failed to set FX bin state: {:?}", e);
-                return Err(format!("Failed to set FX bin state: {:?}", e));
-            }
+        // Try to set clock to NULL first (may be refused by some elements)
+        let clock_result = fx_bin.set_clock(None::<&gst::Clock>);
+        match clock_result {
+            Ok(_) => println!("[Composite FX] 🕒 FX bin clock set to NULL successfully"),
+            Err(e) => println!("[Composite FX] ⚠️ FX bin clock NULL refused: {:?} (expected for some elements)", e),
         }
+
+        // Set state for independent playback
+        let _ = fx_bin.set_state(gst::State::Playing);
+        println!("[Composite FX] ✅ FX bin state change initiated to Playing");
 
         // Check final states
         println!("[Composite FX] 📊 Final states:");
