@@ -34,20 +34,14 @@ struct CameraDeviceInfo {
 lazy_static::lazy_static! {
     static ref GSTREAMER_CAMERA: Arc<parking_lot::RwLock<Option<GStreamerCamera>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref CAMERA_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
-
+    
     // Composite pipeline (OBS replacement)
     static ref GSTREAMER_COMPOSITE: Arc<parking_lot::RwLock<Option<GStreamerComposite>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref COMPOSITE_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
-
-    // Individual layer streams for debugging
-    static ref CAMERA_LAYER_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
-    static ref OVERLAY_LAYER_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
 }
 
 const CAMERA_WS_PORT: u16 = 9876;
 const COMPOSITE_WS_PORT: u16 = 9877;
-const CAMERA_LAYER_WS_PORT: u16 = 9878;
-const OVERLAY_LAYER_WS_PORT: u16 = 9879;
 
 // Monitor info structure
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -65,22 +59,6 @@ static MONITOR_SCREENSHOTS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 
 // Global flag to track if monitor selection modal is open
 static MODAL_IS_OPEN: Mutex<bool> = Mutex::new(false);
-
-// Layer information structure for debugging
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-struct LayerInfo {
-    name: String,
-    enabled: bool,
-    opacity: f64,
-    has_content: bool,
-    websocket_port: u16,
-}
-
-// Composite layers status
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-struct LayersStatus {
-    layers: Vec<LayerInfo>,
-}
 
 
 
@@ -286,38 +264,6 @@ fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
     println!("Primary monitor set to index {}", primary_index);
     println!("=== END MONITOR DETECTION ===");
     result
-}
-
-// Get composite layers information for debugging
-#[command]
-async fn get_layers_status() -> LayersStatus {
-    let mut layers = Vec::new();
-
-    // Camera layer
-    layers.push(LayerInfo {
-        name: "Camera".to_string(),
-        enabled: true, // Camera is always enabled when composite is running
-        opacity: 1.0,
-        has_content: GSTREAMER_COMPOSITE.read().is_some(),
-        websocket_port: CAMERA_LAYER_WS_PORT,
-    });
-
-    // Overlay/FX layer
-    let has_fx = GSTREAMER_COMPOSITE.read().as_ref()
-        .map(|comp| comp.has_fx())
-        .unwrap_or(false);
-
-    layers.push(LayerInfo {
-        name: "Overlay/FX".to_string(),
-        enabled: has_fx,
-        opacity: GSTREAMER_COMPOSITE.read().as_ref()
-            .map(|comp| comp.get_overlay_opacity())
-            .unwrap_or(0.0),
-        has_content: has_fx,
-        websocket_port: OVERLAY_LAYER_WS_PORT,
-    });
-
-    LayersStatus { layers }
 }
 
 // Get monitor information
@@ -805,28 +751,14 @@ async fn initialize_composite_system() -> Result<String, String> {
     if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
         comp.set_frame_sender(tx.clone());
     }
-
+    
     // Set sender before starting WebSocket to prevent multiple initializations
     *COMPOSITE_FRAME_SENDER.write() = Some(tx);
-
-    // Set up layer senders for debugging
-    let camera_layer_tx = broadcast::channel::<Vec<u8>>(2).0;
-    let overlay_layer_tx = broadcast::channel::<Vec<u8>>(2).0;
-
-    if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
-        comp.set_camera_layer_sender(camera_layer_tx.clone());
-        comp.set_overlay_layer_sender(overlay_layer_tx.clone());
-    }
-
-    *CAMERA_LAYER_SENDER.write() = Some(camera_layer_tx);
-    *OVERLAY_LAYER_SENDER.write() = Some(overlay_layer_tx);
     
-    // Start WebSocket servers (only if not already running)
+    // Start WebSocket server (only if not already running)
     start_composite_websocket_server().await;
-    start_camera_layer_websocket_server().await;
-    start_overlay_layer_websocket_server().await;
-
-    println!("[Composite] ✅ Composite system initialized on port {} (layers: {} & {})", COMPOSITE_WS_PORT, CAMERA_LAYER_WS_PORT, OVERLAY_LAYER_WS_PORT);
+    
+    println!("[Composite] ✅ Composite system initialized on port {}", COMPOSITE_WS_PORT);
     Ok(format!("Composite initialized - WebSocket on port {}", COMPOSITE_WS_PORT))
 }
 
@@ -872,148 +804,6 @@ async fn start_composite_websocket_server() {
                         if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
                             println!("[Composite WS] Client disconnected");
                             break;
-                        }
-                    }
-                }
-            });
-        }
-    });
-}
-
-// WebSocket server for camera layer debugging
-async fn start_camera_layer_websocket_server() {
-    tokio::spawn(async {
-        let addr = format!("127.0.0.1:{}", CAMERA_LAYER_WS_PORT);
-        let listener = match TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!("[Camera Layer WS] Failed to bind to {}: {}", addr, e);
-                return;
-            }
-        };
-
-        println!("[Camera Layer WS] WebSocket server listening on {}", addr);
-
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(async move {
-                let ws_stream = match accept_async(stream).await {
-                    Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Camera Layer WS] WebSocket handshake failed: {}", e);
-                        return;
-                    }
-                };
-
-                println!("[Camera Layer WS] Client connected");
-
-                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-
-                // Subscribe to camera layer frames
-                let mut rx = match CAMERA_LAYER_SENDER.read().as_ref() {
-                    Some(sender) => sender.subscribe(),
-                    None => {
-                        println!("[Camera Layer WS] No frame sender available");
-                        return;
-                    }
-                };
-
-                // Stream frames to client
-                loop {
-                    tokio::select! {
-                        frame_result = rx.recv() => {
-                            match frame_result {
-                                Ok(frame_data) => {
-                                    // Send binary frame
-                                    if ws_sender.send(tokio_tungstenite::tungstenite::Message::Binary(frame_data)).await.is_err() {
-                                        println!("[Camera Layer WS] Client disconnected");
-                                        break;
-                                    }
-                                }
-                                Err(_) => {
-                                    // Channel closed or lagged
-                                    break;
-                                }
-                            }
-                        }
-                        msg = ws_receiver.next() => {
-                            match msg {
-                                Some(Ok(_)) => {}, // Ignore client messages
-                                _ => {
-                                    println!("[Camera Layer WS] Client disconnected");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    });
-}
-
-// WebSocket server for overlay layer debugging
-async fn start_overlay_layer_websocket_server() {
-    tokio::spawn(async {
-        let addr = format!("127.0.0.1:{}", OVERLAY_LAYER_WS_PORT);
-        let listener = match TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!("[Overlay Layer WS] Failed to bind to {}: {}", addr, e);
-                return;
-            }
-        };
-
-        println!("[Overlay Layer WS] WebSocket server listening on {}", addr);
-
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(async move {
-                let ws_stream = match accept_async(stream).await {
-                    Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Overlay Layer WS] WebSocket handshake failed: {}", e);
-                        return;
-                    }
-                };
-
-                println!("[Overlay Layer WS] Client connected");
-
-                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-
-                // Subscribe to overlay layer frames
-                let mut rx = match OVERLAY_LAYER_SENDER.read().as_ref() {
-                    Some(sender) => sender.subscribe(),
-                    None => {
-                        println!("[Overlay Layer WS] No frame sender available");
-                        return;
-                    }
-                };
-
-                // Stream frames to client
-                loop {
-                    tokio::select! {
-                        frame_result = rx.recv() => {
-                            match frame_result {
-                                Ok(frame_data) => {
-                                    // Send binary frame
-                                    if ws_sender.send(tokio_tungstenite::tungstenite::Message::Binary(frame_data)).await.is_err() {
-                                        println!("[Overlay Layer WS] Client disconnected");
-                                        break;
-                                    }
-                                }
-                                Err(_) => {
-                                    // Channel closed or lagged
-                                    break;
-                                }
-                            }
-                        }
-                        msg = ws_receiver.next() => {
-                            match msg {
-                                Some(Ok(_)) => {}, // Ignore client messages
-                                _ => {
-                                    println!("[Overlay Layer WS] Client disconnected");
-                                    break;
-                                }
-                            }
                         }
                     }
                 }
@@ -1578,7 +1368,6 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_layers_status,
             get_monitors,
             check_tv_monitor_window,
             close_tv_monitor_window,
