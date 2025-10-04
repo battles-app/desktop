@@ -422,11 +422,11 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add identity element with sync=true but with proper handling
-        // Use sync=true to ensure proper compositing timing, but let natural speed through
+        // Add identity element with sync=false to allow natural FX playback speed
+        // Compositor handles timing - FX should play at native frame rate without clock interference
         let identity = ElementFactory::make("identity")
             .name("fxidentity")
-            .property("sync", true) // Sync to pipeline clock for proper compositing
+            .property("sync", false) // Don't sync to pipeline clock - natural playback speed
             .build()
             .map_err(|_| "Failed to create identity")?;
 
