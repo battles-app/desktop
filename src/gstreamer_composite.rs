@@ -635,7 +635,7 @@ impl GStreamerComposite {
             println!("[Composite FX] ⚠️ No base time available from pipeline");
         }
 
-        // Sync FX bin state with pipeline
+        // Sync FX bin state with pipeline first, then override clock for natural playback
         println!("[Composite FX] 🔄 Syncing FX bin state with pipeline...");
         let sync_result = fx_bin.sync_state_with_parent();
         match sync_result {
@@ -645,6 +645,10 @@ impl GStreamerComposite {
                 return Err(format!("Failed to sync FX bin state: {:?}", e));
             }
         }
+
+        // Override the clock to NULL to allow asynchronous playback at natural speed
+        let _ = fx_bin.set_clock(None::<&gst::Clock>);
+        println!("[Composite FX] 🕒 FX bin clock set to NULL for natural playback speed");
 
         // Check final states
         println!("[Composite FX] 📊 Final states:");
