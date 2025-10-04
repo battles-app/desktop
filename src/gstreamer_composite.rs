@@ -229,10 +229,16 @@ impl GStreamerComposite {
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                     
                     let jpeg_data = map.as_slice();
+                    println!("[Composite] 📸 Appsink produced frame: {} bytes", jpeg_data.len());
                     if jpeg_data.len() > 100 {
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
+                            println!("[Composite] 📤 Frame sent to WebSocket channel");
+                        } else {
+                            println!("[Composite] ❌ No frame sender available");
                         }
+                    } else {
+                        println!("[Composite] ⚠️ Frame too small, skipping");
                     }
                     
                     Ok(gst::FlowSuccess::Ok)
@@ -308,11 +314,7 @@ impl GStreamerComposite {
         
         Ok(())
     }
-    
-    pub fn is_running(&self) -> bool {
-        *self.is_running.read()
-    }
-    
+
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] ⚡ ===== STARTING FX PLAYBACK =====");
