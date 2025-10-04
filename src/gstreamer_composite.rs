@@ -143,7 +143,6 @@ impl GStreamerComposite {
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
-                // Camera layer with tee for debugging
                 "mfvideosrc device-index={} ! \
                  videoflip method={} ! \
                  videoconvert ! \
@@ -162,7 +161,6 @@ impl GStreamerComposite {
                  final_tee. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  final_tee. ! queue ! {} \
                  \
-                 // Overlay placeholder (will be connected dynamically when FX plays)
                  videotestsrc pattern=black ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  tee name=overlay_tee \
@@ -182,7 +180,6 @@ impl GStreamerComposite {
             )
         } else {
             format!(
-                // Camera layer with tee for debugging
                 "mfvideosrc device-index={} ! \
                  videoconvert ! \
                  videoscale ! \
@@ -200,7 +197,6 @@ impl GStreamerComposite {
                  final_tee. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  final_tee. ! queue ! {} \
                  \
-                 // Overlay placeholder (will be connected dynamically when FX plays)
                  videotestsrc pattern=black ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  tee name=overlay_tee \
@@ -221,7 +217,6 @@ impl GStreamerComposite {
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            // Camera layer with tee for debugging
             "v4l2src device=/dev/video{} ! \
              videoconvert ! \
              videoscale ! \
@@ -239,7 +234,6 @@ impl GStreamerComposite {
              final_tee. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              final_tee. ! queue ! {} \
              \
-             // Overlay placeholder (will be connected dynamically when FX plays)
              videotestsrc pattern=black ! \
              video/x-raw,width={},height={},format=BGRA ! \
              tee name=overlay_tee \
