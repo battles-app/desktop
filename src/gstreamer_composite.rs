@@ -468,12 +468,13 @@ impl GStreamerComposite {
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
-        // Link static elements (qtdemux will link dynamically to decodebin)
+        // Link static elements (qtdemux and decodebin will link dynamically)
         gst::Element::link_many(&[&filesrc, &qtdemux])
             .map_err(|_| "Failed to link filesrc to qtdemux")?;
 
-        gst::Element::link_many(&[&decodebin, &videoconvert, &videoscale])
-            .map_err(|_| "Failed to link decodebin to post-processing")?;
+        // Link decodebin output to post-processing (decodebin has dynamic pads)
+        gst::Element::link_many(&[&videoconvert, &videoscale])
+            .map_err(|_| "Failed to link videoconvert to post-processing")?;
 
         if has_alpha {
             let alpha_elem = chroma_element.as_ref().unwrap();
@@ -521,6 +522,52 @@ impl GStreamerComposite {
                 println!("[Composite FX] ❌ Failed to link video pad to decodebin: {:?}", e);
             } else {
                 println!("[Composite FX] ✅ Video pad linked to decodebin successfully!");
+            }
+        });
+
+        // Connect decodebin's dynamic pads to videoconvert (for decoded video)
+        let videoconvert_clone = videoconvert.clone();
+        decodebin.connect_pad_added(move |_dbin, src_pad| {
+            println!("[Composite FX] 🔗 Decodebin pad added: {}", src_pad.name());
+
+            // Only link video pads (ignore audio, text, etc.)
+            let caps = match src_pad.current_caps() {
+                Some(caps) => caps,
+                None => {
+                    println!("[Composite FX] ⚠️ Decodebin pad has no caps yet");
+                    return;
+                },
+            };
+
+            let structure = match caps.structure(0) {
+                Some(s) => s,
+                None => {
+                    println!("[Composite FX] ⚠️ Decodebin pad caps has no structure");
+                    return;
+                },
+            };
+
+            let name = structure.name();
+            println!("[Composite FX] 📹 Decodebin pad caps: {}", name);
+
+            if !name.starts_with("video/") {
+                // Skip non-video pads (audio, subtitles, etc.)
+                println!("[Composite FX] ⏭️ Skipping non-video pad from decodebin");
+                return;
+            }
+
+            // Check if videoconvert sink is already linked (only link once)
+            let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
+            if sink_pad.is_linked() {
+                println!("[Composite FX] ⚠️ Videoconvert sink already linked");
+                return;
+            }
+
+            // Link decoded video pad to videoconvert
+            if let Err(e) = src_pad.link(&sink_pad) {
+                println!("[Composite FX] ❌ Failed to link decodebin video pad: {:?}", e);
+            } else {
+                println!("[Composite FX] ✅ Decodebin video pad linked successfully!");
             }
         });
         
