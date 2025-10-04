@@ -32,7 +32,11 @@ impl GStreamerCamera {
     
     pub fn list_cameras() -> Result<Vec<CameraInfo>, String> {
         gst::init().map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
-        
+
+        // Temporarily suppress GStreamer warnings during enumeration
+        let old_level = gst::log::get_default_threshold();
+        gst::log::set_default_threshold(gst::DebugLevel::Error);
+
         let mut cameras = Vec::new();
         
         // On Windows, use GStreamer device monitor to enumerate real cameras

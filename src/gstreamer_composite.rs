@@ -461,8 +461,8 @@ impl GStreamerComposite {
             .name("fxleakyqueue")
             .property_from_str("leaky", "downstream") // Drop old frames if buffer full
             .property("max-size-buffers", 1u32) // Minimal buffer
-            .property("max-size-time", 0u64) // No time buffering
-            .property("max-size-bytes", 0u64) // No byte buffering
+            .property("max-size-time", 1000000u64) // 1ms minimal time buffering
+            .property("max-size-bytes", 0u32) // No byte buffering
             .build()
             .map_err(|_| "Failed to create leaky queue")?;
 
