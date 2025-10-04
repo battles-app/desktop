@@ -410,10 +410,11 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add identity element with sync=true to respect timestamps and play at original speed
+        // Add identity element WITHOUT sync to allow natural playback speed
+        // Let videos play at their native rate without pipeline clock interference
         let identity = ElementFactory::make("identity")
             .name("fxidentity")
-            .property("sync", true) // Synchronize to clock - plays at real-time speed
+            .property("sync", false) // Don't sync to pipeline clock - natural speed
             .build()
             .map_err(|_| "Failed to create identity")?;
 
@@ -427,12 +428,12 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to create queue")?;
 
         // Create caps filter to match compositor format (BGRA with alpha channel)
-        // NO FRAME RATE conversion - FX plays at natural speed!
+        // NO FRAME RATE specification - FX plays at natural speed!
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 Natural FPS with clock sync, format: BGRA");
+        println!("[Composite FX] 🎬 Natural FPS without clock sync, format: BGRA");
 
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
