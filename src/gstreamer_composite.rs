@@ -234,6 +234,10 @@ impl GStreamerComposite {
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
         
+        // Add frame counter for debugging
+        let frame_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let frame_count_clone = frame_count.clone();
+        
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
@@ -247,6 +251,15 @@ impl GStreamerComposite {
                     
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
+                        let count = frame_count_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        
+                        // Log first frame and every 60th frame (1 second at 60fps)
+                        if count == 0 {
+                            println!("[Composite] ✅ First frame received! Size: {} bytes", jpeg_data.len());
+                        } else if count % 60 == 0 {
+                            println!("[Composite] 📊 Frame {}: {} bytes", count, jpeg_data.len());
+                        }
+                        
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
                         }
@@ -273,6 +286,29 @@ impl GStreamerComposite {
                 println!("[Composite] ⚠️ Pipeline state: {:?}, pending: {:?}", current_state, pending_state);
             }
         }
+        
+        // Check for errors on the bus
+        if let Some(bus) = pipeline.bus() {
+            if let Some(msg) = bus.timed_pop(Some(gst::ClockTime::from_mseconds(500))) {
+                use gst::MessageView;
+                match msg.view() {
+                    MessageView::Error(err) => {
+                        println!("[Composite] ❌ Pipeline error: {} (debug: {:?})", err.error(), err.debug());
+                    },
+                    MessageView::Warning(warn) => {
+                        println!("[Composite] ⚠️ Pipeline warning: {}", warn.error());
+                    },
+                    MessageView::Eos(_) => {
+                        println!("[Composite] ⚠️ Pipeline received EOS (end of stream)");
+                    },
+                    _ => {}
+                }
+            }
+        }
+        
+        // Give camera a moment to start producing frames
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        println!("[Composite] ⏳ Waiting for first frame from camera...");
         
         self.pipeline = Some(pipeline);
         Ok(())
