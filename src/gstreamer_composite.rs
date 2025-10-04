@@ -116,25 +116,33 @@ impl GStreamerComposite {
         };
         
         // Build GStreamer composite pipeline with compositor element
-        // The compositor element combines multiple video streams with alpha blending
-        // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
+        // Optimized for low-latency mixing: camera (live) + overlays (files)
+        // Key optimizations:
+        // 1. Compositor: latency=20ms, ignore-inactive-pads=true
+        // 2. Camera: Direct to compositor (live source, provides clock)
+        // 3. Overlays: Will add via dynamic bins with proper sync/queuing
+        // 4. Appsink: sync=true max-lateness=40ms (drop late frames, don't stall)
         
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
                 "compositor name=comp \
+                   latency=20000000 \
+                   ignore-inactive-pads=true \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {} \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
+                   jpegenc quality=90 ! \
+                   appsink name=preview emit-signals=true sync=true max-lateness=40000000 max-buffers=2 drop=true \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {} \
                  mfvideosrc device-index={} ! \
                  videoflip method={} ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
+                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
                  comp.sink_0", 
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
@@ -144,22 +152,27 @@ impl GStreamerComposite {
                 device_index,
                 videoflip_method,
                 width,
-                height
+                height,
+                fps
             )
         } else {
             format!(
                 "compositor name=comp \
+                   latency=20000000 \
+                   ignore-inactive-pads=true \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {} \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
+                   jpegenc quality=90 ! \
+                   appsink name=preview emit-signals=true sync=true max-lateness=40000000 max-buffers=2 drop=true \
+                 t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {} \
                  mfvideosrc device-index={} ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
+                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
                  comp.sink_0", 
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
@@ -168,24 +181,29 @@ impl GStreamerComposite {
                 self.get_output_branch(),
                 device_index,
                 width,
-                height
+                height,
+                fps
             )
         };
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
             "compositor name=comp \
+               latency=20000000 \
+               ignore-inactive-pads=true \
                sink_0::zorder=0 sink_0::alpha={} \
                sink_1::zorder=1 sink_1::alpha={} ! \
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
-             t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-             t. ! queue ! {} \
+             t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! \
+               jpegenc quality=90 ! \
+               appsink name=preview emit-signals=true sync=true max-lateness=40000000 max-buffers=2 drop=true \
+             t. ! queue max-size-buffers=0 max-size-bytes=0 max-size-time=20000000 ! {} \
              v4l2src device=/dev/video{} ! \
              videoconvert ! \
              videoscale ! \
-             video/x-raw,width={},height={},format=BGRA ! \
+             video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
              comp.sink_0",
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
@@ -194,7 +212,8 @@ impl GStreamerComposite {
             self.get_output_branch(),
             device_index,
             width,
-            height
+            height,
+            fps
         );
         
         println!("[Composite] Pipeline: {}", pipeline_str);
@@ -412,47 +431,75 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to create decodebin: {}", e))?;
         println!("[Composite FX] ✅ Decodebin created successfully");
 
-        // Create post-decode elements
+        // Get pipeline parameters for FX normalization
+        let pipeline_fps = *self.pipeline_fps.read();
+        let pipeline_width = *self.pipeline_width.read();
+        let pipeline_height = *self.pipeline_height.read();
+
+        // Create post-decode elements with proper sync and normalization
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
+        // Scale EARLY to output size (reduces chroma key work)
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add identity element with sync=false to allow natural FX playback speed
-        // Compositor handles timing - FX should play at native frame rate without clock interference
+        // Normalize framerate to camera FPS BEFORE chroma key (critical!)
+        let videorate = ElementFactory::make("videorate")
+            .name("fxrate")
+            .property("drop-only", true) // Only drop frames, never duplicate
+            .property("skip-to-first", true) // Start immediately
+            .build()
+            .map_err(|_| "Failed to create videorate")?;
+
+        // Caps after scaling: Match output size and framerate
+        let caps_after_scale = gst::Caps::builder("video/x-raw")
+            .field("width", pipeline_width as i32)
+            .field("height", pipeline_height as i32)
+            .field("framerate", gst::Fraction::new(pipeline_fps as i32, 1))
+            .build();
+
+        let capsfilter_scale = ElementFactory::make("capsfilter")
+            .name("fxcaps_scale")
+            .property("caps", &caps_after_scale)
+            .build()
+            .map_err(|_| "Failed to create scale capsfilter")?;
+
+        println!("[Composite FX] 📐 Early scaling to {}x{} @ {}fps", pipeline_width, pipeline_height, pipeline_fps);
+
+        // Identity with sync=true to lock file to pipeline clock
         let identity = ElementFactory::make("identity")
             .name("fxidentity")
-            .property("sync", false) // Don't sync to pipeline clock - natural playback speed
+            .property("sync", true) // CRITICAL: Sync file to pipeline clock
             .build()
             .map_err(|_| "Failed to create identity")?;
 
-        // Add queue for buffering - minimal for low latency FX playback
+        // Leaky queue RIGHT BEFORE compositor (prevents stalling camera)
         let queue = ElementFactory::make("queue")
             .name("fxqueue")
-            .property("max-size-buffers", 2u32) // Minimal buffer for low latency
-            .property("max-size-time", 100000000u64) // 100ms buffer only
-            .property_from_str("leaky", "downstream") // Drop old frames if buffer full
+            .property("max-size-buffers", 1u32) // Keep only 1 frame
+            .property("max-size-time", 0u64) // No time limit
+            .property("max-size-bytes", 0u32) // No byte limit
+            .property_from_str("leaky", "downstream") // Drop old frames if full
             .build()
-            .map_err(|_| "Failed to create queue")?;
+            .map_err(|_| "Failed to create leaky queue")?;
 
-        // Create caps filter to match compositor format (BGRA with alpha channel)
-        // NO FRAME RATE specification - FX plays at natural speed!
-        let caps = gst::Caps::builder("video/x-raw")
+        // Final caps filter for BGRA format (after chroma key)
+        let caps_final = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 Natural FPS without clock sync, format: BGRA");
-
-        let capsfilter = ElementFactory::make("capsfilter")
-            .name("fxcaps")
-            .property("caps", &caps)
+        let capsfilter_final = ElementFactory::make("capsfilter")
+            .name("fxcaps_final")
+            .property("caps", &caps_final)
             .build()
-            .map_err(|_| "Failed to create capsfilter")?;
+            .map_err(|_| "Failed to create final capsfilter")?;
+
+        println!("[Composite FX] 🎬 Normalized to {}fps, synced to pipeline clock", pipeline_fps);
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
@@ -473,13 +520,19 @@ impl GStreamerComposite {
             (None, false)
         };
 
-        // Add all elements to bin (filesrc + decodebin pipeline)
+        // Add all elements to bin (filesrc + decodebin + optimized processing chain)
         if let Some(ref alpha) = chroma_element {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
+            fx_bin.add_many(&[
+                &filesrc, &decodebin, &videoconvert, 
+                &videoscale, &capsfilter_scale, &videorate,
+                alpha, &identity, &queue, &capsfilter_final
+            ]).map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
+            fx_bin.add_many(&[
+                &filesrc, &decodebin, &videoconvert,
+                &videoscale, &capsfilter_scale, &videorate,
+                &identity, &queue, &capsfilter_final
+            ]).map_err(|_| "Failed to add elements to FX bin")?;
         }
 
         // Link static elements (decodebin will link dynamically)
@@ -488,24 +541,25 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to link filesrc to decodebin")?;
         println!("[Composite FX] ✅ Filesrc → decodebin linked");
 
-        println!("[Composite FX] 🔗 Linking videoconvert → videoscale...");
-        gst::Element::link_many(&[&videoconvert, &videoscale])
-            .map_err(|_| "Failed to link videoconvert to post-processing")?;
-        println!("[Composite FX] ✅ Videoconvert → videoscale linked");
-
-        println!("[Composite FX] 🔗 Linking post-processing chain...");
+        // Pipeline: videoconvert → videoscale → capsfilter → videorate → [alpha?] → identity → queue → capsfilter_final
+        // This ensures: decode → scale early → normalize FPS → chroma key → sync → leaky queue → compositor
+        println!("[Composite FX] 🔗 Linking processing chain...");
         if has_alpha {
             let alpha_elem = chroma_element.as_ref().unwrap();
-            gst::Element::link_many(&[&videoscale, alpha_elem, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to link FX elements with alpha")?;
-            println!("[Composite FX] ✅ Chain linked with alpha: videoscale → alpha → identity → queue → capsfilter");
+            gst::Element::link_many(&[
+                &videoconvert, &videoscale, &capsfilter_scale, &videorate,
+                alpha_elem, &identity, &queue, &capsfilter_final
+            ]).map_err(|_| "Failed to link FX elements with alpha")?;
+            println!("[Composite FX] ✅ Chain: videoconvert → scale → caps → rate → CHROMA → identity(sync) → queue(leaky) → caps");
         } else {
-            gst::Element::link_many(&[&videoscale, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to link FX elements")?;
-            println!("[Composite FX] ✅ Chain linked: videoscale → identity → queue → capsfilter");
+            gst::Element::link_many(&[
+                &videoconvert, &videoscale, &capsfilter_scale, &videorate,
+                &identity, &queue, &capsfilter_final
+            ]).map_err(|_| "Failed to link FX elements")?;
+            println!("[Composite FX] ✅ Chain: videoconvert → scale → caps → rate → identity(sync) → queue(leaky) → caps");
         }
         
-        let final_element = capsfilter.clone();
+        let final_element = capsfilter_final.clone();
         
         // Create ghost pad on the bin
         let final_src_pad = final_element.static_pad("src")
