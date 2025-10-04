@@ -346,10 +346,12 @@ impl GStreamerComposite {
             }
         };
 
-        // Get compositor element
+        // Get compositor element and configure for live mixing
         let compositor = match pipeline.by_name("comp") {
             Some(c) => {
-                println!("[Composite FX] ✅ Compositor element found");
+                // Configure compositor for live mixing
+                c.set_property("ignore-inactive-pads", true);
+                println!("[Composite FX] ✅ Compositor element found and configured (ignore-inactive-pads=true)");
                 c
             },
             None => {
@@ -403,11 +405,10 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to create filesrc: {}", e))?;
         println!("[Composite FX] ✅ Filesrc created successfully");
 
-        // Create decodebin for decoding with timestamp preservation
+        // Create decodebin for decoding
         println!("[Composite FX] 🔧 Creating decodebin element...");
         let decodebin = ElementFactory::make("decodebin")
             .name("fxdecode")
-            .property("force-sw-decoders", true) // Ensure consistent decoding
             .build()
             .map_err(|e| format!("Failed to create decodebin: {}", e))?;
         println!("[Composite FX] ✅ Decodebin created successfully");
@@ -418,41 +419,50 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
-        let videoscale = ElementFactory::make("videoscale")
-            .name("fxscale")
+        // Add videorate to normalize framerate to match pipeline (60fps)
+        let videorate = ElementFactory::make("videorate")
+            .name("fxrate")
             .build()
-            .map_err(|_| "Failed to create videoscale")?;
+            .map_err(|_| "Failed to create videorate")?;
 
-        // Add identity element with sync=false to allow natural FX playback speed
-        // Compositor handles timing - FX should play at native frame rate without clock interference
+        // Create caps filter for target framerate (60fps to match pipeline)
+        let rate_caps = gst::Caps::builder("video/x-raw")
+            .field("framerate", gst::Fraction::new(60, 1))
+            .build();
+
+        let rate_capsfilter = ElementFactory::make("capsfilter")
+            .name("fxratecaps")
+            .property("caps", &rate_caps)
+            .build()
+            .map_err(|_| "Failed to create rate capsfilter")?;
+
+        // Add identity element with sync=true to throttle to pipeline clock
         let identity = ElementFactory::make("identity")
             .name("fxidentity")
-            .property("sync", false) // Don't sync to pipeline clock - natural playback speed
+            .property("sync", true) // Sync to pipeline clock for proper timing
             .build()
             .map_err(|_| "Failed to create identity")?;
 
-        // Add queue for buffering - minimal for low latency FX playback
+        // Add queue after identity for timing isolation
         let queue = ElementFactory::make("queue")
             .name("fxqueue")
-            .property("max-size-buffers", 2u32) // Minimal buffer for low latency
-            .property("max-size-time", 100000000u64) // 100ms buffer only
+            .property("max-size-buffers", 2u32) // Minimal buffer
             .property_from_str("leaky", "downstream") // Drop old frames if buffer full
             .build()
             .map_err(|_| "Failed to create queue")?;
 
-        // Create caps filter to match compositor format (BGRA with alpha channel)
-        // NO FRAME RATE specification - FX plays at natural speed!
-        let caps = gst::Caps::builder("video/x-raw")
+        // Create final caps filter for compositor format (BGRA)
+        let final_caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 Natural FPS without clock sync, format: BGRA");
+        println!("[Composite FX] 🎬 Converting to 60fps with clock sync, format: BGRA");
 
-        let capsfilter = ElementFactory::make("capsfilter")
+        let final_capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
-            .property("caps", &caps)
+            .property("caps", &final_caps)
             .build()
-            .map_err(|_| "Failed to create capsfilter")?;
+            .map_err(|_| "Failed to create final capsfilter")?;
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
@@ -473,12 +483,12 @@ impl GStreamerComposite {
             (None, false)
         };
 
-        // Add all elements to bin (filesrc + decodebin pipeline)
+        // Add all elements to bin (complete framerate normalization pipeline)
         if let Some(ref alpha) = chroma_element {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videorate, &rate_capsfilter, alpha, &identity, &queue, &final_capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videorate, &rate_capsfilter, &identity, &queue, &final_capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
@@ -488,24 +498,25 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to link filesrc to decodebin")?;
         println!("[Composite FX] ✅ Filesrc → decodebin linked");
 
-        println!("[Composite FX] 🔗 Linking videoconvert → videoscale...");
-        gst::Element::link_many(&[&videoconvert, &videoscale])
-            .map_err(|_| "Failed to link videoconvert to post-processing")?;
-        println!("[Composite FX] ✅ Videoconvert → videoscale linked");
+        // Link post-decode processing chain
+        println!("[Composite FX] 🔗 Linking decode processing chain...");
+        gst::Element::link_many(&[&videoconvert, &videorate, &rate_capsfilter])
+            .map_err(|_| "Failed to link decode processing chain")?;
+        println!("[Composite FX] ✅ Videoconvert → videorate → rate_capsfilter linked");
 
-        println!("[Composite FX] 🔗 Linking post-processing chain...");
+        println!("[Composite FX] 🔗 Linking final processing chain...");
         if has_alpha {
             let alpha_elem = chroma_element.as_ref().unwrap();
-            gst::Element::link_many(&[&videoscale, alpha_elem, &identity, &queue, &capsfilter])
+            gst::Element::link_many(&[&rate_capsfilter, alpha_elem, &identity, &queue, &final_capsfilter])
                 .map_err(|_| "Failed to link FX elements with alpha")?;
-            println!("[Composite FX] ✅ Chain linked with alpha: videoscale → alpha → identity → queue → capsfilter");
+            println!("[Composite FX] ✅ Chain linked with alpha: rate_capsfilter → alpha → identity → queue → final_capsfilter");
         } else {
-            gst::Element::link_many(&[&videoscale, &identity, &queue, &capsfilter])
+            gst::Element::link_many(&[&rate_capsfilter, &identity, &queue, &final_capsfilter])
                 .map_err(|_| "Failed to link FX elements")?;
-            println!("[Composite FX] ✅ Chain linked: videoscale → identity → queue → capsfilter");
+            println!("[Composite FX] ✅ Chain linked: rate_capsfilter → identity → queue → final_capsfilter");
         }
         
-        let final_element = capsfilter.clone();
+        let final_element = final_capsfilter.clone();
         
         // Create ghost pad on the bin
         let final_src_pad = final_element.static_pad("src")
