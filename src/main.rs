@@ -883,6 +883,7 @@ async fn start_camera_layer_websocket_server() {
 
 // WebSocket server for overlay layer frames
 async fn start_overlay_layer_websocket_server() {
+    println!("[Overlay Layer WS] 🚀 Starting overlay WebSocket server...");
     tokio::spawn(async {
         let addr = format!("127.0.0.1:{}", OVERLAY_LAYER_WS_PORT);
         let listener = match TcpListener::bind(&addr).await {
@@ -914,6 +915,8 @@ async fn start_overlay_layer_websocket_server() {
 
                 // Subscribe to overlay layer frames
                 if let Some(tx) = tx_opt {
+                    println!("[Overlay Layer WS] 📡 OVERLAY_LAYER_FRAME_SENDER is available");
+                    println!("[Overlay Layer WS] 📡 Subscribed to overlay frames");
                     let mut rx = tx.subscribe();
 
                     while let Ok(frame_data) = rx.recv().await {
@@ -925,6 +928,8 @@ async fn start_overlay_layer_websocket_server() {
                             break;
                         }
                     }
+                } else {
+                    println!("[Overlay Layer WS] ❌ OVERLAY_LAYER_FRAME_SENDER is None!");
                 }
             });
         }
