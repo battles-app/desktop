@@ -32,8 +32,8 @@ impl MasterClock {
 
         // Use pipeline's clock as master clock
         if let Some(clock) = pipeline.clock() {
-            self.clock = Some(clock);
-            println!("[Master Clock] Using pipeline clock: {:?}", clock.time());
+            self.clock = Some(clock.clone());
+            println!("[Master Clock] Using pipeline clock");
         } else {
             println!("[Master Clock] Warning: Pipeline has no clock");
         }
@@ -103,8 +103,9 @@ impl MasterClock {
 }
 
 /// Frame scheduler that coordinates rendering with the master clock
+#[derive(Clone)]
 pub struct FrameScheduler {
-    master_clock: Arc<MasterClock>,
+    master_clock: Arc<RwLock<MasterClock>>,
     frame_sender: broadcast::Sender<FrameEvent>,
     is_running: Arc<RwLock<bool>>,
 }
@@ -116,7 +117,7 @@ pub enum FrameEvent {
 }
 
 impl FrameScheduler {
-    pub fn new(master_clock: Arc<MasterClock>) -> (Self, broadcast::Receiver<FrameEvent>) {
+    pub fn new(master_clock: Arc<RwLock<MasterClock>>) -> (Self, broadcast::Receiver<FrameEvent>) {
         let (tx, rx) = broadcast::channel(16);
 
         let scheduler = Self {
@@ -137,21 +138,21 @@ impl FrameScheduler {
         let is_running = self.is_running.clone();
 
         tokio::spawn(async move {
-            println!("[Frame Scheduler] Started at {} fps", master_clock.target_fps());
+            println!("[Frame Scheduler] Started at {} fps", master_clock.read().target_fps());
 
-            master_clock.reset();
+            master_clock.write().reset();
 
             while *is_running.read() {
-                if master_clock.should_render_frame() {
-                    let pts = master_clock.next_frame_pts();
-                    let frame_number = master_clock.current_frame();
+                if master_clock.read().should_render_frame() {
+                    let pts = master_clock.read().next_frame_pts();
+                    let frame_number = master_clock.read().current_frame();
 
                     // Send render event
                     let event = FrameEvent::Render { pts, frame_number };
                     let _ = frame_sender.send(event);
 
                     // Advance to next frame
-                    master_clock.advance_frame();
+                    master_clock.write().advance_frame();
                 }
 
                 // Small sleep to prevent busy waiting

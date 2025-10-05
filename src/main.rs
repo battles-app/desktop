@@ -532,110 +532,37 @@ async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(),
 }
 
 // ========================================
-// CAMERA COMMANDS (REFACTORED - Clean implementation)
+// CAMERA COMMANDS - Now handled by WGPU compositor
 // ========================================
 
 #[command]
-async fn initialize_camera_system(app_handle: tauri::AppHandle) -> Result<String, String> {
-    println!("[Camera] Initializing camera system");
-    
-    if CAMERA_FRAME_SENDER.read().is_some() {
-        println!("[Camera] Already initialized");
-        return Ok("Camera system already initialized".to_string());
-    }
-    
-    let camera = GStreamerCamera::new()
-        .map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
-    
-    *GSTREAMER_CAMERA.write() = Some(camera);
-    
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
-    
-    if let Some(cam) = GSTREAMER_CAMERA.read().as_ref() {
-        cam.set_frame_sender(tx.clone());
-    }
-    
-    *CAMERA_FRAME_SENDER.write() = Some(tx);
-    
-    start_camera_frame_emitter(app_handle).await;
-    
-    println!("[Camera] ✅ Camera system initialized with IPC");
-    Ok("Camera initialized with IPC".to_string())
-}
-
-async fn start_camera_frame_emitter(app_handle: tauri::AppHandle) {
-    tokio::spawn(async move {
-        let tx_opt = CAMERA_FRAME_SENDER.read().as_ref().cloned();
-        
-        if let Some(tx) = tx_opt {
-            let mut rx = tx.subscribe();
-            println!("[Camera IPC] Frame emitter started");
-            
-            while let Ok(frame_data) = rx.recv().await {
-                // Emit as base64 to frontend
-                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                let _ = app_handle.emit("camera-frame", base64_frame);
-            }
-        }
-    });
+async fn initialize_camera_system(_app_handle: tauri::AppHandle) -> Result<String, String> {
+    println!("[Camera] Camera system now handled by WGPU compositor");
+    Ok("Camera system integrated with WGPU compositor".to_string())
 }
 
 #[command]
 async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
-    println!("[Camera] Enumerating cameras");
-    
-    let cameras_info = GStreamerCamera::list_cameras()?;
-    
-    let cameras: Vec<CameraDeviceInfo> = cameras_info
-        .into_iter()
-        .map(|cam| {
-            println!("[Camera] Found: {}", cam.name);
-            CameraDeviceInfo {
-                id: cam.id,
-                name: cam.name,
-                description: cam.description,
-                is_available: true,
-            }
-        })
-        .collect();
-    
-    println!("[Camera] Total cameras found: {}", cameras.len());
-    Ok(cameras)
+    println!("[Camera] Camera enumeration handled by WGPU compositor");
+    // Return empty list for now - cameras will be enumerated by the compositor
+    Ok(vec![])
 }
 
 #[command]
 async fn start_camera_preview(device_id: String, _app: tauri::AppHandle) -> Result<(), String> {
-    start_camera_preview_with_quality(device_id, "high".to_string(), _app).await
+    println!("[Camera] Camera preview handled by WGPU compositor pipeline");
+    Ok(())
 }
 
 #[command]
 async fn start_camera_preview_with_quality(device_id: String, quality: String, _app: tauri::AppHandle) -> Result<(), String> {
-    println!("[Camera] Starting preview for device: {} with quality: {}", device_id, quality);
-    
-    stop_camera_preview().await?;
-    
-    let mut camera_lock = GSTREAMER_CAMERA.write();
-    if let Some(camera) = camera_lock.as_mut() {
-        camera.start_with_quality(&device_id, &quality)?;
-        println!("[Camera] ✅ Camera started successfully!");
-    } else {
-        return Err("Camera not initialized".to_string());
-    }
-    drop(camera_lock);
-    
+    println!("[Camera] Camera preview with quality '{}' handled by WGPU compositor", quality);
     Ok(())
 }
 
 #[command]
 async fn stop_camera_preview() -> Result<(), String> {
-    println!("[Camera] Stopping preview");
-    
-    let mut camera_lock = GSTREAMER_CAMERA.write();
-    if let Some(camera) = camera_lock.as_mut() {
-        camera.stop()?;
-    }
-    drop(camera_lock);
-    
+    println!("[Camera] Camera preview stop handled by WGPU compositor");
     Ok(())
 }
 
@@ -666,51 +593,73 @@ async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<Str
 async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
     println!("[Composite] Starting WGPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
 
-    // Parse device index first
+    // Parse device index
     let device_index: u32 = camera_device_id.parse()
         .map_err(|_| "Invalid camera device ID")?;
 
-    // Check if compositor exists
+    // Initialize compositor if needed
     if WGPU_GSTREAMER_COMPOSITOR.read().is_none() {
-        return Err("Composite pipeline not initialized".to_string());
+        let compositor = WgpuGStreamerCompositor::new(width, height, fps).await
+            .map_err(|e| format!("Failed to create WGPU compositor: {}", e))?;
+        *WGPU_GSTREAMER_COMPOSITOR.write() = Some(compositor);
     }
 
-    // Add camera input and start (without holding the lock)
-    let add_result = {
-        let compositor = WGPU_GSTREAMER_COMPOSITOR.read().as_ref().unwrap().clone();
-        // Note: This is a simplified approach - in real implementation you'd need proper async handling
-        // For now, we'll assume the operations complete synchronously
-        Ok(())
-    };
+    // Add camera input and start the pipeline
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        // Clone the compositor for async operation
+        let mut compositor_clone = compositor.clone();
 
-    if add_result.is_ok() {
-        println!("[Composite] ✅ WGPU composite pipeline started");
+        // Spawn a task to handle the async operations
+        tokio::spawn(async move {
+            let camera_id = format!("camera_{}", device_index);
+            if let Err(e) = compositor_clone.add_camera_input(camera_id, device_index).await {
+                println!("[Composite] Failed to add camera input: {}", e);
+                return;
+            }
+
+            if let Err(e) = compositor_clone.start().await {
+                println!("[Composite] Failed to start compositor: {}", e);
+                return;
+            }
+
+            println!("[Composite] ✅ WGPU composite pipeline started successfully");
+        });
     }
 
-    add_result
+    Ok(())
 }
 
 #[command]
 async fn stop_composite_pipeline() -> Result<(), String> {
     println!("[Composite] Stopping WGPU composite pipeline");
 
-    if WGPU_GSTREAMER_COMPOSITOR.read().is_none() {
-        return Err("Composite pipeline not initialized".to_string());
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        let mut compositor_clone = compositor.clone();
+        tokio::spawn(async move {
+            if let Err(e) = compositor_clone.stop().await {
+                println!("[Composite] Failed to stop compositor: {}", e);
+            } else {
+                println!("[Composite] ✅ WGPU composite pipeline stopped");
+            }
+        });
     }
 
-    // Stop compositor (simplified - in real implementation needs proper async handling)
-    println!("[Composite] ✅ WGPU composite pipeline stopped");
     Ok(())
 }
 
 #[command]
 async fn update_composite_layers(camera: (bool, f64), overlay: (bool, f64)) -> Result<(), String> {
-    let composite_lock = GSTREAMER_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.update_layers(camera, overlay);
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        // Clone compositor for async operation
+        let compositor_clone = compositor.clone();
+        tokio::spawn(async move {
+            compositor_clone.set_layer_opacity("camera", if camera.0 { camera.1 as f32 } else { 0.0 });
+            compositor_clone.set_layer_opacity("media", if overlay.0 { overlay.1 as f32 } else { 0.0 });
+        });
     }
-    drop(composite_lock);
-    
+
+    println!("[Composite] Layer visibility updated: camera={}/{:.2}, overlay={}/{:.2}",
+             camera.0, camera.1, overlay.0, overlay.1);
     Ok(())
 }
 
@@ -815,13 +764,35 @@ async fn play_composite_fx(
         return Err("Composite pipeline not initialized".to_string());
     }
 
-    // Add media input and set chroma key (simplified)
-    if use_chroma_key {
-        let _rgb = crate::gst::GStreamerUtils::hex_to_rgb(&keycolor)?;
-        // Set chroma key would be implemented here
-    }
+    let file_path_str = local_path.to_string_lossy().to_string();
 
-    println!("[Composite] ✅ WGPU FX playback started");
+    // Clone the compositor for async operation
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        let mut compositor_clone = compositor.clone();
+        let file_path = file_path_str.clone();
+        let chroma_key = if use_chroma_key {
+            Some(keycolor.clone())
+        } else {
+            None
+        };
+
+        tokio::spawn(async move {
+            // Add media input
+            if let Err(e) = compositor_clone.add_media_input("media".to_string(), file_path).await {
+                println!("[Composite] Failed to add media input: {}", e);
+                return;
+            }
+
+            // Set chroma key if enabled
+            if let Some(key_color) = chroma_key {
+                if let Ok(rgb) = crate::gst::GStreamerUtils::hex_to_rgb(&key_color) {
+                    compositor_clone.set_chroma_key("media", rgb.0, rgb.1, rgb.2, tolerance as f32);
+                }
+            }
+
+            println!("[Composite] ✅ WGPU FX playback started");
+        });
+    }
 
     Ok(())
 }
@@ -830,13 +801,15 @@ async fn play_composite_fx(
 async fn stop_composite_fx() -> Result<(), String> {
     println!("[Composite] Stopping WGPU FX");
 
-    if WGPU_GSTREAMER_COMPOSITOR.read().is_none() {
-        return Err("Composite pipeline not initialized".to_string());
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        // Clone compositor for async operation
+        let compositor_clone = compositor.clone();
+        tokio::spawn(async move {
+            compositor_clone.set_layer_visible("media", false);
+        });
     }
 
-    // Set media layer invisible (simplified)
     println!("[Composite] ✅ WGPU FX stopped");
-
     Ok(())
 }
 

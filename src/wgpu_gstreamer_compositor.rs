@@ -12,7 +12,7 @@ pub struct WgpuGStreamerCompositor {
     wgpu_compositor: Arc<RwLock<WgpuCompositor>>,
     input_manager: Arc<RwLock<InputManager>>,
     output_manager: Arc<RwLock<OutputManager>>,
-    master_clock: Arc<MasterClock>,
+    master_clock: Arc<RwLock<MasterClock>>,
     frame_scheduler: Option<FrameScheduler>,
     frame_buffer: Arc<SynchronizedFrameBuffer>,
     drift_compensator: Arc<ClockDriftCompensator>,
@@ -40,7 +40,7 @@ impl WgpuGStreamerCompositor {
         let output_manager = Arc::new(RwLock::new(OutputManager::new()));
 
         // Create clock system
-        let master_clock = Arc::new(MasterClock::new(fps));
+        let master_clock = Arc::new(RwLock::new(MasterClock::new(fps)));
         let frame_buffer = Arc::new(SynchronizedFrameBuffer::new(32)); // Buffer up to 32 frames per source
         let drift_compensator = Arc::new(ClockDriftCompensator::new());
 
@@ -225,7 +225,7 @@ impl WgpuGStreamerCompositor {
 
         // Create master pipeline for clock synchronization
         let master_pipeline = gst::Pipeline::new();
-        self.master_clock.set_master_pipeline(master_pipeline);
+        self.master_clock.write().set_master_pipeline(master_pipeline);
 
         // Create frame scheduler
         let (scheduler, mut frame_rx) = FrameScheduler::new(self.master_clock.clone());
@@ -251,13 +251,14 @@ impl WgpuGStreamerCompositor {
                         // Update WGPU textures
                         {
                             let mut wgpu = wgpu_compositor.write();
+                            let output_size = wgpu.output_size();
 
                             // Update camera texture
                             if let Some(frame) = camera_frame {
                                 if let Some(layer) = wgpu.get_layer_mut("camera") {
                                     let texture = wgpu.create_texture_from_rgba(
-                                        wgpu.output_size().0,
-                                        wgpu.output_size().1,
+                                        output_size.0,
+                                        output_size.1,
                                         &frame.data
                                     );
                                     layer.update_texture(texture);
@@ -268,8 +269,8 @@ impl WgpuGStreamerCompositor {
                             if let Some(frame) = media_frame {
                                 if let Some(layer) = wgpu.get_layer_mut("media") {
                                     let texture = wgpu.create_texture_from_rgba(
-                                        wgpu.output_size().0,
-                                        wgpu.output_size().1,
+                                        output_size.0,
+                                        output_size.1,
                                         &frame.data
                                     );
                                     layer.update_texture(texture);
@@ -380,6 +381,6 @@ impl WgpuGStreamerCompositor {
 
     /// Get current frame count
     pub fn current_frame(&self) -> u64 {
-        self.master_clock.current_frame()
+        self.master_clock.read().current_frame()
     }
 }

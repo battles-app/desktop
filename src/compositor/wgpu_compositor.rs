@@ -98,7 +98,7 @@ impl WgpuCompositor {
         println!("[WGPU] Creating offscreen compositor: {}x{} @ {}fps", width, height, target_fps);
 
         // Create WGPU instance
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
@@ -111,7 +111,7 @@ impl WgpuCompositor {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or("Failed to find WGPU adapter")?;
+            .map_err(|_| "Failed to find WGPU adapter")?;
 
         println!("[WGPU] Using adapter: {:?}", adapter.get_info());
 
@@ -119,9 +119,11 @@ impl WgpuCompositor {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
+                    label: Some("WGPU Compositor Device"),
                     required_features: wgpu::Features::empty(),
                     required_limits: wgpu::Limits::default(),
-                    label: Some("WGPU Compositor Device"),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    trace: wgpu::Trace::default(),
                 },
                 None,
             )
@@ -355,15 +357,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Compositor Render Pipeline"),
             layout: Some(&pipeline_layout),
+            cache: None,
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[Vertex::desc(), Instance::desc()],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -448,14 +451,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         });
 
         // Create bind group
-        let texture_view_refs: Vec<&wgpu::TextureView> = texture_views.iter().collect();
+        let texture_views: Vec<wgpu::TextureView> = self.texture_array.iter().map(|tex| {
+            tex.create_view(&wgpu::TextureViewDescriptor::default())
+        }).collect();
+
         self.texture_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Texture Array Bind Group"),
             layout: &self.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureViewArray(&texture_view_refs),
+                    resource: wgpu::BindingResource::TextureViewArray(
+                        texture_views.iter().collect::<Vec<_>>().as_slice()
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -483,14 +491,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         });
 
         self.queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             rgba_data,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * width),
                 rows_per_image: Some(height),
@@ -555,6 +563,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &output_view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
@@ -637,15 +646,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         });
 
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(4 * self.output_width),
                     rows_per_image: Some(self.output_height),
@@ -668,7 +677,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             tx.send(result).unwrap();
         });
 
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::Wait);
 
         rx.recv().unwrap()
             .map_err(|e| format!("Failed to map buffer: {:?}", e))?;
