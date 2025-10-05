@@ -445,9 +445,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     },
                 ],
             }));
+
+            println!("[WGPU] Created bind group for {} textures", self.texture_array.len());
         } else {
             // No textures available
             self.texture_bind_group = None;
+            println!("[WGPU] No textures available for bind group");
         }
     }
 
@@ -496,8 +499,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         // Prepare instance data
         let mut instances = Vec::new();
 
+        println!("[WGPU] Render frame: {} layers, output {}x{}", self.layers.len(), self.output_width, self.output_height);
+
         for layer_id in &self.sorted_layer_ids {
             if let Some(layer) = self.layers.get(layer_id) {
+                println!("[WGPU] Layer {}: visible={}, has_texture={}", layer_id, layer.visible, layer.texture.is_some());
                 if !layer.visible || layer.texture.is_none() {
                     continue;
                 }
@@ -515,8 +521,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     chroma_tolerance: layer.chroma_tolerance,
                     layer_index: texture_index,
                 });
+
+                println!("[WGPU] Added instance for layer {}: opacity={}, transform={:?}", layer_id, layer.opacity, transform);
             }
         }
+
+        println!("[WGPU] Created {} instances for rendering", instances.len());
 
         if instances.is_empty() {
             return Ok(()); // Nothing to render

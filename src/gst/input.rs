@@ -67,8 +67,9 @@ impl GStreamerInput {
 
                 format!(
                     "{} ! videoconvert ! video/x-raw,format=RGBA ! \
+                     videoscale ! video/x-raw,width={},height={} ! \
                      appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
-                    source_element
+                    source_element, self.config.width, self.config.height
                 )
             }
             InputType::File { uri } => {

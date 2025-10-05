@@ -304,11 +304,11 @@ impl WgpuGStreamerCompositor {
 
                                     // Send raw frame to frontend for debugging (camera layers only)
                                     if layer_id.starts_with("camera") {
-                                        Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, 1920, 1080); // Camera native resolution
+                                        Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, output_size.0, output_size.1);
                                     }
 
-                                    // Use actual frame dimensions (camera is 1920x1080)
-                                    let texture = wgpu.create_texture_from_rgba(1920, 1080, &frame.data);
+                                    // Use output dimensions for texture (camera frames should be scaled to match)
+                                    let texture = wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data);
                                     if let Some(layer) = wgpu.get_layer_mut(layer_id) {
                                         layer.update_texture(texture);
                                         // Update the texture array so bind group gets created
