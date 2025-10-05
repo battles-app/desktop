@@ -465,10 +465,6 @@ impl GStreamerComposite {
             }
         });
         
-        // Lock FX bin state to prevent premature synchronization with pipeline clock
-        fx_bin.set_locked_state(true);
-        println!("[Composite FX] 🔒 FX bin state locked");
-        
         // Add bin to pipeline
         println!("[Composite FX] 📦 Adding FX bin to pipeline...");
         pipeline.add(&fx_bin)
@@ -502,31 +498,27 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
         
-        // Start FX bin to PAUSED first (while still locked)
-        println!("[Composite FX] ▶️ Setting FX bin to PAUSED state...");
-        fx_bin.set_state(gst::State::Paused)
-            .map_err(|e| format!("Failed to set FX bin to PAUSED: {:?}", e))?;
+        // Calculate base time offset: Set FX bin to start from "now" in pipeline time
+        // This prevents the FX from trying to catch up to when the pipeline originally started
+        if let (Some(pipeline_base_time), Some(clock)) = (pipeline.base_time(), pipeline.clock()) {
+            if let Some(current_clock_time) = clock.time() {
+                // Set base time = current clock time, so the FX thinks "now" is time 0
+                fx_bin.set_base_time(current_clock_time);
+                println!("[Composite FX] ⏱️ FX bin base time set to current clock time: {:?}", current_clock_time);
+                println!("[Composite FX] 📐 Pipeline base time: {:?}, clock time: {:?}", pipeline_base_time, current_clock_time);
+            } else {
+                println!("[Composite FX] ⚠️ No clock time available, using pipeline base time");
+                fx_bin.set_base_time(pipeline_base_time);
+            }
+        } else {
+            println!("[Composite FX] ⚠️ No clock/base time available, using default timing");
+        }
         
-        // Wait for PAUSED state
-        let _ = fx_bin.state(Some(gst::ClockTime::from_seconds(2)));
-        
-        // Seek to position 0 to reset timing and ensure playback starts from beginning at natural speed
-        println!("[Composite FX] ⏪ Seeking FX bin to position 0...");
-        fx_bin.seek_simple(
-            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-            gst::ClockTime::ZERO
-        ).map_err(|e| format!("Failed to seek FX bin: {:?}", e))?;
-        println!("[Composite FX] ✅ FX bin seeked to position 0");
-        
-        // Now set to PLAYING
-        println!("[Composite FX] ▶️ Setting FX bin to PLAYING state...");
+        // Start FX bin
+        println!("[Composite FX] ▶️ Setting FX bin state to PLAYING...");
         let state_change = fx_bin.set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start FX bin: {:?}", e))?;
         println!("[Composite FX] 🔄 State change result: {:?}", state_change);
-        
-        // Unlock state so FX bin can synchronize with pipeline (but now starting from position 0)
-        fx_bin.set_locked_state(false);
-        println!("[Composite FX] 🔓 FX bin state unlocked");
         
         // Wait for state change to complete (with 2 second timeout)
         match fx_bin.state(Some(gst::ClockTime::from_seconds(2))) {
