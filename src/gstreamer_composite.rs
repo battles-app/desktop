@@ -491,10 +491,10 @@ impl GStreamerComposite {
         
         // Link post-decode chain
         if let Some(ref alpha) = alpha_elem {
-            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain with alpha")?;
         } else {
-            gst::Element::link_many(&[&videoconvert, &videoscale, &videorate, &capsfilter, &identity, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain")?;
         }
         

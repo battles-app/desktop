@@ -42,9 +42,7 @@ lazy_static::lazy_static! {
 
 // WebSocket ports
 const CAMERA_WS_PORT: u16 = 9876;
-const COMPOSITE_WS_PORT: u16 = 9877;
-const CAMERA_LAYER_WS_PORT: u16 = 9878;
-const OVERLAY_LAYER_WS_PORT: u16 = 9879;
+// IPC replaces WebSocket ports - no longer needed
 
 // Monitor info structure
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -60,7 +58,6 @@ struct MonitorInfo {
 // Global cache for monitor screenshots
 static MONITOR_SCREENSHOTS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 static MODAL_IS_OPEN: Mutex<bool> = Mutex::new(false);
-static OVERLAY_WS_STARTED: Mutex<bool> = Mutex::new(false);
 
 // Windows GDI screen capture fallback
 fn capture_monitor_screenshot_fallback(x: i32, y: i32, width: i32, height: i32) -> Option<String> {
@@ -734,157 +731,63 @@ async fn initialize_composite_system() -> Result<String, String> {
     *CAMERA_LAYER_FRAME_SENDER.write() = Some(camera_layer_tx);
     *OVERLAY_LAYER_FRAME_SENDER.write() = Some(overlay_layer_tx);
     
-    start_composite_websocket_server().await;
-    start_camera_layer_websocket_server().await;
-    start_overlay_layer_websocket_server().await; // Start immediately so frontend can connect
+    // Start IPC frame emitters instead of WebSocket servers
+    start_composite_frame_emitter(app_handle.clone()).await;
+    start_camera_layer_frame_emitter(app_handle.clone()).await;
+    start_overlay_layer_frame_emitter(app_handle.clone()).await;
     
-    // Mark as started to prevent duplicate server creation
-    {
-        let mut overlay_started = OVERLAY_WS_STARTED.lock().unwrap();
-        *overlay_started = true;
-    }
-    
-    println!("[Composite] ✅ Composite system initialized on port {}", COMPOSITE_WS_PORT);
-    Ok(format!("Composite initialized - WebSocket on port {}", COMPOSITE_WS_PORT))
+    println!("[Composite] ✅ Composite system initialized with IPC");
+    Ok("Composite initialized with IPC".to_string())
 }
 
-async fn start_composite_websocket_server() {
-    tokio::spawn(async {
-        let addr = format!("127.0.0.1:{}", COMPOSITE_WS_PORT);
-        let listener = match TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!("[Composite WS] Failed to bind to {}: {}", addr, e);
-                return;
+// IPC Frame Emitters (replaces WebSocket servers)
+async fn start_composite_frame_emitter(app_handle: tauri::AppHandle) {
+    tokio::spawn(async move {
+        let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
+        
+        if let Some(tx) = tx_opt {
+            let mut rx = tx.subscribe();
+            println!("[Composite IPC] Frame emitter started");
+            
+            while let Ok(frame_data) = rx.recv().await {
+                // Emit as base64 to frontend
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                let _ = app_handle.emit("composite-frame", base64_frame);
             }
-        };
-
-        println!("[Composite WS] WebSocket server listening on {}", addr);
-
-        while let Ok((stream, _)) = listener.accept().await {
-            let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
-
-            tokio::spawn(async move {
-                let ws_stream = match accept_async(stream).await {
-                    Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Composite WS] Error during handshake: {}", e);
-                        return;
-                    }
-                };
-
-                println!("[Composite WS] Client connected");
-
-                let (mut ws_sender, _ws_receiver) = ws_stream.split();
-
-                if let Some(tx) = tx_opt {
-                    let mut rx = tx.subscribe();
-
-                    while let Ok(frame_data) = rx.recv().await {
-                        use futures_util::SinkExt;
-                        use tokio_tungstenite::tungstenite::protocol::Message;
-
-                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                            println!("[Composite WS] Client disconnected");
-                            break;
-                        }
-                    }
-                }
-            });
         }
     });
 }
 
-async fn start_camera_layer_websocket_server() {
-    tokio::spawn(async {
-        let addr = format!("127.0.0.1:{}", CAMERA_LAYER_WS_PORT);
-        let listener = match TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!("[Camera Layer WS] Failed to bind to {}: {}", addr, e);
-                return;
+async fn start_camera_layer_frame_emitter(app_handle: tauri::AppHandle) {
+    tokio::spawn(async move {
+        let tx_opt = CAMERA_LAYER_FRAME_SENDER.read().as_ref().cloned();
+        
+        if let Some(tx) = tx_opt {
+            let mut rx = tx.subscribe();
+            println!("[Camera Layer IPC] Frame emitter started");
+            
+            while let Ok(frame_data) = rx.recv().await {
+                // Emit as base64 to frontend
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                let _ = app_handle.emit("camera-layer-frame", base64_frame);
             }
-        };
-
-        println!("[Camera Layer WS] WebSocket server listening on {}", addr);
-
-        while let Ok((stream, _)) = listener.accept().await {
-            let tx_opt = CAMERA_LAYER_FRAME_SENDER.read().as_ref().cloned();
-
-            tokio::spawn(async move {
-                let ws_stream = match accept_async(stream).await {
-                    Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Camera Layer WS] Error during handshake: {}", e);
-                        return;
-                    }
-                };
-
-                println!("[Camera Layer WS] Client connected");
-
-                let (mut ws_sender, _ws_receiver) = ws_stream.split();
-
-                if let Some(tx) = tx_opt {
-                    let mut rx = tx.subscribe();
-
-                    while let Ok(frame_data) = rx.recv().await {
-                        use futures_util::SinkExt;
-                        use tokio_tungstenite::tungstenite::protocol::Message;
-
-                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                            println!("[Camera Layer WS] Client disconnected");
-                            break;
-                        }
-                    }
-                }
-            });
         }
     });
 }
 
-async fn start_overlay_layer_websocket_server() {
-    tokio::spawn(async {
-        let addr = format!("127.0.0.1:{}", OVERLAY_LAYER_WS_PORT);
-        let listener = match TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!("[Overlay Layer WS] Failed to bind to {}: {}", addr, e);
-                return;
+async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
+    tokio::spawn(async move {
+        let tx_opt = OVERLAY_LAYER_FRAME_SENDER.read().as_ref().cloned();
+        
+        if let Some(tx) = tx_opt {
+            let mut rx = tx.subscribe();
+            println!("[Overlay Layer IPC] Frame emitter started");
+            
+            while let Ok(frame_data) = rx.recv().await {
+                // Emit as base64 to frontend
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                let _ = app_handle.emit("overlay-layer-frame", base64_frame);
             }
-        };
-
-        println!("[Overlay Layer WS] WebSocket server listening on {}", addr);
-
-        while let Ok((stream, _)) = listener.accept().await {
-            let tx_opt = OVERLAY_LAYER_FRAME_SENDER.read().as_ref().cloned();
-
-            tokio::spawn(async move {
-                let ws_stream = match accept_async(stream).await {
-                    Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Overlay Layer WS] Error during handshake: {}", e);
-                        return;
-                    }
-                };
-
-                println!("[Overlay Layer WS] Client connected");
-
-                let (mut ws_sender, _ws_receiver) = ws_stream.split();
-
-                if let Some(tx) = tx_opt {
-                    let mut rx = tx.subscribe();
-
-                    while let Ok(frame_data) = rx.recv().await {
-                        use futures_util::SinkExt;
-                        use tokio_tungstenite::tungstenite::protocol::Message;
-
-                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                            println!("[Overlay Layer WS] Client disconnected");
-                            break;
-                        }
-                    }
-                }
-            });
         }
     });
 }
