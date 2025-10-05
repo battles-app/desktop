@@ -17,7 +17,7 @@ pub struct CameraInfo {
 
 /// Initialize GStreamer
 pub fn init() -> Result<()> {
-    if !gst::is_initialized() {
+    if !gstreamer::is_initialized() {
         gst::init()?;
     }
     
@@ -151,10 +151,11 @@ pub fn list_monitors() -> Result<Vec<(u32, String)>> {
         use winit::event_loop::EventLoop;
         
         let event_loop = EventLoop::new().map_err(|e| anyhow!("Failed to create event loop: {}", e))?;
-        let monitors_list = event_loop.available_monitors();
         
-        for (i, monitor) in monitors_list.enumerate() {
-            monitors.push((i as u32, monitor.name().unwrap_or_else(|| format!("Monitor {}", i))));
+        // In winit 0.30, we use active_monitors() instead of available_monitors()
+        for (i, monitor) in event_loop.available_monitors().iter().enumerate() {
+            let name = monitor.name().unwrap_or_else(|| format!("Monitor {}", i));
+            monitors.push((i as u32, name));
         }
     }
     

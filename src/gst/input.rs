@@ -55,7 +55,7 @@ impl GstInput {
         id: &str,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gst::is_initialized() {
+        if !gstreamer::is_initialized() {
             gst::init()?;
         }
         
@@ -122,7 +122,7 @@ impl GstInput {
         id: &str,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gst::is_initialized() {
+        if !gstreamer::is_initialized() {
             gst::init()?;
         }
         
@@ -170,7 +170,7 @@ impl GstInput {
         id: &str,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gst::is_initialized() {
+        if !gstreamer::is_initialized() {
             gst::init()?;
         }
         

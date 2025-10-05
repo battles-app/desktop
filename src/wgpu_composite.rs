@@ -7,9 +7,10 @@ use tokio::task::JoinHandle;
 
 use crate::clock::{FrameClock, SyncClock};
 use crate::compositor::{Layer, WgpuCompositor};
-use crate::gst::{GstInput, GstOutput, InputType, OutputFormat};
+use crate::gst::{GstInput, GstOutput, OutputFormat};
 
 /// Represents the WGPU-based compositor
+#[derive(Clone)]
 pub struct WgpuComposite {
     /// The WGPU compositor
     compositor: Arc<Mutex<WgpuCompositor>>,
@@ -86,10 +87,12 @@ impl WgpuComposite {
     
     /// Set the frame sender for the composite output
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
+        // Clone the sender before storing it
+        let sender_clone = sender.clone();
         *self.frame_sender.lock().unwrap() = Some(sender);
         
         // Also set it on the compositor
-        self.compositor.lock().unwrap().set_frame_sender(sender);
+        self.compositor.lock().unwrap().set_frame_sender(sender_clone);
     }
     
     /// Set the frame sender for the camera layer
@@ -219,10 +222,9 @@ impl WgpuComposite {
         *self.is_running.lock().unwrap() = false;
         
         // Wait for the compositor task to finish
-        if let Some(task) = self.compositor_task.lock().unwrap().take() {
-            // Don't block on the task, just let it finish naturally
-            // The is_running flag will cause it to exit
-        }
+        let _task = self.compositor_task.lock().unwrap().take();
+        // Don't block on the task, just let it finish naturally
+        // The is_running flag will cause it to exit
         
         // Stop all inputs
         for (_, input) in self.inputs.lock().unwrap().drain() {
@@ -305,10 +307,10 @@ impl WgpuComposite {
     pub fn play_fx_from_file(
         &self,
         file_path: String,
-        keycolor: String,
-        tolerance: f64,
-        similarity: f64,
-        use_chroma_key: bool,
+        _keycolor: String,
+        _tolerance: f64,
+        _similarity: f64,
+        _use_chroma_key: bool,
     ) -> Result<()> {
         // Stop any existing FX
         self.stop_fx()?;

@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use gstreamer as gst;
+use gstreamer::prelude::*;
 
 /// A clock that synchronizes with GStreamer's pipeline clock
 pub struct SyncClock {
@@ -97,6 +98,7 @@ impl SyncClock {
 }
 
 /// A frame clock that ticks at a fixed rate
+#[derive(Clone)]
 pub struct FrameClock {
     /// The target frames per second
     fps: u32,

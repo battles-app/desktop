@@ -611,14 +611,35 @@ async fn start_camera_preview_with_quality(device_id: String, quality: String, _
     
     stop_camera_preview().await?;
     
-    let mut camera_lock = GSTREAMER_CAMERA.write();
-    if let Some(camera) = camera_lock.as_mut() {
-        camera.start_with_quality(&device_id, &quality)?;
-        println!("[Camera] ✅ Camera started successfully!");
+    // Map quality string to dimensions and fps
+    let (width, height, fps) = match quality.as_str() {
+        "low" => (640, 360, 30),
+        "medium" => (1280, 720, 30),
+        "high" => (1280, 720, 60),
+        "ultra" => (1920, 1080, 60),
+        _ => (1280, 720, 30),
+    };
+    
+    // Clone device_id for the async block
+    let device_id_clone = device_id.clone();
+    
+    // Use the WGPU compositor for camera preview
+    // Use a separate scope to ensure the lock is dropped before the await
+    let composite_opt = {
+        let composite_lock = WGPU_COMPOSITE.read();
+        composite_lock.as_ref().map(|c| c.clone())
+    };
+    
+    if let Some(composite) = composite_opt {
+        // We'll create a simple preview without starting the full pipeline
+        // Just to show the camera feed
+        let _ = composite.start(&device_id_clone, width, height, fps, 0)
+            .await
+            .map_err(|e| format!("Failed to start camera preview: {}", e))?;
+        println!("[Camera] ✅ Camera preview started successfully!");
     } else {
-        return Err("Camera not initialized".to_string());
+        return Err("WGPU compositor not initialized".to_string());
     }
-    drop(camera_lock);
     
     Ok(())
 }
@@ -627,11 +648,12 @@ async fn start_camera_preview_with_quality(device_id: String, quality: String, _
 async fn stop_camera_preview() -> Result<(), String> {
     println!("[Camera] Stopping preview");
     
-    let mut camera_lock = GSTREAMER_CAMERA.write();
-    if let Some(camera) = camera_lock.as_mut() {
-        camera.stop()?;
+    // Use the WGPU compositor to stop the camera preview
+    let composite_lock = WGPU_COMPOSITE.read();
+    if let Some(composite) = composite_lock.as_ref() {
+        composite.stop().map_err(|e| format!("Failed to stop camera preview: {}", e))?;
     }
-    drop(camera_lock);
+    drop(composite_lock);
     
     Ok(())
 }
@@ -738,16 +760,24 @@ async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
 async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
     println!("[Composite] Starting WGPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
     
-    let composite_lock = WGPU_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.start(&camera_device_id, width, height, fps, rotation)
+    // Clone the values we need to pass to the async block
+    let camera_id = camera_device_id.clone();
+    
+    // Use a separate scope to ensure the lock is dropped before the await
+    let composite_opt = {
+        let composite_lock = WGPU_COMPOSITE.read();
+        composite_lock.as_ref().map(|c| c.clone())
+    };
+    
+    if let Some(composite) = composite_opt {
+        // Now we can await without holding the lock
+        composite.start(&camera_id, width, height, fps, rotation)
             .await
             .map_err(|e| format!("Failed to start WGPU composite: {}", e))?;
         println!("[Composite] ✅ WGPU composite pipeline started");
     } else {
         return Err("WGPU composite not initialized".to_string());
     }
-    drop(composite_lock);
     
     Ok(())
 }

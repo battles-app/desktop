@@ -4,4 +4,4 @@ pub mod utils;
 
 pub use input::{GstInput, InputType};
 pub use output::{GstOutput, OutputFormat};
-pub use utils::{CameraInfo, init, list_cameras, list_monitors};
+pub use utils::CameraInfo;

@@ -75,7 +75,7 @@ impl GstOutput {
         url: Option<String>,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gst::is_initialized() {
+        if !gstreamer::is_initialized() {
             gst::init()?;
         }
         

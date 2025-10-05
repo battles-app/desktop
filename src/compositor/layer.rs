@@ -1,5 +1,4 @@
 use glam::{Mat4, Vec2, Vec3};
-use std::sync::Arc;
 use wgpu::{Device, Queue, Texture, TextureView};
 
 /// Represents a layer in the compositor

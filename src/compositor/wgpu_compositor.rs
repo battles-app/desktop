@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use glam::{Mat4, Vec2};
+use glam::Vec2;
 use tokio::sync::broadcast;
 use wgpu::{
-    util::DeviceExt, Adapter, Backends, BindGroup, BindGroupLayout, Buffer, Device, Queue,
-    RenderPipeline, Surface, SurfaceConfiguration, TextureFormat, TextureView,
+    util::DeviceExt, Backends, BindGroup, BindGroupLayout, Buffer, Device, Queue,
+    RenderPipeline, TextureFormat, TextureView,
 };
 
 use crate::compositor::layer::{Layer, LayerInstanceRaw};
@@ -278,6 +278,7 @@ impl WgpuCompositor {
                 module: &shader,
                 entry_point: "vs_main",
                 buffers: &[Vertex::desc(), instance_buffer_layout()],
+                compilation_options: Default::default(),
             },
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -313,6 +314,7 @@ impl WgpuCompositor {
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: Default::default(),
             }),
             multiview: None,
         });
@@ -669,13 +671,20 @@ impl WgpuCompositor {
         
         // Map the buffer and read the data
         let buffer_slice = output_buffer.slice(..);
-        let buffer_future = buffer_slice.map_async(wgpu::MapMode::Read);
+        
+        // Create a oneshot channel for the callback
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        // Map the buffer asynchronously
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
         
         // Wait for the buffer to be mapped
         self.device.poll(wgpu::Maintain::Wait);
         
-        // Use pollster to block on the future
-        pollster::block_on(buffer_future)?;
+        // Wait for the mapping operation to complete
+        rx.recv().unwrap()?;
         
         // Get the mapped data
         let data = buffer_slice.get_mapped_range();
