@@ -26,7 +26,7 @@ pub struct InputConfig {
 pub struct GStreamerInput {
     pipeline: Option<Pipeline>,
     config: InputConfig,
-    frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
+    frame_sender: Arc<RwLock<Option<broadcast::Sender<(Vec<u8>, u32, u32)>>>>,
     is_running: Arc<RwLock<bool>>,
     id: String,
 }
@@ -46,7 +46,7 @@ impl GStreamerInput {
         })
     }
 
-    pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
+    pub fn set_frame_sender(&self, sender: broadcast::Sender<(Vec<u8>, u32, u32)>) {
         *self.frame_sender.write() = Some(sender);
     }
 
@@ -113,12 +113,18 @@ impl GStreamerInput {
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
 
-                    println!("[GST Input {}] Frame buffer size: {} bytes", input_id, map.size());
+                    // Get actual frame dimensions from caps
+                    let caps = sample.caps().ok_or(gst::FlowError::Error)?;
+                    let structure = caps.structure(0).ok_or(gst::FlowError::Error)?;
+                    let width: i32 = structure.get("width").map_err(|_| gst::FlowError::Error)?;
+                    let height: i32 = structure.get("height").map_err(|_| gst::FlowError::Error)?;
+
+                    println!("[GST Input {}] Frame buffer size: {} bytes, dimensions: {}x{}", input_id, map.size(), width, height);
 
                     // Send frame data to WGPU compositor
                     if let Some(sender) = frame_sender.read().as_ref() {
                         let frame_data = map.as_slice().to_vec();
-                        let _ = sender.send(frame_data);
+                        let _ = sender.send((frame_data, width as u32, height as u32));
                     }
 
                     Ok(gst::FlowSuccess::Ok)

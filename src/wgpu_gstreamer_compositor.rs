@@ -78,7 +78,7 @@ impl WgpuGStreamerCompositor {
         let mut input = crate::gst::GStreamerInput::new(id.clone(), config)?;
 
         // Set up frame receiver
-        let (tx, rx) = broadcast::channel::<Vec<u8>>(32);
+        let (tx, rx) = broadcast::channel::<(Vec<u8>, u32, u32)>(32);
         input.set_frame_sender(tx);
 
         // Start input
@@ -112,11 +112,11 @@ impl WgpuGStreamerCompositor {
 
         tokio::spawn(async move {
             let mut rx = rx;
-            while let Ok(frame_data) = rx.recv().await {
+            while let Ok((frame_data, actual_width, actual_height)) = rx.recv().await {
                 // Send camera frames directly to frontend for immediate display
                 if input_id.starts_with("camera_") {
-                    println!("[Camera] Sending frame to frontend: {}x{} ({} bytes)", camera_width, camera_height, frame_data.len());
-                    Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame_data, camera_width, camera_height);
+                    println!("[Camera] Sending frame to frontend: {}x{} ({} bytes)", actual_width, actual_height, frame_data.len());
+                    Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame_data, actual_width, actual_height);
                 }
 
                 // Also store in frame buffer for compositing (optional for now)
@@ -182,7 +182,7 @@ impl WgpuGStreamerCompositor {
         let mut input = crate::gst::GStreamerInput::new(id.clone(), config)?;
 
         // Set up frame receiver
-        let (tx, rx) = broadcast::channel::<Vec<u8>>(32);
+        let (tx, rx) = broadcast::channel::<(Vec<u8>, u32, u32)>(32);
         input.set_frame_sender(tx);
 
         // Start input
@@ -209,7 +209,7 @@ impl WgpuGStreamerCompositor {
 
         tokio::spawn(async move {
             let mut rx = rx;
-            while let Ok(frame_data) = rx.recv().await {
+            while let Ok((frame_data, _width, _height)) = rx.recv().await {
                 let pts = gst::ClockTime::from_nseconds(
                     (chrono::Utc::now().timestamp_nanos() % 1_000_000_000) as u64
                 );
