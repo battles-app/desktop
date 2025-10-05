@@ -60,7 +60,7 @@ impl GStreamerInput {
                 let source_element = format!("v4l2src device=/dev/video{} is-live=true", device_index);
 
                 #[cfg(target_os = "windows")]
-                let source_element = format!("ksvideosrc device-index={}", device_index);
+                let source_element = format!("mfvideosrc device-index={}", device_index);
 
                 #[cfg(target_os = "macos")]
                 let source_element = format!("avfvideosrc device-index={} is-live=true", device_index);
