@@ -55,12 +55,20 @@ impl GStreamerInput {
 
         let pipeline_str = match &self.config.input_type {
             InputType::Camera { device_index } => {
-                // Webcam input pipeline: v4l2src → videoconvert → video/x-raw,format=RGBA → appsink
+                // Platform-specific webcam input pipeline
+                #[cfg(target_os = "linux")]
+                let source_element = format!("v4l2src device=/dev/video{} is-live=true", device_index);
+
+                #[cfg(target_os = "windows")]
+                let source_element = format!("ksvideosrc device-index={}", device_index);
+
+                #[cfg(target_os = "macos")]
+                let source_element = format!("avfvideosrc device-index={} is-live=true", device_index);
+
                 format!(
-                    "v4l2src device=/dev/video{} is-live=true ! \
-                     videoconvert ! video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                    "{} ! videoconvert ! video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
                      appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
-                    device_index, self.config.width, self.config.height, self.config.framerate
+                    source_element, self.config.width, self.config.height, self.config.framerate
                 )
             }
             InputType::File { uri } => {
