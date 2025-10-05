@@ -496,13 +496,10 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
         
-        // Sync FX bin with pipeline
-        if let Some(base_time) = pipeline.base_time() {
-            fx_bin.set_base_time(base_time);
-            println!("[Composite FX] ⏱️ FX bin base time set: {:?}", base_time);
-        } else {
-            println!("[Composite FX] ⚠️ No base time available from pipeline");
-        }
+        // Reset timing so FX starts from "now" instead of trying to catch up to pipeline base time
+        // This prevents speed-up issues when playing multiple FX files sequentially
+        fx_bin.set_start_time(gst::ClockTime::NONE);
+        println!("[Composite FX] ⏱️ FX bin start time reset to NONE (will sync to current pipeline time)");
         
         // Start FX bin
         println!("[Composite FX] ▶️ Setting FX bin state to PLAYING...");
