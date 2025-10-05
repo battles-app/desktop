@@ -41,7 +41,7 @@ impl MasterClock {
 
     /// Get current master time
     pub fn current_time(&self) -> Option<gst::ClockTime> {
-        self.clock.as_ref().and_then(|clock| clock.time())
+        self.clock.as_ref().map(|clock| clock.time())
     }
 
     /// Calculate the next frame PTS based on frame count

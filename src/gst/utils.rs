@@ -30,7 +30,7 @@ impl GStreamerUtils {
 
     /// Get pipeline clock time safely
     pub fn get_pipeline_time(pipeline: &gst::Pipeline) -> Option<gst::ClockTime> {
-        pipeline.clock().and_then(|clock| clock.time())
+        pipeline.clock().map(|clock| clock.time())
     }
 
     /// Check if pipeline is in playing state
