@@ -75,9 +75,7 @@ impl GstOutput {
         url: Option<String>,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gstreamer::is_initialized() {
-            gst::init()?;
-        }
+        crate::gst::utils::init()?;
         
         // Build the pipeline string based on the format
         let pipeline_str = match format {

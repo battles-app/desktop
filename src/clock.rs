@@ -33,7 +33,7 @@ impl SyncClock {
     /// Set the GStreamer pipeline clock
     pub fn set_pipeline_clock(&mut self, pipeline: &gst::Pipeline) -> Result<()> {
         let clock = pipeline.clock().ok_or_else(|| anyhow!("No pipeline clock"))?;
-        let base_time = pipeline.base_time();
+        let base_time = pipeline.base_time().unwrap_or(gst::ClockTime::ZERO);
         
         *self.base_time.lock().unwrap() = base_time;
         *self.reference_time.lock().unwrap() = Instant::now();

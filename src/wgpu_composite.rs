@@ -107,12 +107,12 @@ impl WgpuComposite {
     
     /// Start the compositor with the specified camera and dimensions
     pub async fn start(
-        &self,
+        &mut self,
         camera_device_id: &str,
         width: u32,
         height: u32,
         fps: u32,
-        rotation: u32,
+        _rotation: u32,
     ) -> Result<()> {
         // Stop any existing compositor
         self.stop()?;
@@ -137,7 +137,7 @@ impl WgpuComposite {
         let camera_input = GstInput::new_camera(camera_device_id, width, height, fps, "camera")?;
         
         // Create a channel for the camera frames
-        let (camera_tx, mut camera_rx) = broadcast::channel::<(Vec<u8>, u64, u64)>(2);
+        let (camera_tx, camera_rx) = broadcast::channel::<(Vec<u8>, u64, u64)>(2);
         camera_input.set_frame_sender(camera_tx);
         
         // Start the camera input
@@ -162,7 +162,7 @@ impl WgpuComposite {
         let is_running_clone = self.is_running.clone();
         let frame_clock_clone = Arc::new(frame_clock);
         let camera_frame_sender_clone = self.camera_frame_sender.clone();
-        let overlay_frame_sender_clone = self.overlay_frame_sender.clone();
+        let _overlay_frame_sender_clone = self.overlay_frame_sender.clone();
         
         let task = tokio::spawn(async move {
             // Create a receiver for camera frames
@@ -194,7 +194,7 @@ impl WgpuComposite {
                 
                 // Render the composite frame
                 match compositor_clone.lock().unwrap().render(frame_time) {
-                    Ok(frame_data) => {
+                    Ok(_frame_data) => {
                         // Frame rendered successfully
                         // The compositor already sends the frame to listeners
                     }

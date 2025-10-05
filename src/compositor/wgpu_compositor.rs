@@ -551,7 +551,7 @@ impl WgpuCompositor {
     }
     
     /// Render the composite frame
-    pub fn render(&mut self, current_time_ns: u64) -> Result<Vec<u8>> {
+    pub fn render(&mut self, _current_time_ns: u64) -> Result<Vec<u8>> {
         // Check if it's time to render a new frame
         let elapsed = self.frame_clock.elapsed();
         let elapsed_ns = elapsed.as_nanos() as u64;

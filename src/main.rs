@@ -625,12 +625,12 @@ async fn start_camera_preview_with_quality(device_id: String, quality: String, _
     
     // Use the WGPU compositor for camera preview
     // Use a separate scope to ensure the lock is dropped before the await
-    let composite_opt = {
+    let mut composite_opt = {
         let composite_lock = WGPU_COMPOSITE.read();
         composite_lock.as_ref().map(|c| c.clone())
     };
     
-    if let Some(composite) = composite_opt {
+    if let Some(ref mut composite) = composite_opt {
         // We'll create a simple preview without starting the full pipeline
         // Just to show the camera feed
         let _ = composite.start(&device_id_clone, width, height, fps, 0)
@@ -764,12 +764,12 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
     let camera_id = camera_device_id.clone();
     
     // Use a separate scope to ensure the lock is dropped before the await
-    let composite_opt = {
+    let mut composite_opt = {
         let composite_lock = WGPU_COMPOSITE.read();
         composite_lock.as_ref().map(|c| c.clone())
     };
     
-    if let Some(composite) = composite_opt {
+    if let Some(ref mut composite) = composite_opt {
         // Now we can await without holding the lock
         composite.start(&camera_id, width, height, fps, rotation)
             .await

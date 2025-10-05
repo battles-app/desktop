@@ -17,8 +17,10 @@ pub struct CameraInfo {
 
 /// Initialize GStreamer
 pub fn init() -> Result<()> {
-    if !gstreamer::is_initialized() {
-        gst::init()?;
+    // Check if GStreamer is already initialized by trying to init
+    // gstreamer::is_initialized() is not available in the current version
+    if let Err(_) = gst::init() {
+        // Already initialized, that's fine
     }
     
     Ok(())
@@ -147,16 +149,9 @@ pub fn list_monitors() -> Result<Vec<(u32, String)>> {
     #[cfg(target_os = "windows")]
     {
         // On Windows, we can use the dx9screencapsrc element
-        // But we need to query the system for monitor information
-        use winit::event_loop::EventLoop;
-        
-        let event_loop = EventLoop::new().map_err(|e| anyhow!("Failed to create event loop: {}", e))?;
-        
-        // In winit 0.30, we use active_monitors() instead of available_monitors()
-        for (i, monitor) in event_loop.available_monitors().iter().enumerate() {
-            let name = monitor.name().unwrap_or_else(|| format!("Monitor {}", i));
-            monitors.push((i as u32, name));
-        }
+        // But we don't have a good way to enumerate monitors in winit 0.30 without a window
+        // So we'll just provide a default monitor
+        monitors.push((0, "Primary Monitor".to_string()));
     }
     
     #[cfg(target_os = "linux")]

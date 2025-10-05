@@ -55,9 +55,7 @@ impl GstInput {
         id: &str,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gstreamer::is_initialized() {
-            gst::init()?;
-        }
+        crate::gst::utils::init()?;
         
         // Build the pipeline string
         #[cfg(target_os = "windows")]
@@ -122,9 +120,7 @@ impl GstInput {
         id: &str,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gstreamer::is_initialized() {
-            gst::init()?;
-        }
+        crate::gst::utils::init()?;
         
         // Build the pipeline string
         let pipeline_str = format!(
@@ -170,9 +166,7 @@ impl GstInput {
         id: &str,
     ) -> Result<Self> {
         // Initialize GStreamer if not already initialized
-        if !gstreamer::is_initialized() {
-            gst::init()?;
-        }
+        crate::gst::utils::init()?;
         
         // Build the pipeline string
         #[cfg(target_os = "windows")]
