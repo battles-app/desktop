@@ -48,7 +48,39 @@ impl GStreamerComposite {
     }
     
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
-        println!("[Composite] Starting: {}x{} @ {}fps, rotation: {}°", width, height, fps, rotation);
+        let old_fps = *self.target_fps.read();
+        let old_width = *self.target_width.read();
+        let old_height = *self.target_height.read();
+        let is_fps_change = old_fps != fps && old_fps != 0;
+        let is_resolution_change = (old_width != width || old_height != height) && old_width != 0;
+        
+        println!("\n");
+        println!("[Composite] ╔════════════════════════════════════════════════════════════════");
+        println!("[Composite] ║ ⚙️  COMPOSITE PIPELINE CONFIGURATION");
+        println!("[Composite] ╠════════════════════════════════════════════════════════════════");
+        println!("[Composite] ║ 📐 Resolution: {}x{}", width, height);
+        println!("[Composite] ║ 🎞️  FPS: {}", fps);
+        println!("[Composite] ║ 🔄 Rotation: {}°", rotation);
+        println!("[Composite] ║ 📹 Camera device: {}", camera_device_id);
+        
+        if old_fps != 0 {
+            println!("[Composite] ║");
+            if is_fps_change {
+                println!("[Composite] ║ 🔄 FPS CHANGED: {} → {} fps", old_fps, fps);
+                println!("[Composite] ║    ⚠️  Pipeline will restart with new target FPS");
+                println!("[Composite] ║    ⚠️  Any playing FX will be stopped and need to be replayed");
+            }
+            if is_resolution_change {
+                println!("[Composite] ║ 🔄 RESOLUTION CHANGED: {}x{} → {}x{}", old_width, old_height, width, height);
+                println!("[Composite] ║    ⚠️  Pipeline will restart with new resolution");
+            }
+            if !is_fps_change && !is_resolution_change {
+                println!("[Composite] ║ ✅ Settings unchanged (rotation only)");
+            }
+        }
+        
+        println!("[Composite] ╚════════════════════════════════════════════════════════════════");
+        println!("");
         
         // Store settings
         *self.target_fps.write() = fps;
@@ -632,11 +664,34 @@ impl GStreamerComposite {
             }
         }
         
-        println!("[Composite FX] 🎉 ===== FX SETUP COMPLETE =====");
-        println!("[Composite FX] 📊 Target output: {}x{} @ {}fps", target_width, target_height, target_fps);
-        println!("[Composite FX] 📁 File: {}", file_path);
-        println!("[Composite FX] 🎨 Chroma key: {} (enabled: {})", keycolor, use_chroma_key);
-        println!("[Composite FX] ⏱️ Note: videorate will duplicate/drop frames to match {}fps while preserving original playback speed", target_fps);
+        println!("\n[Composite FX] ╔════════════════════════════════════════════════════════════════");
+        println!("[Composite FX] ║ ✅ FX SETUP COMPLETE - NOW PLAYING");
+        println!("[Composite FX] ╠════════════════════════════════════════════════════════════════");
+        println!("[Composite FX] ║ 📁 File: {}", file_path);
+        println!("[Composite FX] ║ 📐 Output: {}x{} @ {}fps", target_width, target_height, target_fps);
+        println!("[Composite FX] ║ 🎨 Chroma key: {} (enabled: {})", keycolor, use_chroma_key);
+        println!("[Composite FX] ║");
+        println!("[Composite FX] ║ 🎞️  PIPELINE FLOW:");
+        println!("[Composite FX] ║   filesrc → decodebin → videoconvert → videoscale →");
+        if use_chroma_key {
+            println!("[Composite FX] ║   alpha (chroma key) → videorate → capsfilter → identity →");
+        } else {
+            println!("[Composite FX] ║   videorate → capsfilter → identity →");
+        }
+        println!("[Composite FX] ║   tee → [compositor sink_1, overlay debug appsink]");
+        println!("[Composite FX] ║");
+        println!("[Composite FX] ║ ⚙️  ACTIVE TRANSFORMATIONS:");
+        println!("[Composite FX] ║   • videorate: Adapts source FPS → {} fps", target_fps);
+        println!("[Composite FX] ║   • videoscale: Adapts source resolution → {}x{}", target_width, target_height);
+        if use_chroma_key {
+            println!("[Composite FX] ║   • alpha: Removes {} color", keycolor);
+        }
+        println!("[Composite FX] ║   • identity: Applies ts-offset for timing sync");
+        println!("[Composite FX] ║");
+        println!("[Composite FX] ║ ⚡ FX should now be visible on:");
+        println!("[Composite FX] ║   1. Composition canvas (camera + FX overlay)");
+        println!("[Composite FX] ║   2. Overlay Layer canvas (FX only)");
+        println!("[Composite FX] ╚════════════════════════════════════════════════════════════════\n");
         Ok(())
     }
     
