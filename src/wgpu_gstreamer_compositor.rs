@@ -248,53 +248,57 @@ impl WgpuGStreamerCompositor {
                         let camera_frame = frame_buffer.get_latest_frame("camera");
                         let media_frame = frame_buffer.get_latest_frame("media");
 
-                        // Update WGPU textures
-                        {
-                            let mut wgpu = wgpu_compositor.write();
-                            let output_size = wgpu.output_size();
+                        // Update WGPU textures and render
+                        let (camera_texture, media_texture) = {
+                            let output_size = {
+                                let wgpu = wgpu_compositor.read();
+                                wgpu.output_size()
+                            };
 
-                            // Update camera texture
-                            if let Some(frame) = camera_frame {
-                                if let Some(layer) = wgpu.get_layer_mut("camera") {
-                                    let texture = wgpu.create_texture_from_rgba(
-                                        output_size.0,
-                                        output_size.1,
-                                        &frame.data
-                                    );
-                                    layer.update_texture(texture);
-                                }
-                            }
+                            let camera_texture = camera_frame.as_ref().map(|frame| {
+                                let mut wgpu = wgpu_compositor.write();
+                                wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data)
+                            });
 
-                            // Update media texture
-                            if let Some(frame) = media_frame {
-                                if let Some(layer) = wgpu.get_layer_mut("media") {
-                                    let texture = wgpu.create_texture_from_rgba(
-                                        output_size.0,
-                                        output_size.1,
-                                        &frame.data
-                                    );
-                                    layer.update_texture(texture);
-                                }
-                            }
+                            let media_texture = media_frame.as_ref().map(|frame| {
+                                let mut wgpu = wgpu_compositor.write();
+                                wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data)
+                            });
 
-                        // Render frame
-                        let output_texture = wgpu.create_output_texture();
-                        if let Err(e) = wgpu.render_frame(&output_texture) {
-                            println!("[WGPU-GST Compositor] Render error: {:?}", e);
-                            continue;
-                        }
-
-                        // Read back composited frame
-                        let composited_data = match wgpu.read_output_texture(&output_texture) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                println!("[WGPU-GST Compositor] Readback error: {:?}", e);
-                                continue;
-                            }
+                            (camera_texture, media_texture)
                         };
 
-                            // Send to outputs
-                            // TODO: Send to output channels
+                        // Update layer textures
+                        {
+                            let mut wgpu = wgpu_compositor.write();
+                            if let Some(texture) = camera_texture {
+                                if let Some(layer) = wgpu.get_layer_mut("camera") {
+                                    layer.update_texture(texture);
+                                }
+                            }
+                            if let Some(texture) = media_texture {
+                                if let Some(layer) = wgpu.get_layer_mut("media") {
+                                    layer.update_texture(texture);
+                                }
+                            }
+
+                            // Render frame
+                            let output_texture = wgpu.create_output_texture();
+                            if let Err(e) = wgpu.render_frame(&output_texture) {
+                                println!("[WGPU-GST Compositor] Render error: {:?}", e);
+                                continue;
+                            }
+
+                            // Read back composited frame
+                            match wgpu.read_output_texture(&output_texture) {
+                                Ok(_data) => {
+                                    // TODO: Send to output channels
+                                }
+                                Err(e) => {
+                                    println!("[WGPU-GST Compositor] Readback error: {:?}", e);
+                                    continue;
+                                }
+                            }
                         }
 
                         if frame_number % 60 == 0 {

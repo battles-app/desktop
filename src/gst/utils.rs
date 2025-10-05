@@ -30,7 +30,7 @@ impl GStreamerUtils {
 
     /// Get pipeline clock time safely
     pub fn get_pipeline_time(pipeline: &gst::Pipeline) -> Option<gst::ClockTime> {
-        pipeline.clock().and_then(|clock| Some(clock.time()))
+        pipeline.clock().and_then(|clock| clock.time())
     }
 
     /// Check if pipeline is in playing state
@@ -49,11 +49,11 @@ impl GStreamerUtils {
     pub fn wait_for_state_change(pipeline: &gst::Pipeline, state: gst::State, timeout_ms: u64) -> Result<(), String> {
         let timeout = gst::ClockTime::from_mseconds(timeout_ms);
 
-        match pipeline.state(Some(timeout)) {
-            (Ok(current), _, _) if current == state => Ok(()),
+        match pipeline.state(timeout) {
+            (Ok(_), current, _) if current == state => Ok(()),
             (result, current, pending) => {
-                Err(format!("State change failed: result={:?}, current={:?}, pending={:?}",
-                           result, current, pending))
+                Err(format!("State change failed: result={:?}, current={:?}, pending={:?}, expected={:?}",
+                           result, current, pending, state))
             }
         }
     }
@@ -136,7 +136,7 @@ impl PipelineMonitor {
         let name = name.to_string();
 
         std::thread::spawn(move || {
-            for msg in bus.iter_timed(gst::ClockTime::NONE) {
+            for msg in bus.iter() {
                 use gst::MessageView;
 
                 match msg.view() {
@@ -147,9 +147,9 @@ impl PipelineMonitor {
                         println!("[GST {}] WARNING: {} - {}", name, warn.error(), warn.debug().unwrap_or_default());
                     }
                     MessageView::StateChanged(state) => {
-                        if let (Some(src), Some(old), Some(new)) = (msg.src(), state.old(), state.current()) {
+                        if let Some(src) = msg.src() {
                             if src.name() == name {
-                                println!("[GST {}] State: {:?} -> {:?}", name, old, new);
+                                println!("[GST {}] State: {:?} -> {:?}", name, state.old(), state.current());
                             }
                         }
                     }

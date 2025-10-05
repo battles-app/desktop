@@ -667,14 +667,26 @@ async fn update_composite_layers(camera: (bool, f64), overlay: (bool, f64)) -> R
 async fn start_composite_output(format: String, width: u32, height: u32) -> Result<(), String> {
     println!("[Composite] Starting output: {} ({}x{})", format, width, height);
     
-    let mut composite_lock = GSTREAMER_COMPOSITE.write();
-    if let Some(composite) = composite_lock.as_mut() {
-        composite.set_output_format(&format)?;
-        println!("[Composite] ✅ Output started: {}", format);
-    } else {
-        return Err("Composite pipeline not initialized".to_string());
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        // Clone compositor for async operation
+        let compositor_clone = compositor.clone();
+        let format_clone = format.clone();
+        tokio::spawn(async move {
+            // Add output destination
+            let output_format = match format_clone.as_str() {
+                "rtmp" => crate::gst::OutputFormat::RTMP { url: "rtmp://localhost/live/stream".to_string() },
+                "webrtc" => crate::gst::OutputFormat::WebRTC,
+                "file" => crate::gst::OutputFormat::File { path: "output.mp4".to_string() },
+                _ => crate::gst::OutputFormat::Preview,
+            };
+
+            if let Err(e) = compositor_clone.add_output("output".to_string(), output_format).await {
+                println!("[Composite] Failed to add output: {}", e);
+            } else {
+                println!("[Composite] ✅ Output started: {}", format_clone);
+            }
+        });
     }
-    drop(composite_lock);
     
     Ok(())
 }
@@ -683,11 +695,7 @@ async fn start_composite_output(format: String, width: u32, height: u32) -> Resu
 async fn stop_composite_output() -> Result<(), String> {
     println!("[Composite] Stopping output");
     
-    let mut composite_lock = GSTREAMER_COMPOSITE.write();
-    if let Some(composite) = composite_lock.as_mut() {
-        composite.set_output_format("preview")?;
-    }
-    drop(composite_lock);
+    // For now, stopping output is handled when compositor stops
     
     Ok(())
 }

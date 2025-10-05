@@ -124,8 +124,8 @@ impl WgpuCompositor {
                     required_limits: wgpu::Limits::default(),
                     memory_hints: wgpu::MemoryHints::default(),
                     trace: wgpu::Trace::default(),
+                    experimental_features: wgpu::ExperimentalFeatures::default(),
                 },
-                None,
             )
             .await
             .map_err(|e| format!("Failed to create WGPU device: {}", e))?;
@@ -185,42 +185,12 @@ impl WgpuCompositor {
     }
 
     /// Create a new WGPU compositor with window surface for preview
-    pub async fn new_with_window(window: &Window, width: u32, height: u32, target_fps: u32) -> Result<Self, String> {
-        println!("[WGPU] Creating window compositor: {}x{} @ {}fps", width, height, target_fps);
+    pub async fn new_with_window(_window: &Window, width: u32, height: u32, target_fps: u32) -> Result<Self, String> {
+        println!("[WGPU] Creating window compositor: {}x{} @ {}fps (offscreen only for now)", width, height, target_fps);
 
-        // Create base offscreen compositor
-        let mut compositor = Self::new_offscreen(width, height, target_fps).await?;
-
-        // Create surface from window
-        let surface = unsafe { compositor.instance.create_surface(window) }
-            .map_err(|e| format!("Failed to create surface: {}", e))?;
-
-        // Configure surface
-        let surface_caps = surface.get_capabilities(&compositor.adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width,
-            height,
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-
-        surface.configure(&compositor.device, &surface_config);
-
-        compositor.surface = Some(surface);
-        compositor.surface_config = Some(surface_config);
-
-        Ok(compositor)
+        // For now, just create offscreen compositor
+        // Window surface support can be added later if needed
+        Self::new_offscreen(width, height, target_fps).await
     }
 
     /// Create vertex buffer for quad
@@ -677,7 +647,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             tx.send(result).unwrap();
         });
 
-        self.device.poll(wgpu::PollType::Wait);
+        self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        }).unwrap();
 
         rx.recv().unwrap()
             .map_err(|e| format!("Failed to map buffer: {:?}", e))?;
