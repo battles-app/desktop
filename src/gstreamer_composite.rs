@@ -140,23 +140,27 @@ impl GStreamerComposite {
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! videorate ! video/x-raw,framerate={}/1 ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
                  mfvideosrc device-index={} ! \
                  videoflip method={} ! \
                  videoconvert ! \
                  videoscale ! \
                  video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0",
+                 tee name=camera_tee \
+                 camera_tee. ! queue ! videorate ! video/x-raw,framerate={}/1 ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
+                fps,
                 self.get_output_branch(),
                 device_index,
                 videoflip_method,
                 width,
-                height
+                height,
+                fps
             )
         } else {
             format!(
@@ -166,21 +170,25 @@ impl GStreamerComposite {
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! videorate ! video/x-raw,framerate={}/1 ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
                  mfvideosrc device-index={} ! \
                  videoconvert ! \
                  videoscale ! \
                  video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0",
+                 tee name=camera_tee \
+                 camera_tee. ! queue ! videorate ! video/x-raw,framerate={}/1 ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
+                fps,
                 self.get_output_branch(),
                 device_index,
                 width,
-                height
+                height,
+                fps
             )
         };
         
@@ -192,21 +200,25 @@ impl GStreamerComposite {
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
-             t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+             t. ! queue ! videorate ! video/x-raw,framerate={}/1 ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              t. ! queue ! {} \
              v4l2src device=/dev/video{} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,width={},height={},format=BGRA ! \
-             comp.sink_0",
+             tee name=camera_tee \
+             camera_tee. ! queue ! videorate ! video/x-raw,framerate={}/1 ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+             camera_tee. ! comp.sink_0",
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
             width,
             height,
+            fps,
             self.get_output_branch(),
             device_index,
             width,
-            height
+            height,
+            fps
         );
         
         println!("[Composite] Pipeline: {}", pipeline_str);
@@ -229,6 +241,7 @@ impl GStreamerComposite {
             .ok_or("Failed to get camera layer appsink")?
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast camera layer to AppSink")?;
+
 
         // Note: overlay_appsink is created dynamically in the FX bin when FX is played
         // It will be set up in play_fx_from_file();
@@ -263,12 +276,6 @@ impl GStreamerComposite {
         // Set up callbacks for camera layer frames
         let camera_frame_sender = self.camera_frame_sender.clone();
         let is_running_camera = self.is_running.clone();
-
-        // Configure camera appsink to be non-blocking
-        camera_appsink.set_property("async", true);
-        camera_appsink.set_property("sync", false);
-        camera_appsink.set_property("max-buffers", 1u32);
-        camera_appsink.set_property_from_str("drop", "true");
 
         camera_appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -511,12 +518,17 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
 
-        // Create overlay layer appsink for debugging (independent pipeline)
+        // Create overlay layer tee and appsink for debugging
+        let overlay_tee = ElementFactory::make("tee")
+            .name("overlay_tee")
+            .build()
+            .map_err(|_| "Failed to create overlay tee")?;
+
         let overlay_appsink = ElementFactory::make("appsink")
             .name("overlay_layer")
             .property("emit-signals", true)
             .property("sync", false)
-            .property("max-buffers", 1u32)
+            .property("max-buffers", 2u32)
             .property_from_str("drop", "true")
             .build()
             .map_err(|_| "Failed to create overlay appsink")?;
@@ -527,6 +539,21 @@ impl GStreamerComposite {
             .property("quality", 90i32)
             .build()
             .map_err(|_| "Failed to create overlay jpeg encoder")?;
+
+        let overlay_videorate = ElementFactory::make("videorate")
+            .name("overlay_videorate")
+            .build()
+            .map_err(|_| "Failed to create overlay videorate")?;
+
+        // Create capsfilter for overlay videorate to set output framerate
+        let overlay_videorate_caps = gst::Caps::builder("video/x-raw")
+            .field("framerate", gst::Fraction::new(0, 1)) // Let videorate decide based on max-rate
+            .build();
+        let overlay_videorate_capsfilter = ElementFactory::make("capsfilter")
+            .name("overlay_videorate_caps")
+            .property("caps", &overlay_videorate_caps)
+            .build()
+            .map_err(|_| "Failed to create overlay videorate capsfilter")?;
 
         let overlay_videoconvert = ElementFactory::make("videoconvert")
             .name("overlay_convert")
@@ -558,13 +585,13 @@ impl GStreamerComposite {
             (None, false)
         };
 
-        // Add base FX elements to bin first
+        // Add all elements to bin (filesrc + decodebin pipeline)
         if let Some(ref alpha) = chroma_element {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
-                .map_err(|_| "Failed to add base FX elements to bin")?;
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
+                .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
-                .map_err(|_| "Failed to add base FX elements to bin")?;
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
+                .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
         // Link static elements (decodebin will link dynamically)
@@ -590,21 +617,11 @@ impl GStreamerComposite {
             println!("[Composite FX] ✅ Chain linked: videoscale → identity → queue → capsfilter");
         }
 
-        // Tee the processed overlay stream for both compositor and debug view
-        let overlay_tee = ElementFactory::make("tee")
-            .name("overlay_tee")
-            .build()
-            .map_err(|_| "Failed to create overlay tee")?;
-
-        // Add overlay tee to bin
-        fx_bin.add(&overlay_tee)
-            .map_err(|_| "Failed to add overlay tee to bin")?;
-
         // Link capsfilter to overlay tee
         gst::Element::link(&capsfilter, &overlay_tee)
             .map_err(|_| "Failed to link capsfilter to overlay tee")?;
 
-        // Request tee pads for branching
+        // Request pads from overlay tee for branching
         let overlay_tee_src1 = overlay_tee.request_pad_simple("src_%u")
             .ok_or("Failed to request overlay tee src1 pad")?;
         let overlay_tee_src2 = overlay_tee.request_pad_simple("src_%u")
@@ -614,19 +631,18 @@ impl GStreamerComposite {
         overlay_tee_src1.link(&overlay_queue.static_pad("sink").unwrap())
             .map_err(|_| "Failed to link overlay tee src1 to queue")?;
 
-        // Link tee src2 to debug view
-        overlay_tee_src2.link(&overlay_videoconvert.static_pad("sink").unwrap())
-            .map_err(|_| "Failed to link overlay tee src2 to videoconvert")?;
+        // Link tee src2 to debug branch with videorate
+        overlay_tee_src2.link(&overlay_videorate.static_pad("sink").unwrap())
+            .map_err(|_| "Failed to link overlay tee src2 to videorate")?;
 
         // Link debug branch elements
-        gst::Element::link_many(&[&overlay_videoconvert, &overlay_jpegenc, &overlay_appsink])
+        gst::Element::link_many(&[&overlay_videorate, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink])
             .map_err(|_| "Failed to link overlay debug branch")?;
 
-        // Configure overlay debug appsink for smooth playback
-        overlay_appsink.set_property("async", true);
-        overlay_appsink.set_property("sync", false);
-        overlay_appsink.set_property("max-buffers", 2u32);
-        overlay_appsink.set_property_from_str("drop", "true");
+        // Set framerate on overlay videorate to match pipeline FPS
+        let pipeline_fps = *self.pipeline_fps.read();
+        overlay_videorate.set_property("max-rate", pipeline_fps as i32);
+        overlay_videorate.set_property_from_str("caps", &format!("video/x-raw,framerate={}/1", pipeline_fps));
 
         let final_element = overlay_queue.clone();
         
