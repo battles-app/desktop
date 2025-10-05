@@ -347,11 +347,9 @@ impl GStreamerComposite {
         println!("[Composite FX] ╚════════════════════════════════════════════════════════════════");
         println!("");
         
-        // Capsfilter to set output format and framerate
+        // Capsfilter to set output format and framerate (but NOT dimensions - compositor handles that)
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
-            .field("width", target_width as i32)
-            .field("height", target_height as i32)
             .field("framerate", gst::Fraction::new(target_fps as i32, 1))
             .build();
         
@@ -530,25 +528,49 @@ impl GStreamerComposite {
                             println!("[Composite FX] ║   • Source resolution: {}x{}", src_width, src_height);
                             
                             // Calculate aspect-ratio-preserving dimensions for compositor
-                            // Goal: Full height (100%), width auto-scaled, horizontally centered
+                            // STRATEGY: Fit HEIGHT to canvas (100%), auto-scale WIDTH, center horizontally
+                            // - For portrait videos (width < canvas): center with positive x_offset
+                            // - For landscape videos (width > canvas): center with NEGATIVE x_offset (crop sides)
                             let src_aspect = src_width as f64 / src_height as f64;
-                            let fx_height = target_height_for_callback as i32;
-                            let fx_width = (fx_height as f64 * src_aspect) as i32;
-                            let x_offset = ((target_width_for_callback as i32 - fx_width) / 2).max(0);
+                            let canvas_width = target_width_for_callback as i32;
+                            let canvas_height = target_height_for_callback as i32;
+                            
+                            // FX fills canvas height, width auto-calculated
+                            let fx_height = canvas_height;
+                            let fx_width = (fx_height as f64 * src_aspect).round() as i32;
+                            
+                            // Center horizontally (can be negative for wide videos to crop sides)
+                            let x_offset = (canvas_width - fx_width) / 2;
+                            let y_offset = 0i32;  // Top-aligned since we fill height
                             
                             println!("[Composite FX] ║");
                             println!("[Composite FX] ║ 📐 COMPOSITOR LAYOUT CALCULATION:");
-                            println!("[Composite FX] ║   • Source aspect ratio: {:.3}", src_aspect);
-                            println!("[Composite FX] ║   • FX dimensions: {}x{} (aspect-preserved)", fx_width, fx_height);
-                            println!("[Composite FX] ║   • Position: x={}, y=0 (horizontally centered)", x_offset);
+                            println!("[Composite FX] ║   • Canvas size: {}x{}", canvas_width, canvas_height);
+                            println!("[Composite FX] ║   • Source aspect ratio: {:.3} ({}:{})", src_aspect, 
+                                     src_width, src_height);
+                            println!("[Composite FX] ║   • FX size: {}x{} (fit height, auto width)", fx_width, fx_height);
+                            println!("[Composite FX] ║   • Position: x={}, y={}", x_offset, y_offset);
+                            
+                            if fx_width > canvas_width {
+                                let crop_per_side = (fx_width - canvas_width) / 2;
+                                println!("[Composite FX] ║   • Layout: LANDSCAPE (crop {} px from each side)", crop_per_side);
+                            } else if fx_width < canvas_width {
+                                let padding_per_side = (canvas_width - fx_width) / 2;
+                                println!("[Composite FX] ║   • Layout: PORTRAIT (pad {} px on each side)", padding_per_side);
+                            } else {
+                                println!("[Composite FX] ║   • Layout: PERFECT FIT (same aspect as canvas)");
+                            }
                             
                             // Update compositor pad properties for sink_1
                             if let Some(comp_pad) = compositor_for_callback.static_pad("sink_1") {
                                 comp_pad.set_property("width", fx_width);
                                 comp_pad.set_property("height", fx_height);
                                 comp_pad.set_property("xpos", x_offset);
-                                comp_pad.set_property("ypos", 0i32);
-                                println!("[Composite FX] ║   • ✅ Compositor pad updated with centered layout");
+                                comp_pad.set_property("ypos", y_offset);
+                                println!("[Composite FX] ║   • ✅ Compositor pad configured: {}x{} at ({}, {})", 
+                                         fx_width, fx_height, x_offset, y_offset);
+                            } else {
+                                println!("[Composite FX] ║   • ❌ ERROR: Could not get compositor sink_1 pad!");
                             }
                         }
                         
