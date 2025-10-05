@@ -487,6 +487,9 @@ impl GStreamerComposite {
         let videoconvert_clone = videoconvert.clone();
         let file_path_for_log = file_path.clone();
         let target_fps_for_log = target_fps;
+        let compositor_for_callback = compositor.clone();
+        let target_width_for_callback = target_width;
+        let target_height_for_callback = target_height;
         decodebin.connect_pad_added(move |_dbin, src_pad| {
             println!("\n[Composite FX] ╔════════════════════════════════════════════════════════════════");
             println!("[Composite FX] ║ 🔗 DECODEBIN PAD ADDED - Source Media Detected");
@@ -523,8 +526,30 @@ impl GStreamerComposite {
                         }
                         
                         // Resolution
-                        if let (Ok(width), Ok(height)) = (structure.get::<i32>("width"), structure.get::<i32>("height")) {
-                            println!("[Composite FX] ║   • Source resolution: {}x{}", width, height);
+                        if let (Ok(src_width), Ok(src_height)) = (structure.get::<i32>("width"), structure.get::<i32>("height")) {
+                            println!("[Composite FX] ║   • Source resolution: {}x{}", src_width, src_height);
+                            
+                            // Calculate aspect-ratio-preserving dimensions for compositor
+                            // Goal: Full height (100%), width auto-scaled, horizontally centered
+                            let src_aspect = src_width as f64 / src_height as f64;
+                            let fx_height = target_height_for_callback as i32;
+                            let fx_width = (fx_height as f64 * src_aspect) as i32;
+                            let x_offset = ((target_width_for_callback as i32 - fx_width) / 2).max(0);
+                            
+                            println!("[Composite FX] ║");
+                            println!("[Composite FX] ║ 📐 COMPOSITOR LAYOUT CALCULATION:");
+                            println!("[Composite FX] ║   • Source aspect ratio: {:.3}", src_aspect);
+                            println!("[Composite FX] ║   • FX dimensions: {}x{} (aspect-preserved)", fx_width, fx_height);
+                            println!("[Composite FX] ║   • Position: x={}, y=0 (horizontally centered)", x_offset);
+                            
+                            // Update compositor pad properties for sink_1
+                            if let Some(comp_pad) = compositor_for_callback.static_pad("sink_1") {
+                                comp_pad.set_property("width", fx_width);
+                                comp_pad.set_property("height", fx_height);
+                                comp_pad.set_property("xpos", x_offset);
+                                comp_pad.set_property("ypos", 0i32);
+                                println!("[Composite FX] ║   • ✅ Compositor pad updated with centered layout");
+                            }
                         }
                         
                         // Format
@@ -601,15 +626,12 @@ impl GStreamerComposite {
             .ok_or("Failed to request compositor sink_1")?;
         println!("[Composite FX] ✅ Got compositor sink_1 pad: {}", comp_sink_pad.name());
         
-        // Set compositor properties (zorder=1, alpha=1.0, fill canvas)
-        println!("[Composite FX] 🎛️ Setting compositor properties...");
+        // Set initial compositor properties
+        // Note: Position/dimensions will be updated in pad-added callback once source dimensions are known
+        println!("[Composite FX] 🎛️ Setting initial compositor properties (will be updated after source detection)...");
         comp_sink_pad.set_property("zorder", 1u32);
         comp_sink_pad.set_property("alpha", 1.0f64);
-        comp_sink_pad.set_property("xpos", 0i32);
-        comp_sink_pad.set_property("ypos", 0i32);
-        comp_sink_pad.set_property("width", target_width as i32);
-        comp_sink_pad.set_property("height", target_height as i32);
-        println!("[Composite FX] ✅ Compositor properties set (zorder=1, {}x{} at 0,0)", target_width, target_height);
+        println!("[Composite FX] ✅ Initial compositor properties set (zorder=1, alpha=1.0)");
         
         // Link FX bin to compositor
         println!("[Composite FX] 🔗 Linking FX bin ghost pad to compositor sink_1...");
@@ -617,12 +639,43 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
         
+        // Get pipeline timing info before syncing
+        let pipeline_clock = pipeline.clock();
+        let pipeline_base_time = pipeline.base_time();
+        let pipeline_start_time = pipeline.start_time();
+        
+        println!("\n[Composite FX] ⏰ PIPELINE TIMING INFO BEFORE SYNC:");
+        println!("[Composite FX] ║ Pipeline clock: {:?}", pipeline_clock.as_ref().map(|c| c.time()));
+        println!("[Composite FX] ║ Pipeline base_time: {:?}", pipeline_base_time);
+        println!("[Composite FX] ║ Pipeline start_time: {:?}", pipeline_start_time);
+        println!("[Composite FX] ║ FX bin ID: {}", fx_id);
+        
+        // Log videorate element state
+        println!("\n[Composite FX] 🎞️  VIDEORATE ELEMENT INFO:");
+        println!("[Composite FX] ║ Element name: fxvideorate_{}", fx_id);
+        println!("[Composite FX] ║ skip-to-first: false (maintains timing)");
+        println!("[Composite FX] ║ drop-only: false (allows duplication)");
+        println!("[Composite FX] ║ average-period: 0 (immediate conversion)");
+        println!("[Composite FX] ║ Target FPS: {}", target_fps);
+        
         // Use sync_state_with_parent() - the standard GStreamer approach
         // This automatically handles state transitions and timing
-        println!("[Composite FX] ▶️ Syncing FX bin state with parent pipeline...");
+        println!("\n[Composite FX] ▶️ Syncing FX bin state with parent pipeline...");
         fx_bin.sync_state_with_parent()
             .map_err(|e| format!("Failed to sync FX bin state: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin synced to PLAYING");
+        
+        // Get timing info after syncing
+        let fx_base_time = fx_bin.base_time();
+        let fx_start_time = fx_bin.start_time();
+        let fx_clock = fx_bin.clock();
+        
+        println!("\n[Composite FX] ⏰ FX BIN TIMING INFO AFTER SYNC:");
+        println!("[Composite FX] ║ FX bin base_time: {:?}", fx_base_time);
+        println!("[Composite FX] ║ FX bin start_time: {:?}", fx_start_time);
+        println!("[Composite FX] ║ FX bin clock: {:?}", fx_clock.as_ref().map(|c| c.time()));
+        println!("[Composite FX] ║ Clock matches pipeline: {}", 
+                 fx_clock.as_ref().and_then(|fc| pipeline_clock.as_ref().map(|pc| fc == pc)).unwrap_or(false));
         
         // Wait for state change to complete (with 2 second timeout)
         match fx_bin.state(Some(gst::ClockTime::from_seconds(2))) {
@@ -659,7 +712,9 @@ impl GStreamerComposite {
                     MessageView::StateChanged(state) => {
                         if let Some(src) = msg.src() {
                             let src_name = src.name();
-                            if src_name.starts_with("fx") || src_name == "fxbin" {
+                            // Only log state changes for THIS fx instance
+                            let fx_suffix = format!("_{}", fx_id);
+                            if src_name.contains(&fx_suffix) || src_name == format!("fxbin_{}", fx_id) {
                                 println!("[Composite FX] 🔄 {} state: {:?} → {:?}", src_name, state.old(), state.current());
                             }
                         }
