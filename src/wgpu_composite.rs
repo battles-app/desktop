@@ -125,9 +125,36 @@ impl WgpuComposite {
         // Create a new compositor with the updated dimensions and FPS
         let mut compositor = WgpuCompositor::new(width, height, fps).await?;
         
-        // Set the frame sender
-        if let Some(sender) = self.frame_sender.lock().unwrap().as_ref() {
-            compositor.set_frame_sender(sender.clone());
+        // Create fresh broadcast channels if they don't exist or have no receivers
+        {
+            let mut frame_sender_lock = self.frame_sender.lock().unwrap();
+            if frame_sender_lock.is_none() || frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
+                println!("[WgpuComposite] Creating new frame sender channel");
+                *frame_sender_lock = Some(broadcast::channel::<Vec<u8>>(5).0);
+            }
+            
+            // Set the frame sender on the compositor
+            if let Some(sender) = frame_sender_lock.as_ref() {
+                compositor.set_frame_sender(sender.clone());
+            }
+        }
+        
+        // Create fresh camera frame channel if needed
+        {
+            let mut camera_frame_sender_lock = self.camera_frame_sender.lock().unwrap();
+            if camera_frame_sender_lock.is_none() || camera_frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
+                println!("[WgpuComposite] Creating new camera frame sender channel");
+                *camera_frame_sender_lock = Some(broadcast::channel::<Vec<u8>>(5).0);
+            }
+        }
+        
+        // Create fresh overlay frame channel if needed
+        {
+            let mut overlay_frame_sender_lock = self.overlay_frame_sender.lock().unwrap();
+            if overlay_frame_sender_lock.is_none() || overlay_frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
+                println!("[WgpuComposite] Creating new overlay frame sender channel");
+                *overlay_frame_sender_lock = Some(broadcast::channel::<Vec<u8>>(5).0);
+            }
         }
         
         // Replace the compositor
@@ -137,7 +164,7 @@ impl WgpuComposite {
         let camera_input = GstInput::new_camera(camera_device_id, width, height, fps, "camera")?;
         
         // Create a channel for the camera frames
-        let (camera_tx, camera_rx) = broadcast::channel::<(Vec<u8>, u64, u64)>(2);
+        let (camera_tx, camera_rx) = broadcast::channel::<(Vec<u8>, u64, u64)>(5);
         camera_input.set_frame_sender(camera_tx);
         
         // Start the camera input

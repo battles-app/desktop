@@ -707,20 +707,36 @@ async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<Str
 // IPC Frame Emitters (replaces WebSocket servers)
 async fn start_composite_frame_emitter(app_handle: tauri::AppHandle) {
     tokio::spawn(async move {
-        let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
-        
-        if let Some(tx) = tx_opt {
-            let mut rx = tx.subscribe();
-            println!("[Composite IPC] Frame emitter started");
+        // Create a loop to handle channel recreation
+        loop {
+            let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
             
-            while let Ok(frame_data) = rx.recv().await {
-                // Emit as base64 to frontend
-                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                println!("[Composite IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
-                match app_handle.emit("composite-frame", base64_frame) {
-                    Ok(_) => println!("[Composite IPC] Frame emitted successfully"),
-                    Err(e) => println!("[Composite IPC] Error emitting frame: {}", e),
+            if let Some(tx) = tx_opt {
+                let mut rx = tx.subscribe();
+                println!("[Composite IPC] Frame emitter started with {} receivers", tx.receiver_count());
+                
+                // Process frames until the channel is closed
+                while let Ok(frame_data) = rx.recv().await {
+                    // Emit as base64 to frontend
+                    let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                    println!("[Composite IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
+                    match app_handle.emit("composite-frame", base64_frame) {
+                        Ok(_) => println!("[Composite IPC] Frame emitted successfully"),
+                        Err(e) => println!("[Composite IPC] Error emitting frame: {}", e),
+                    }
                 }
+                println!("[Composite IPC] Frame receiver loop ended, channel may be closed");
+                
+                // Try to recreate the channel
+                let (new_tx, _) = broadcast::channel::<Vec<u8>>(5);
+                *COMPOSITE_FRAME_SENDER.write() = Some(new_tx.clone());
+                
+                // Wait a bit before restarting
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            } else {
+                println!("[Composite IPC] No frame sender available");
+                // Wait a bit before checking again
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             }
         }
     });
@@ -728,20 +744,36 @@ async fn start_composite_frame_emitter(app_handle: tauri::AppHandle) {
 
 async fn start_camera_layer_frame_emitter(app_handle: tauri::AppHandle) {
     tokio::spawn(async move {
-        let tx_opt = CAMERA_LAYER_FRAME_SENDER.read().as_ref().cloned();
-        
-        if let Some(tx) = tx_opt {
-            let mut rx = tx.subscribe();
-            println!("[Camera Layer IPC] Frame emitter started");
+        // Create a loop to handle channel recreation
+        loop {
+            let tx_opt = CAMERA_LAYER_FRAME_SENDER.read().as_ref().cloned();
             
-            while let Ok(frame_data) = rx.recv().await {
-                // Emit as base64 to frontend
-                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                println!("[Camera Layer IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
-                match app_handle.emit("camera-layer-frame", base64_frame) {
-                    Ok(_) => println!("[Camera Layer IPC] Frame emitted successfully"),
-                    Err(e) => println!("[Camera Layer IPC] Error emitting frame: {}", e),
+            if let Some(tx) = tx_opt {
+                let mut rx = tx.subscribe();
+                println!("[Camera Layer IPC] Frame emitter started with {} receivers", tx.receiver_count());
+                
+                // Process frames until the channel is closed
+                while let Ok(frame_data) = rx.recv().await {
+                    // Emit as base64 to frontend
+                    let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                    println!("[Camera Layer IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
+                    match app_handle.emit("camera-layer-frame", base64_frame) {
+                        Ok(_) => println!("[Camera Layer IPC] Frame emitted successfully"),
+                        Err(e) => println!("[Camera Layer IPC] Error emitting frame: {}", e),
+                    }
                 }
+                println!("[Camera Layer IPC] Frame receiver loop ended, channel may be closed");
+                
+                // Try to recreate the channel
+                let (new_tx, _) = broadcast::channel::<Vec<u8>>(5);
+                *CAMERA_LAYER_FRAME_SENDER.write() = Some(new_tx.clone());
+                
+                // Wait a bit before restarting
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            } else {
+                println!("[Camera Layer IPC] No frame sender available");
+                // Wait a bit before checking again
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             }
         }
     });
@@ -753,7 +785,7 @@ async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
         
         if let Some(tx) = tx_opt {
             let mut rx = tx.subscribe();
-            println!("[Overlay Layer IPC] Frame emitter started");
+            println!("[Overlay Layer IPC] Frame emitter started with {} receivers", tx.receiver_count());
             
             while let Ok(frame_data) = rx.recv().await {
                 // Emit as base64 to frontend
@@ -764,6 +796,20 @@ async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
                     Err(e) => println!("[Overlay Layer IPC] Error emitting frame: {}", e),
                 }
             }
+            println!("[Overlay Layer IPC] Frame receiver loop ended, channel may be closed");
+            
+            // Try to recreate the channel
+            let (new_tx, _) = broadcast::channel::<Vec<u8>>(5);
+            *OVERLAY_LAYER_FRAME_SENDER.write() = Some(new_tx.clone());
+            
+            // Restart the emitter with the new channel
+            // Use a new task instead of awaiting to avoid Send issues
+            let app_handle_clone = app_handle.clone();
+            tokio::spawn(async move {
+                start_overlay_layer_frame_emitter(app_handle_clone).await;
+            });
+        } else {
+            println!("[Overlay Layer IPC] No frame sender available");
         }
     });
 }
