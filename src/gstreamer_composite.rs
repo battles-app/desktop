@@ -490,6 +490,20 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("ypos", 0i32);
         comp_sink_pad.set_property("width", target_width as i32);
         comp_sink_pad.set_property("height", target_height as i32);
+        
+        // Calculate timestamp offset to align FX start with current pipeline time
+        // This ensures the FX plays from its beginning, not trying to "catch up"
+        if let (Some(clock), Some(base_time)) = (pipeline.clock(), pipeline.base_time()) {
+            if let Some(clock_time) = clock.time() {
+                // ts-offset = current_time - base_time
+                // This makes timestamp 0 from the FX align with "now" in the pipeline
+                let ts_offset = (clock_time.nseconds() as i64) - (base_time.nseconds() as i64);
+                comp_sink_pad.set_property("ts-offset", ts_offset);
+                println!("[Composite FX] ⏱️ Set ts-offset: {} ns (clock: {:?}, base: {:?})", 
+                         ts_offset, clock_time, base_time);
+            }
+        }
+        
         println!("[Composite FX] ✅ Compositor properties set (zorder=1, {}x{} at 0,0)", target_width, target_height);
         
         // Link FX bin to compositor
@@ -498,27 +512,12 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
         
-        // Calculate base time offset: Set FX bin to start from "now" in pipeline time
-        // This prevents the FX from trying to catch up to when the pipeline originally started
-        if let (Some(pipeline_base_time), Some(clock)) = (pipeline.base_time(), pipeline.clock()) {
-            if let Some(current_clock_time) = clock.time() {
-                // Set base time = current clock time, so the FX thinks "now" is time 0
-                fx_bin.set_base_time(current_clock_time);
-                println!("[Composite FX] ⏱️ FX bin base time set to current clock time: {:?}", current_clock_time);
-                println!("[Composite FX] 📐 Pipeline base time: {:?}, clock time: {:?}", pipeline_base_time, current_clock_time);
-            } else {
-                println!("[Composite FX] ⚠️ No clock time available, using pipeline base time");
-                fx_bin.set_base_time(pipeline_base_time);
-            }
-        } else {
-            println!("[Composite FX] ⚠️ No clock/base time available, using default timing");
-        }
-        
-        // Start FX bin
-        println!("[Composite FX] ▶️ Setting FX bin state to PLAYING...");
-        let state_change = fx_bin.set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to start FX bin: {:?}", e))?;
-        println!("[Composite FX] 🔄 State change result: {:?}", state_change);
+        // Use the proper GStreamer method for adding elements to a running pipeline
+        // sync_state_with_parent() automatically handles all timing and clock synchronization
+        println!("[Composite FX] ⏱️ Syncing FX bin state with parent pipeline...");
+        fx_bin.sync_state_with_parent()
+            .map_err(|e| format!("Failed to sync FX bin state: {:?}", e))?;
+        println!("[Composite FX] ✅ FX bin synced with parent pipeline");
         
         // Wait for state change to complete (with 2 second timeout)
         match fx_bin.state(Some(gst::ClockTime::from_seconds(2))) {
