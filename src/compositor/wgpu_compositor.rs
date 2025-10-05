@@ -675,4 +675,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     pub fn target_fps(&self) -> u32 {
         self.target_fps
     }
+
+    /// Get reference to layers HashMap
+    pub fn layers(&self) -> &HashMap<String, Layer> {
+        &self.layers
+    }
 }

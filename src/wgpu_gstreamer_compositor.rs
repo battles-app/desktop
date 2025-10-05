@@ -254,43 +254,28 @@ impl WgpuGStreamerCompositor {
                 // Wait for next frame event
                 match frame_rx.recv().await {
                     Ok(FrameEvent::Render { pts, frame_number }) => {
-                        // Get latest frames for all sources
-                        let camera_frame = frame_buffer.get_latest_frame("camera");
-                        let media_frame = frame_buffer.get_latest_frame("media");
-
-                        // Update WGPU textures and render
-                        let (camera_texture, media_texture) = {
+                        // Update textures for all layers
+                        {
                             let output_size = {
                                 let wgpu = wgpu_compositor.read();
                                 wgpu.output_size()
                             };
 
-                            let camera_texture = camera_frame.as_ref().map(|frame| {
-                                // Send raw camera frame to frontend for debugging
-                                Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, output_size.0, output_size.1);
-                                let mut wgpu = wgpu_compositor.write();
-                                wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data)
-                            });
-
-                            let media_texture = media_frame.as_ref().map(|frame| {
-                                let mut wgpu = wgpu_compositor.write();
-                                wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data)
-                            });
-
-                            (camera_texture, media_texture)
-                        };
-
-                        // Update layer textures
-                        {
                             let mut wgpu = wgpu_compositor.write();
-                            if let Some(texture) = camera_texture {
-                                if let Some(layer) = wgpu.get_layer_mut("camera") {
-                                    layer.update_texture(texture);
-                                }
-                            }
-                            if let Some(texture) = media_texture {
-                                if let Some(layer) = wgpu.get_layer_mut("media") {
-                                    layer.update_texture(texture);
+                            let layer_ids: Vec<String> = wgpu.layers().keys().cloned().collect();
+
+                            // Update textures for each layer
+                            for layer_id in &layer_ids {
+                                if let Some(frame) = frame_buffer.get_latest_frame(layer_id) {
+                                    // Send raw frame to frontend for debugging (camera layers only)
+                                    if layer_id.starts_with("camera") {
+                                        Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, output_size.0, output_size.1);
+                                    }
+
+                                    let texture = wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data);
+                                    if let Some(layer) = wgpu.get_layer_mut(layer_id) {
+                                        layer.update_texture(texture);
+                                    }
                                 }
                             }
 
