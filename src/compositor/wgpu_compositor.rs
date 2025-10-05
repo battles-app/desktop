@@ -499,11 +499,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 let transform = layer.transform_matrix(self.output_width as f32, self.output_height as f32);
                 let chroma_key = layer.chroma_key.unwrap_or([0.0, 0.0, 0.0]);
 
-                // Find texture index
-                let texture_index = self.texture_array.iter().position(|tex| {
-                    // Compare texture IDs (simplified - in real implementation you'd store texture IDs)
-                    true // Placeholder - need proper texture tracking
-                }).unwrap_or(0) as u32;
+                // Single texture for now - all layers use texture index 0
+                let texture_index = 0;
 
                 instances.push(Instance {
                     transform: transform.to_cols_array_2d(),
@@ -546,19 +543,22 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             timestamp_writes: None,
         });
 
-        // Set pipeline and bind groups
-        render_pass.set_pipeline(&self.render_pipeline);
+        // Only render if we have a texture and layers
         if let Some(bind_group) = &self.texture_bind_group {
-            render_pass.set_bind_group(0, bind_group, &[]);
+            if !instances.is_empty() {
+                // Set pipeline and bind groups
+                render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+
+                // Set vertex buffers
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+                // Draw instances
+                render_pass.draw_indexed(0..6, 0, 0..instances.len() as u32);
+            }
         }
-
-        // Set vertex buffers
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-
-        // Draw instances
-        render_pass.draw_indexed(0..6, 0, 0..instances.len() as u32);
 
         drop(render_pass);
 

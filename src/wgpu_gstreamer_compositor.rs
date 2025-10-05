@@ -87,6 +87,9 @@ impl WgpuGStreamerCompositor {
         // Create layer for this input
         let mut layer = Layer::new(id.clone());
         layer = layer.with_z_order(0); // Camera on bottom
+        layer = layer.with_position(0.0, 0.0); // Position at top-left
+        layer = layer.with_scale(1.0, 1.0); // Full size
+        layer = layer.with_opacity(1.0); // Fully opaque
 
         // Add to managers
         {
