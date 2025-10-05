@@ -15,9 +15,6 @@ use gstreamer_camera::GStreamerCamera;
 use gstreamer_composite::GStreamerComposite;
 
 use shared_memory::{Shmem, ShmemConf};
-use tokio::net::TcpListener;
-use tokio_tungstenite::accept_async;
-use futures_util::{StreamExt, SinkExt};
 use tokio::sync::broadcast;
 
 // Camera state
@@ -40,8 +37,6 @@ lazy_static::lazy_static! {
     static ref OVERLAY_LAYER_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
 }
 
-// WebSocket ports
-const CAMERA_WS_PORT: u16 = 9876;
 // IPC replaces WebSocket ports - no longer needed
 
 // Monitor info structure
@@ -546,7 +541,7 @@ async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(),
 // ========================================
 
 #[command]
-async fn initialize_camera_system() -> Result<String, String> {
+async fn initialize_camera_system(app_handle: tauri::AppHandle) -> Result<String, String> {
     println!("[Camera] Initializing camera system");
     
     if CAMERA_FRAME_SENDER.read().is_some() {
@@ -567,72 +562,25 @@ async fn initialize_camera_system() -> Result<String, String> {
     
     *CAMERA_FRAME_SENDER.write() = Some(tx);
     
-    start_camera_websocket_server().await;
+    start_camera_frame_emitter(app_handle).await;
     
-    println!("[Camera] ✅ WebSocket server started on port {}", CAMERA_WS_PORT);
-    Ok(format!("Camera initialized - WebSocket on port {}", CAMERA_WS_PORT))
+    println!("[Camera] ✅ Camera system initialized with IPC");
+    Ok("Camera initialized with IPC".to_string())
 }
 
-async fn start_camera_websocket_server() {
-    tokio::spawn(async {
-        let addr = format!("127.0.0.1:{}", CAMERA_WS_PORT);
-        let listener = match TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!("[Camera WS] Failed to bind to {}: {}", addr, e);
-                return;
+async fn start_camera_frame_emitter(app_handle: tauri::AppHandle) {
+    tokio::spawn(async move {
+        let tx_opt = CAMERA_FRAME_SENDER.read().as_ref().cloned();
+        
+        if let Some(tx) = tx_opt {
+            let mut rx = tx.subscribe();
+            println!("[Camera IPC] Frame emitter started");
+            
+            while let Ok(frame_data) = rx.recv().await {
+                // Emit as base64 to frontend
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                let _ = app_handle.emit("camera-frame", base64_frame);
             }
-        };
-        
-        println!("[Camera WS] WebSocket server listening on {}", addr);
-        
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(async move {
-                let ws_stream = match accept_async(stream).await {
-                    Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Camera WS] WebSocket handshake failed: {}", e);
-                        return;
-                    }
-                };
-                
-                println!("[Camera WS] Client connected");
-                
-                let mut rx = match CAMERA_FRAME_SENDER.read().as_ref() {
-                    Some(sender) => sender.subscribe(),
-                    None => {
-                        println!("[Camera WS] No frame sender available");
-                        return;
-                    }
-                };
-                
-                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-                
-                loop {
-                    tokio::select! {
-                        frame_result = rx.recv() => {
-                            match frame_result {
-                                Ok(frame_data) => {
-                                    if ws_sender.send(tokio_tungstenite::tungstenite::Message::Binary(frame_data)).await.is_err() {
-                                        println!("[Camera WS] Client disconnected");
-                                        break;
-                                    }
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                        msg = ws_receiver.next() => {
-                            match msg {
-                                Some(Ok(_)) => {},
-                                _ => {
-                                    println!("[Camera WS] Client disconnected");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
         }
     });
 }
@@ -701,7 +649,7 @@ async fn stop_camera_preview() -> Result<(), String> {
 // ========================================
 
 #[command]
-async fn initialize_composite_system() -> Result<String, String> {
+async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<String, String> {
     println!("[Composite] Initializing composite system");
     
     {
@@ -955,9 +903,6 @@ async fn stop_composite_fx() -> Result<(), String> {
         return Err("Composite pipeline not initialized".to_string());
     }
     drop(composite_lock);
-
-    // Note: Keep overlay WebSocket server running (don't reset OVERLAY_WS_STARTED)
-    // It will be reused for the next FX play
 
     Ok(())
 }
