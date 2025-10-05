@@ -102,14 +102,29 @@ impl GStreamerComposite {
     
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
         println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-        
+
+        // Check if pipeline is already running with the same parameters
+        let current_fps = *self.pipeline_fps.read();
+        let current_width = *self.pipeline_width.read();
+        let current_height = *self.pipeline_height.read();
+
+        if self.pipeline.is_some() && *self.is_running.read() &&
+           current_fps == fps && current_width == width && current_height == height {
+            println!("[Composite] ✅ Pipeline already running with same parameters, skipping restart");
+            return Ok(());
+        }
+
+        // Check if FX was playing before stopping the pipeline
+        let fx_was_playing = self.fx_state.read().is_some();
+        let fx_state_clone = self.fx_state.read().clone();
+
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
             let _ = pipeline.set_state(gst::State::Null);
         }
-        
+
         *self.is_running.write() = true;
-        
+
         // Store pipeline dimensions and FPS
         *self.pipeline_fps.write() = fps;
         *self.pipeline_width.write() = width;
@@ -310,8 +325,21 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to start pipeline: {}", e))?;
         
         println!("[Composite] ✅ Composite pipeline started successfully!");
-        
+
         self.pipeline = Some(pipeline);
+
+        // If FX was playing before the pipeline restart, restart it now
+        if fx_was_playing {
+            if let Some(fx_state) = fx_state_clone {
+                println!("[Composite] 🔄 Restarting FX after pipeline restart: {}", fx_state.file_url);
+                // Note: We don't call play_fx_from_file here because that would try to download again
+                // Instead, we should have the frontend restart the FX if needed
+                // For now, just clear the FX state since the bin was destroyed
+                *self.fx_state.write() = None;
+                println!("[Composite] ⚠️ FX state cleared - frontend should restart FX if needed");
+            }
+        }
+
         Ok(())
     }
     

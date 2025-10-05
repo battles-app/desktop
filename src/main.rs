@@ -1166,7 +1166,7 @@ async fn play_composite_fx(
 #[command]
 async fn stop_composite_fx() -> Result<(), String> {
     println!("[Composite] Stopping FX");
-    
+
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
         composite.stop_fx()?;
@@ -1175,7 +1175,11 @@ async fn stop_composite_fx() -> Result<(), String> {
         return Err("Composite pipeline not initialized".to_string());
     }
     drop(composite_lock);
-    
+
+    // Reset the overlay WebSocket started flag
+    let mut overlay_started = OVERLAY_WS_STARTED.lock().unwrap();
+    *overlay_started = false;
+
     Ok(())
 }
 
