@@ -292,6 +292,14 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
         
+        // Identity element for timestamp offsetting
+        // This will be configured later to align FX start with current pipeline time
+        let identity = ElementFactory::make("identity")
+            .name("fxidentity")
+            .property("sync", false) // Don't sync to clock
+            .build()
+            .map_err(|_| "Failed to create identity")?;
+        
         // Tee for overlay layer debug output
         let overlay_tee = ElementFactory::make("tee")
             .name("overlay_tee")
@@ -334,10 +342,10 @@ impl GStreamerComposite {
         
         // Add all elements to bin
         if let Some(ref alpha) = alpha_elem {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &videorate, &capsfilter, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &videorate, &capsfilter, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &videorate, &capsfilter, &identity, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
         
@@ -347,10 +355,10 @@ impl GStreamerComposite {
         
         // Link post-decode chain
         if let Some(ref alpha) = alpha_elem {
-            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &videorate, &capsfilter, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain with alpha")?;
         } else {
-            gst::Element::link_many(&[&videoconvert, &videoscale, &videorate, &capsfilter, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, &videorate, &capsfilter, &identity, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain")?;
         }
         
@@ -490,20 +498,6 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("ypos", 0i32);
         comp_sink_pad.set_property("width", target_width as i32);
         comp_sink_pad.set_property("height", target_height as i32);
-        
-        // Calculate timestamp offset to align FX start with current pipeline time
-        // This ensures the FX plays from its beginning, not trying to "catch up"
-        if let (Some(clock), Some(base_time)) = (pipeline.clock(), pipeline.base_time()) {
-            if let Some(clock_time) = clock.time() {
-                // ts-offset = current_time - base_time
-                // This makes timestamp 0 from the FX align with "now" in the pipeline
-                let ts_offset = (clock_time.nseconds() as i64) - (base_time.nseconds() as i64);
-                comp_sink_pad.set_property("ts-offset", ts_offset);
-                println!("[Composite FX] ⏱️ Set ts-offset: {} ns (clock: {:?}, base: {:?})", 
-                         ts_offset, clock_time, base_time);
-            }
-        }
-        
         println!("[Composite FX] ✅ Compositor properties set (zorder=1, {}x{} at 0,0)", target_width, target_height);
         
         // Link FX bin to compositor
@@ -511,6 +505,21 @@ impl GStreamerComposite {
         ghost_pad.link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
+        
+        // Set timestamp offset on identity element to align FX start with current pipeline time
+        // This prevents the FX from trying to "catch up" to when the pipeline originally started
+        if let Some(identity_elem) = fx_bin.by_name("fxidentity") {
+            if let (Some(clock), Some(base_time)) = (pipeline.clock(), pipeline.base_time()) {
+                if let Some(clock_time) = clock.time() {
+                    // ts-offset = current_time - base_time
+                    // This makes timestamp 0 from the FX align with "now" in the pipeline
+                    let ts_offset = (clock_time.nseconds() as i64) - (base_time.nseconds() as i64);
+                    identity_elem.set_property("ts-offset", ts_offset);
+                    println!("[Composite FX] ⏱️ Set identity ts-offset: {} ns (clock: {:?}, base: {:?})", 
+                             ts_offset, clock_time, base_time);
+                }
+            }
+        }
         
         // Use the proper GStreamer method for adding elements to a running pipeline
         // sync_state_with_parent() automatically handles all timing and clock synchronization
