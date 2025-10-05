@@ -130,11 +130,13 @@ impl WgpuComposite {
             let mut frame_sender_lock = self.frame_sender.lock().unwrap();
             if frame_sender_lock.is_none() || frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
                 println!("[WgpuComposite] Creating new frame sender channel");
-                *frame_sender_lock = Some(broadcast::channel::<Vec<u8>>(5).0);
+                let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
+                *frame_sender_lock = Some(tx);
             }
             
             // Set the frame sender on the compositor
             if let Some(sender) = frame_sender_lock.as_ref() {
+                println!("[WgpuComposite] Setting frame sender on compositor with {} receivers", sender.receiver_count());
                 compositor.set_frame_sender(sender.clone());
             }
         }
@@ -144,8 +146,11 @@ impl WgpuComposite {
             let mut camera_frame_sender_lock = self.camera_frame_sender.lock().unwrap();
             if camera_frame_sender_lock.is_none() || camera_frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
                 println!("[WgpuComposite] Creating new camera frame sender channel");
-                *camera_frame_sender_lock = Some(broadcast::channel::<Vec<u8>>(5).0);
+                let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
+                *camera_frame_sender_lock = Some(tx);
             }
+            println!("[WgpuComposite] Camera frame sender has {} receivers", 
+                camera_frame_sender_lock.as_ref().map_or(0, |tx| tx.receiver_count()));
         }
         
         // Create fresh overlay frame channel if needed
@@ -153,8 +158,11 @@ impl WgpuComposite {
             let mut overlay_frame_sender_lock = self.overlay_frame_sender.lock().unwrap();
             if overlay_frame_sender_lock.is_none() || overlay_frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
                 println!("[WgpuComposite] Creating new overlay frame sender channel");
-                *overlay_frame_sender_lock = Some(broadcast::channel::<Vec<u8>>(5).0);
+                let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
+                *overlay_frame_sender_lock = Some(tx);
             }
+            println!("[WgpuComposite] Overlay frame sender has {} receivers", 
+                overlay_frame_sender_lock.as_ref().map_or(0, |tx| tx.receiver_count()));
         }
         
         // Replace the compositor

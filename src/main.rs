@@ -666,17 +666,20 @@ async fn stop_camera_preview() -> Result<(), String> {
 async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<String, String> {
     println!("[Composite] Initializing composite system");
     
-    {
+    // Check if already initialized
+    let already_initialized = {
         let sender_lock = COMPOSITE_FRAME_SENDER.read();
-        if sender_lock.is_some() {
-            println!("[Composite] Already initialized");
-            
-            // Even if already initialized, ensure the emitters are running
-            // This helps recover from situations where the channels might have closed
-            ensure_frame_emitters_running(app_handle.clone()).await;
-            
-            return Ok("Composite system already initialized".to_string());
-        }
+        sender_lock.is_some()
+    };
+    
+    if already_initialized {
+        println!("[Composite] Already initialized");
+        
+        // Even if already initialized, ensure the emitters are running
+        // This helps recover from situations where the channels might have closed
+        ensure_frame_emitters_running(app_handle.clone()).await;
+        
+        return Ok("Composite system already initialized".to_string());
     }
     
     // Create the WGPU compositor
@@ -690,10 +693,22 @@ async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<Str
     let (overlay_layer_tx, _overlay_layer_rx) = broadcast::channel::<Vec<u8>>(10);
     
     // Store the compositor and frame senders first
-    *WGPU_COMPOSITE.write() = Some(composite.clone());
-    *COMPOSITE_FRAME_SENDER.write() = Some(tx.clone());
-    *CAMERA_LAYER_FRAME_SENDER.write() = Some(camera_layer_tx.clone());
-    *OVERLAY_LAYER_FRAME_SENDER.write() = Some(overlay_layer_tx.clone());
+    {
+        let mut wgpu_composite_write = WGPU_COMPOSITE.write();
+        *wgpu_composite_write = Some(composite.clone());
+    }
+    {
+        let mut composite_frame_sender_write = COMPOSITE_FRAME_SENDER.write();
+        *composite_frame_sender_write = Some(tx.clone());
+    }
+    {
+        let mut camera_layer_frame_sender_write = CAMERA_LAYER_FRAME_SENDER.write();
+        *camera_layer_frame_sender_write = Some(camera_layer_tx.clone());
+    }
+    {
+        let mut overlay_layer_frame_sender_write = OVERLAY_LAYER_FRAME_SENDER.write();
+        *overlay_layer_frame_sender_write = Some(overlay_layer_tx.clone());
+    }
     
     // Set the frame senders after storing them
     composite.set_frame_sender(tx);
@@ -880,25 +895,31 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
     // Ensure frame emitters are running before starting the pipeline
     ensure_frame_emitters_running(app_handle.clone()).await;
     
-    // Use a separate scope to ensure the lock is dropped before the await
+    // Check if compositor is initialized
+    let composite_initialized = {
+        let composite_lock = WGPU_COMPOSITE.read();
+        composite_lock.is_some()
+    };
+    
+    // Initialize if needed
+    if !composite_initialized {
+        println!("[Composite] ERROR: WGPU_COMPOSITE is None, initializing it now");
+        
+        // Try to initialize the composite system
+        match initialize_composite_system(app_handle.clone()).await {
+            Ok(_) => println!("[Composite] Successfully initialized composite system"),
+            Err(e) => {
+                let error_msg = format!("Failed to initialize composite system: {}", e);
+                println!("[Composite] ERROR: {}", error_msg);
+                return Err(error_msg);
+            }
+        }
+    }
+    
+    // Get the compositor after initialization
     let mut composite_opt = {
         let composite_lock = WGPU_COMPOSITE.read();
-        if composite_lock.is_none() {
-            println!("[Composite] ERROR: WGPU_COMPOSITE is None, initializing it now");
-            drop(composite_lock);
-            
-            // Try to initialize the composite system
-            match initialize_composite_system(app_handle.clone()).await {
-                Ok(_) => println!("[Composite] Successfully initialized composite system"),
-                Err(e) => println!("[Composite] Failed to initialize composite system: {}", e),
-            }
-            
-            // Try again
-            let composite_lock = WGPU_COMPOSITE.read();
-            composite_lock.as_ref().map(|c| c.clone())
-        } else {
-            composite_lock.as_ref().map(|c| c.clone())
-        }
+        composite_lock.as_ref().map(|c| c.clone())
     };
     
     if let Some(ref mut composite) = composite_opt {
