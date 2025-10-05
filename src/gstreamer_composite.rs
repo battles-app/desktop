@@ -529,7 +529,7 @@ impl GStreamerComposite {
         // Create JPEG encoder for overlay layer
         let overlay_jpegenc = ElementFactory::make("jpegenc")
             .name("overlay_jpegenc")
-            .property("quality", 90u32)
+            .property("quality", 90i32)
             .build()
             .map_err(|_| "Failed to create overlay jpeg encoder")?;
 
@@ -599,13 +599,23 @@ impl GStreamerComposite {
         gst::Element::link(&capsfilter, &overlay_tee)
             .map_err(|_| "Failed to link capsfilter to overlay tee")?;
 
-        // Link overlay tee to compositor and overlay appsink
-        gst::Element::link_many(&[&overlay_tee, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink])
-            .map_err(|_| "Failed to link overlay debug branch")?;
+        // Request pads from overlay tee for branching
+        let overlay_tee_src1 = overlay_tee.request_pad_simple("src_%u")
+            .ok_or("Failed to request overlay tee src1 pad")?;
+        let overlay_tee_src2 = overlay_tee.request_pad_simple("src_%u")
+            .ok_or("Failed to request overlay tee src2 pad")?;
 
-        // Link overlay tee to compositor via queue (for proper synchronization)
-        gst::Element::link_many(&[&overlay_tee, &overlay_queue])
-            .map_err(|_| "Failed to link overlay tee to queue")?;
+        // Link tee src1 to compositor via queue
+        overlay_tee_src1.link(&overlay_queue.static_pad("sink").unwrap())
+            .map_err(|_| "Failed to link overlay tee src1 to queue")?;
+
+        // Link tee src2 to debug branch
+        overlay_tee_src2.link(&overlay_videoconvert.static_pad("sink").unwrap())
+            .map_err(|_| "Failed to link overlay tee src2 to videoconvert")?;
+
+        // Link debug branch elements
+        gst::Element::link_many(&[&overlay_videoconvert, &overlay_jpegenc, &overlay_appsink])
+            .map_err(|_| "Failed to link overlay debug branch")?;
 
         let final_element = overlay_queue.clone();
         
@@ -637,6 +647,7 @@ impl GStreamerComposite {
 
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
+                        println!("[Overlay Layer] 📸 Sending frame: {} bytes", jpeg_data.len());
                         if let Some(sender) = overlay_frame_sender_clone.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
                         }
