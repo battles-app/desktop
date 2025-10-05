@@ -125,42 +125,99 @@ impl WgpuComposite {
         // Create a new compositor with the updated dimensions and FPS
         let mut compositor = WgpuCompositor::new(width, height, fps).await?;
         
-        // Create fresh broadcast channels if they don't exist or have no receivers
+        // Use the global frame sender to ensure it's synchronized with IPC
         {
-            let mut frame_sender_lock = self.frame_sender.lock().unwrap();
-            if frame_sender_lock.is_none() || frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
-                println!("[WgpuComposite] Creating new frame sender channel");
-                let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
-                *frame_sender_lock = Some(tx);
-            }
+            // Get the global frame sender first
+            let global_sender_opt = {
+                let global_sender_lock = crate::COMPOSITE_FRAME_SENDER.read();
+                global_sender_lock.as_ref().cloned()
+            };
             
-            // Set the frame sender on the compositor
-            if let Some(sender) = frame_sender_lock.as_ref() {
-                println!("[WgpuComposite] Setting frame sender on compositor with {} receivers", sender.receiver_count());
-                compositor.set_frame_sender(sender.clone());
+            // Update our local frame sender with the global one
+            let mut frame_sender_lock = self.frame_sender.lock().unwrap();
+            
+            if let Some(global_sender) = global_sender_opt {
+                // Use the global sender if it exists
+                println!("[WgpuComposite] Using global frame sender with {} receivers", global_sender.receiver_count());
+                *frame_sender_lock = Some(global_sender.clone());
+                
+                // Set the frame sender on the compositor
+                compositor.set_frame_sender(global_sender);
+            } else {
+                // Create a new sender if global doesn't exist (should not happen)
+                println!("[WgpuComposite] WARNING: No global frame sender found, creating new one");
+                let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
+                
+                // Update both local and global senders
+                *frame_sender_lock = Some(tx.clone());
+                compositor.set_frame_sender(tx.clone());
+                
+                // Update the global sender
+                let mut global_sender_write = crate::COMPOSITE_FRAME_SENDER.write();
+                *global_sender_write = Some(tx);
             }
         }
         
-        // Create fresh camera frame channel if needed
+        // Use the global camera frame sender
         {
+            // Get the global camera frame sender
+            let global_sender_opt = {
+                let global_sender_lock = crate::CAMERA_LAYER_FRAME_SENDER.read();
+                global_sender_lock.as_ref().cloned()
+            };
+            
+            // Update our local camera frame sender
             let mut camera_frame_sender_lock = self.camera_frame_sender.lock().unwrap();
-            if camera_frame_sender_lock.is_none() || camera_frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
-                println!("[WgpuComposite] Creating new camera frame sender channel");
+            
+            if let Some(global_sender) = global_sender_opt {
+                // Use the global sender if it exists
+                println!("[WgpuComposite] Using global camera frame sender with {} receivers", global_sender.receiver_count());
+                *camera_frame_sender_lock = Some(global_sender);
+            } else {
+                // Create a new sender if global doesn't exist (should not happen)
+                println!("[WgpuComposite] WARNING: No global camera frame sender found, creating new one");
                 let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
-                *camera_frame_sender_lock = Some(tx);
+                
+                // Update both local and global senders
+                *camera_frame_sender_lock = Some(tx.clone());
+                
+                // Update the global sender
+                let mut global_sender_write = crate::CAMERA_LAYER_FRAME_SENDER.write();
+                *global_sender_write = Some(tx);
             }
+            
             println!("[WgpuComposite] Camera frame sender has {} receivers", 
                 camera_frame_sender_lock.as_ref().map_or(0, |tx| tx.receiver_count()));
         }
         
-        // Create fresh overlay frame channel if needed
+        // Use the global overlay frame sender
         {
+            // Get the global overlay frame sender
+            let global_sender_opt = {
+                let global_sender_lock = crate::OVERLAY_LAYER_FRAME_SENDER.read();
+                global_sender_lock.as_ref().cloned()
+            };
+            
+            // Update our local overlay frame sender
             let mut overlay_frame_sender_lock = self.overlay_frame_sender.lock().unwrap();
-            if overlay_frame_sender_lock.is_none() || overlay_frame_sender_lock.as_ref().unwrap().receiver_count() == 0 {
-                println!("[WgpuComposite] Creating new overlay frame sender channel");
+            
+            if let Some(global_sender) = global_sender_opt {
+                // Use the global sender if it exists
+                println!("[WgpuComposite] Using global overlay frame sender with {} receivers", global_sender.receiver_count());
+                *overlay_frame_sender_lock = Some(global_sender);
+            } else {
+                // Create a new sender if global doesn't exist (should not happen)
+                println!("[WgpuComposite] WARNING: No global overlay frame sender found, creating new one");
                 let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
-                *overlay_frame_sender_lock = Some(tx);
+                
+                // Update both local and global senders
+                *overlay_frame_sender_lock = Some(tx.clone());
+                
+                // Update the global sender
+                let mut global_sender_write = crate::OVERLAY_LAYER_FRAME_SENDER.write();
+                *global_sender_write = Some(tx);
             }
+            
             println!("[WgpuComposite] Overlay frame sender has {} receivers", 
                 overlay_frame_sender_lock.as_ref().map_or(0, |tx| tx.receiver_count()));
         }
@@ -189,8 +246,41 @@ impl WgpuComposite {
         *self.is_running.lock().unwrap() = true;
         
         // Create a camera layer in the compositor
-        let camera_layer = Layer::new("camera");
+        let camera_layer = Layer::new(
+            "camera".to_string(),
+            Mat4::IDENTITY,
+            1.0,
+            0.0,
+            0,
+            true,
+            0,
+            0,
+            width,
+            height,
+        );
+        println!("[WgpuComposite] Adding camera layer to compositor");
         self.compositor.lock().unwrap().add_layer(camera_layer)?;
+        
+        // Add a debug layer to ensure we have at least one visible layer
+        println!("[WgpuComposite] Adding debug layer to compositor");
+        let debug_layer = Layer::new(
+            "debug_layer".to_string(),
+            Mat4::IDENTITY,
+            1.0,
+            0.0,
+            1,
+            true,
+            0,
+            0,
+            width,
+            height,
+        );
+        
+        // Add the debug layer to the compositor
+        match self.compositor.lock().unwrap().add_layer(debug_layer) {
+            Ok(_) => println!("[WgpuComposite] Debug layer added successfully"),
+            Err(e) => println!("[WgpuComposite] Failed to add debug layer: {}", e),
+        };
         
         // Start the compositor task
         let compositor_clone = self.compositor.clone();

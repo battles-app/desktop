@@ -393,6 +393,12 @@ impl WgpuCompositor {
     
     /// Set the frame sender
     pub fn set_frame_sender(&mut self, sender: broadcast::Sender<Vec<u8>>) {
+        println!("[WgpuCompositor] Setting frame sender with {} receivers", sender.receiver_count());
+        
+        // Create a receiver to ensure the sender has at least one receiver
+        let _receiver = sender.subscribe();
+        println!("[WgpuCompositor] Created a receiver, now sender has {} receivers", sender.receiver_count());
+        
         *self.frame_sender.lock().unwrap() = Some(sender);
     }
     
@@ -566,6 +572,14 @@ impl WgpuCompositor {
         
         // Sort layers by z-order
         let mut sorted_layers: Vec<&Layer> = self.layers.values().collect();
+        println!("[WgpuCompositor] Total layers: {}", sorted_layers.len());
+        
+        // Debug layer info
+        for (i, layer) in sorted_layers.iter().enumerate() {
+            println!("[WgpuCompositor] Layer {}: id={}, visible={}, z_order={}, texture={:?}",
+                i, layer.id, layer.visible, layer.z_order, layer.texture.is_some());
+        }
+        
         sorted_layers.sort_by_key(|layer| layer.z_order);
         
         // Filter visible layers
@@ -574,8 +588,12 @@ impl WgpuCompositor {
             .filter(|layer| layer.visible)
             .collect();
         
+        println!("[WgpuCompositor] Visible layers: {}", visible_layers.len());
+        
         // Skip rendering if there are no visible layers
         if visible_layers.is_empty() || self.bind_group.is_none() {
+            println!("[WgpuCompositor] No visible layers to render or bind_group is None: bind_group={:?}", 
+                self.bind_group.is_some());
             return Err(anyhow!("No visible layers to render"));
         }
         
