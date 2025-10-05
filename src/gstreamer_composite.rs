@@ -464,8 +464,7 @@ impl GStreamerComposite {
         let overlay_appsink = ElementFactory::make("appsink")
             .name(&format!("overlay_layer_{}", fx_id))
             .property("emit-signals", true)
-            .property("sync", false) // Don't sync to clock - let frames flow naturally
-            .property("async", false) // Process frames immediately
+            .property("sync", true) // Sync to clock for proper timing
             .property("max-buffers", 2u32)
             .property_from_str("drop", "true")
             .build()
@@ -833,12 +832,12 @@ impl GStreamerComposite {
         println!("[Composite FX] ║   tee → [compositor sink_1, overlay debug appsink]");
         println!("[Composite FX] ║");
         println!("[Composite FX] ║ ⚙️  ACTIVE TRANSFORMATIONS:");
-        println!("[Composite FX] ║   • videorate: Adapts source FPS → {} fps (preserves frame count)", target_fps);
+        println!("[Composite FX] ║   • videorate: Adapts source FPS → {} fps (with sync=true on appsink)", target_fps);
         println!("[Composite FX] ║   • videoscale: Adapts source resolution → {}x{}", target_width, target_height);
         if use_chroma_key {
             println!("[Composite FX] ║   • alpha: Removes {} color", keycolor);
         }
-        println!("[Composite FX] ║   • appsink sync=false: Frames flow at natural video speed without clock sync");
+        println!("[Composite FX] ║   • Natural timing: videorate + appsink sync enforce correct playback speed");
         println!("[Composite FX] ║");
         println!("[Composite FX] ║ ⚡ FX should now be visible on:");
         println!("[Composite FX] ║   1. Composition canvas (camera + FX overlay)");
