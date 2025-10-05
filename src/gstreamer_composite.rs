@@ -40,11 +40,11 @@ impl GStreamerComposite {
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.frame_sender.write() = Some(sender);
     }
-    
+
     pub fn set_camera_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.camera_frame_sender.write() = Some(sender);
     }
-    
+
     pub fn set_overlay_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.overlay_frame_sender.write() = Some(sender);
     }
@@ -93,7 +93,7 @@ impl GStreamerComposite {
         if let Some(pipeline) = &self.pipeline {
             let _ = pipeline.set_state(gst::State::Null);
         }
-        
+
         *self.is_running.write() = true;
         
         let device_index: u32 = camera_device_id.parse()
@@ -111,7 +111,7 @@ impl GStreamerComposite {
         // Camera: mfvideosrc → videoconvert → videoscale → videorate → compositor sink_0
         // (FX will be added dynamically to compositor sink_1)
         // Output: compositor → tee → (preview appsink, camera_layer appsink)
-        
+
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
@@ -163,30 +163,30 @@ impl GStreamerComposite {
             .ok_or("Failed to get preview appsink")?
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
-        
+
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        
+
         preview_sink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
                     if !*is_running.read() {
                         return Ok(gst::FlowSuccess::Ok);
                     }
-                    
+
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-                    
-                    if let Some(sender) = frame_sender.read().as_ref() {
+
+                        if let Some(sender) = frame_sender.read().as_ref() {
                         let _ = sender.send(map.as_slice().to_vec());
                     }
-                    
+
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
         );
-        
+
         // Set up camera layer appsink
         let camera_sink = pipeline.by_name("camera_layer")
             .ok_or("Failed to get camera_layer appsink")?
@@ -195,22 +195,22 @@ impl GStreamerComposite {
         
         let camera_frame_sender = self.camera_frame_sender.clone();
         let is_running_camera = self.is_running.clone();
-        
+
         camera_sink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
                     if !*is_running_camera.read() {
                         return Ok(gst::FlowSuccess::Ok);
                     }
-                    
+
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-                    
-                    if let Some(sender) = camera_frame_sender.read().as_ref() {
+
+                        if let Some(sender) = camera_frame_sender.read().as_ref() {
                         let _ = sender.send(map.as_slice().to_vec());
                     }
-                    
+
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
@@ -219,10 +219,10 @@ impl GStreamerComposite {
         // Start pipeline
         pipeline.set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start pipeline: {}", e))?;
-        
+
         self.pipeline = Some(pipeline);
         println!("[Composite] Started successfully");
-        
+
         Ok(())
     }
     
@@ -281,22 +281,22 @@ impl GStreamerComposite {
             .property("location", &file_path)
             .build()
             .map_err(|e| format!("Failed to create filesrc: {}", e))?;
-        
+
         let decodebin = ElementFactory::make("decodebin")
             .name(&format!("fxdecode_{}", fx_id))
             .build()
             .map_err(|e| format!("Failed to create decodebin: {}", e))?;
-        
+
         let videoconvert = ElementFactory::make("videoconvert")
             .name(&format!("fxconvert_{}", fx_id))
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
-        
+
         let videoscale = ElementFactory::make("videoscale")
             .name(&format!("fxscale_{}", fx_id))
             .build()
             .map_err(|_| "Failed to create videoscale")?;
-        
+
         // Parse chroma key color
         let rgb = Self::hex_to_rgb(&keycolor)?;
         
@@ -309,7 +309,7 @@ impl GStreamerComposite {
                 .property("target-g", rgb.1 as u32)
                 .property("target-b", rgb.2 as u32)
                 .property("angle", (tolerance * 180.0) as f32)
-                .build()
+            .build()
                 .map_err(|e| format!("Failed to create alpha: {}", e))?;
             Some(alpha)
         } else {
@@ -328,8 +328,73 @@ impl GStreamerComposite {
             .property("skip-to-first", false) // Maintain original timing
             .property("drop-only", false) // Allow duplication (default, but explicit)
             .property("average-period", 0u64) // No averaging, immediate conversion
+            .property("max-rate", i32::MAX) // No rate limiting
             .build()
             .map_err(|_| "Failed to create videorate")?;
+        
+        // Add pad probes to monitor videorate input/output for debugging
+        let videorate_clone_for_probe = videorate.clone();
+        let fx_id_for_probe = fx_id;
+        std::thread::spawn(move || {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            use std::sync::Arc;
+            use parking_lot::Mutex;
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            
+            if let Some(sink_pad) = videorate_clone_for_probe.static_pad("sink") {
+                let frame_count_in = Arc::new(AtomicU64::new(0));
+                let last_pts_in = Arc::new(Mutex::new(None::<gst::ClockTime>));
+                
+                sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+                    if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
+                        let count = frame_count_in.fetch_add(1, Ordering::Relaxed) + 1;
+                        let pts = buffer.pts();
+                        
+                        if count <= 3 || count % 30 == 0 {
+                            let last = *last_pts_in.lock();
+                            let duration = if let (Some(curr), Some(last)) = (pts, last) {
+                                if curr > last {
+                                    Some((curr.nseconds() - last.nseconds()) / 1_000_000)
+                                } else { None }
+                            } else { None };
+                            
+                            println!("[FX {} videorate IN] Frame #{}: PTS={:?}, Delta={:?}ms", 
+                                     fx_id_for_probe, count, pts.map(|p| p.mseconds()), duration);
+                        }
+                        
+                        *last_pts_in.lock() = pts;
+                    }
+                    gst::PadProbeReturn::Ok
+                });
+            }
+            
+            if let Some(src_pad) = videorate_clone_for_probe.static_pad("src") {
+                let frame_count_out = Arc::new(AtomicU64::new(0));
+                let last_pts_out = Arc::new(Mutex::new(None::<gst::ClockTime>));
+                
+                src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+                    if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
+                        let count = frame_count_out.fetch_add(1, Ordering::Relaxed) + 1;
+                        let pts = buffer.pts();
+                        
+                        if count <= 3 || count % 30 == 0 {
+                            let last = *last_pts_out.lock();
+                            let duration = if let (Some(curr), Some(last)) = (pts, last) {
+                                if curr > last {
+                                    Some((curr.nseconds() - last.nseconds()) / 1_000_000)
+                                } else { None }
+                            } else { None };
+                            
+                            println!("[FX {} videorate OUT] Frame #{}: PTS={:?}, Delta={:?}ms", 
+                                     fx_id_for_probe, count, pts.map(|p| p.mseconds()), duration);
+                        }
+                        
+                        *last_pts_out.lock() = pts;
+                    }
+                    gst::PadProbeReturn::Ok
+                });
+            }
+        });
         
         // Get target dimensions and FPS
         let target_width = *self.target_width.read();
@@ -352,18 +417,16 @@ impl GStreamerComposite {
             .field("format", "BGRA")
             .field("framerate", gst::Fraction::new(target_fps as i32, 1))
             .build();
-        
+
         let capsfilter = ElementFactory::make("capsfilter")
             .name(&format!("fxcaps_{}", fx_id))
             .property("caps", &caps)
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
-        
-        // Identity element for timestamp offsetting
-        // This will be configured later to align FX start with current pipeline time
+
+        // Identity element (passthrough)
         let identity = ElementFactory::make("identity")
             .name(&format!("fxidentity_{}", fx_id))
-            .property("sync", false) // Don't sync to clock
             .build()
             .map_err(|_| "Failed to create identity")?;
         
@@ -372,7 +435,7 @@ impl GStreamerComposite {
             .name(&format!("overlay_tee_{}", fx_id))
             .build()
             .map_err(|_| "Failed to create overlay tee")?;
-        
+
         let overlay_queue1 = ElementFactory::make("queue")
             .name(&format!("overlay_queue1_{}", fx_id))
             .property("max-size-buffers", 2u32)
@@ -386,7 +449,7 @@ impl GStreamerComposite {
             .property("max-size-time", 0u64) // Disable time-based buffering
             .build()
             .map_err(|_| "Failed to create overlay_queue2")?;
-        
+
         let overlay_convert = ElementFactory::make("videoconvert")
             .name(&format!("overlay_convert_{}", fx_id))
             .build()
@@ -401,22 +464,27 @@ impl GStreamerComposite {
         let overlay_appsink = ElementFactory::make("appsink")
             .name(&format!("overlay_layer_{}", fx_id))
             .property("emit-signals", true)
-            .property("sync", false) // Don't sync to clock
-            .property("async", false) // Process buffers immediately
+            .property("sync", true) // Sync to clock for proper timing
             .property("max-buffers", 2u32)
             .property_from_str("drop", "true")
             .build()
             .map_err(|_| "Failed to create overlay_appsink")?;
         
+        // Add clocksync element to ensure frames are delivered at correct rate to compositor
+        let clocksync = ElementFactory::make("clocksync")
+            .name(&format!("fxclocksync_{}", fx_id))
+            .build()
+            .map_err(|_| "Failed to create clocksync")?;
+        
         // Add all elements to bin
         if let Some(ref alpha) = alpha_elem {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &videorate, &capsfilter, &identity, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
-        
+
         // Link static elements
         gst::Element::link_many(&[&filesrc, &decodebin])
             .map_err(|_| "Failed to link filesrc → decodebin")?;
@@ -449,30 +517,30 @@ impl GStreamerComposite {
         // Set up overlay appsink callback
         let overlay_frame_sender = self.overlay_frame_sender.clone();
         let is_running_overlay = self.is_running.clone();
-        
+
         let overlay_appsink_cast = overlay_appsink.dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast overlay_appsink")?;
-        
+
         overlay_appsink_cast.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
                     if !*is_running_overlay.read() {
                         return Ok(gst::FlowSuccess::Ok);
                     }
-                    
+
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-                    
+
                     if let Some(sender) = overlay_frame_sender.read().as_ref() {
                         let _ = sender.send(map.as_slice().to_vec());
                     }
-                    
+
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
         );
-        
+
         // Create ghost pad
         let final_src_pad = overlay_queue1.static_pad("src")
             .ok_or("Failed to get overlay_queue1 src pad")?;
@@ -593,7 +661,7 @@ impl GStreamerComposite {
                     return;
                 },
             };
-            
+
             let structure = match caps.structure(0) {
                 Some(s) => s,
                 None => {
@@ -602,7 +670,7 @@ impl GStreamerComposite {
                     return;
                 },
             };
-            
+
             let media_type = structure.name();
             println!("[Composite FX] ║   • Media type: {}", media_type);
             
@@ -612,18 +680,18 @@ impl GStreamerComposite {
                 println!("[Composite FX] ╚════════════════════════════════════════════════════════════════\n");
                 return;
             }
-            
+
             println!("[Composite FX] ║");
             println!("[Composite FX] ║ ✅ Video pad detected - proceeding with link");
             println!("[Composite FX] ╚════════════════════════════════════════════════════════════════\n");
             
             let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
-            
+
             if sink_pad.is_linked() {
                 println!("[Composite FX] ⚠️ Videoconvert sink already linked - skipping");
                 return;
             }
-            
+
             println!("[Composite FX] 🔗 Linking decodebin → videoconvert...");
             match src_pad.link(&sink_pad) {
                 Ok(_) => println!("[Composite FX] ✅ Successfully linked decodebin → videoconvert!"),
@@ -654,13 +722,13 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("zorder", 1u32);
         comp_sink_pad.set_property("alpha", 1.0f64);
         println!("[Composite FX] ✅ Initial compositor properties set (zorder=1, alpha=1.0)");
-        
+
         // Link FX bin to compositor
         println!("[Composite FX] 🔗 Linking FX bin ghost pad to compositor sink_1...");
         ghost_pad.link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
-        
+
         // Get pipeline timing info before syncing
         let pipeline_clock = pipeline.clock();
         let pipeline_base_time = pipeline.base_time();
