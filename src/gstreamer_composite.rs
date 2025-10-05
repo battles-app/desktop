@@ -511,6 +511,8 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
 
+        println!("[Composite FX] 🎭 Creating overlay debug elements...");
+
         // Create overlay layer tee and appsink for debugging
         let overlay_tee = ElementFactory::make("tee")
             .name("overlay_tee")
@@ -543,6 +545,8 @@ impl GStreamerComposite {
             .property("max-size-buffers", 2u32)
             .build()
             .map_err(|_| "Failed to create overlay queue")?;
+
+        println!("[Composite FX] ✅ Overlay debug elements created");
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
@@ -596,26 +600,37 @@ impl GStreamerComposite {
         }
 
         // Link capsfilter to overlay tee
+        println!("[Composite FX] 🔗 Linking capsfilter → overlay_tee...");
         gst::Element::link(&capsfilter, &overlay_tee)
             .map_err(|_| "Failed to link capsfilter to overlay tee")?;
+        println!("[Composite FX] ✅ Capsfilter → overlay_tee linked");
 
         // Request pads from overlay tee for branching
+        println!("[Composite FX] 🔌 Requesting overlay tee pads...");
         let overlay_tee_src1 = overlay_tee.request_pad_simple("src_%u")
             .ok_or("Failed to request overlay tee src1 pad")?;
         let overlay_tee_src2 = overlay_tee.request_pad_simple("src_%u")
             .ok_or("Failed to request overlay tee src2 pad")?;
+        println!("[Composite FX] ✅ Overlay tee pads requested: src1={}, src2={}",
+                 overlay_tee_src1.name(), overlay_tee_src2.name());
 
         // Link tee src1 to compositor via queue
+        println!("[Composite FX] 🔗 Linking overlay_tee src1 → overlay_queue...");
         overlay_tee_src1.link(&overlay_queue.static_pad("sink").unwrap())
             .map_err(|_| "Failed to link overlay tee src1 to queue")?;
+        println!("[Composite FX] ✅ Overlay tee src1 → overlay_queue linked");
 
         // Link tee src2 to debug branch
+        println!("[Composite FX] 🔗 Linking overlay_tee src2 → overlay_videoconvert...");
         overlay_tee_src2.link(&overlay_videoconvert.static_pad("sink").unwrap())
             .map_err(|_| "Failed to link overlay tee src2 to videoconvert")?;
+        println!("[Composite FX] ✅ Overlay tee src2 → overlay_videoconvert linked");
 
         // Link debug branch elements
+        println!("[Composite FX] 🔗 Linking overlay debug branch...");
         gst::Element::link_many(&[&overlay_videoconvert, &overlay_jpegenc, &overlay_appsink])
             .map_err(|_| "Failed to link overlay debug branch")?;
+        println!("[Composite FX] ✅ Overlay debug branch linked: videoconvert → jpegenc → appsink");
 
         let final_element = overlay_queue.clone();
         
