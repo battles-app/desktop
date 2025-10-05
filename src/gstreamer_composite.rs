@@ -1,7 +1,7 @@
 // Clean GStreamer composite implementation
 // Purpose: Combine camera layer (back) + effect layer (front with chroma key) at specified FPS
 use gstreamer::prelude::*;
-use gstreamer::{self as gst, Pipeline, Element, ElementFactory};
+use gstreamer::{self as gst, Pipeline, ElementFactory};
 use gstreamer_app::AppSink;
 use tokio::sync::broadcast;
 use std::sync::Arc;
@@ -262,9 +262,10 @@ impl GStreamerComposite {
         };
         
         // Videorate to match target FPS
+        // Note: Don't use drop-only=true! FX videos may be lower FPS (24fps)
+        // and need frame duplication to reach target FPS (30/60fps)
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
-            .property("drop-only", true)
             .build()
             .map_err(|_| "Failed to create videorate")?;
         
@@ -400,63 +401,156 @@ impl GStreamerComposite {
         
         // Connect decodebin dynamic pad
         let videoconvert_clone = videoconvert.clone();
+        let file_path_for_log = file_path.clone();
         decodebin.connect_pad_added(move |_dbin, src_pad| {
+            println!("[Composite FX] 🔗 Decodebin pad-added callback triggered!");
+            println!("[Composite FX] 📁 File: {}", file_path_for_log);
+            println!("[Composite FX] 🏷️ Pad name: {}", src_pad.name());
+            
             let caps = match src_pad.current_caps() {
-                Some(caps) => caps,
-                None => return,
+                Some(caps) => {
+                    println!("[Composite FX] 📊 Caps: {}", caps);
+                    caps
+                },
+                None => {
+                    println!("[Composite FX] ⚠️ No caps yet on pad");
+                    return;
+                },
             };
             
             let structure = match caps.structure(0) {
                 Some(s) => s,
-                None => return,
+                None => {
+                    println!("[Composite FX] ⚠️ No structure in caps");
+                    return;
+                },
             };
             
-            if !structure.name().starts_with("video/") {
+            let media_type = structure.name();
+            println!("[Composite FX] 🎬 Media type: {}", media_type);
+            
+            if !media_type.starts_with("video/") {
+                println!("[Composite FX] ⏭️ Skipping non-video pad: {}", media_type);
                 return;
             }
             
             let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
+            
             if sink_pad.is_linked() {
+                println!("[Composite FX] ⚠️ Videoconvert sink already linked - skipping");
                 return;
             }
             
-            let _ = src_pad.link(&sink_pad);
+            println!("[Composite FX] 🔗 Linking decodebin → videoconvert...");
+            match src_pad.link(&sink_pad) {
+                Ok(_) => println!("[Composite FX] ✅ Successfully linked decodebin → videoconvert!"),
+                Err(e) => println!("[Composite FX] ❌ Failed to link: {:?}", e),
+            }
         });
         
         // Add bin to pipeline
+        println!("[Composite FX] 📦 Adding FX bin to pipeline...");
         pipeline.add(&fx_bin)
             .map_err(|_| "Failed to add FX bin to pipeline")?;
+        println!("[Composite FX] ✅ FX bin added to pipeline");
         
         // Request compositor sink_1 pad
         if let Some(existing_pad) = compositor.static_pad("sink_1") {
+            println!("[Composite FX] 🔓 Releasing existing compositor sink_1 pad");
             compositor.release_request_pad(&existing_pad);
         }
         
+        println!("[Composite FX] 🎭 Requesting compositor sink_1 pad...");
         let comp_sink_pad = compositor.request_pad_simple("sink_1")
             .ok_or("Failed to request compositor sink_1")?;
+        println!("[Composite FX] ✅ Got compositor sink_1 pad: {}", comp_sink_pad.name());
         
         // Set compositor properties (zorder=1, alpha=1.0, fill canvas)
+        println!("[Composite FX] 🎛️ Setting compositor properties...");
         comp_sink_pad.set_property("zorder", 1u32);
         comp_sink_pad.set_property("alpha", 1.0f64);
         comp_sink_pad.set_property("xpos", 0i32);
         comp_sink_pad.set_property("ypos", 0i32);
         comp_sink_pad.set_property("width", target_width as i32);
         comp_sink_pad.set_property("height", target_height as i32);
+        println!("[Composite FX] ✅ Compositor properties set (zorder=1, {}x{} at 0,0)", target_width, target_height);
         
         // Link FX bin to compositor
+        println!("[Composite FX] 🔗 Linking FX bin ghost pad to compositor sink_1...");
         ghost_pad.link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
+        println!("[Composite FX] ✅ FX bin linked to compositor");
         
         // Sync FX bin with pipeline
         if let Some(base_time) = pipeline.base_time() {
             fx_bin.set_base_time(base_time);
+            println!("[Composite FX] ⏱️ FX bin base time set: {:?}", base_time);
+        } else {
+            println!("[Composite FX] ⚠️ No base time available from pipeline");
         }
         
         // Start FX bin
-        fx_bin.set_state(gst::State::Playing)
+        println!("[Composite FX] ▶️ Setting FX bin state to PLAYING...");
+        let state_change = fx_bin.set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start FX bin: {:?}", e))?;
+        println!("[Composite FX] 🔄 State change result: {:?}", state_change);
         
-        println!("[Composite FX] Started: {}x{} @ {}fps", target_width, target_height, target_fps);
+        // Wait for state change to complete (with 2 second timeout)
+        match fx_bin.state(Some(gst::ClockTime::from_seconds(2))) {
+            (Ok(_), gst::State::Playing, _) => {
+                println!("[Composite FX] ✅ FX bin reached PLAYING state successfully!");
+            }
+            (result, current, pending) => {
+                println!("[Composite FX] ⚠️ State change incomplete: result={:?}, current={:?}, pending={:?}", 
+                         result, current, pending);
+            }
+        }
+        
+        // Check for any pipeline errors on the bus
+        if let Some(bus) = pipeline.bus() {
+            // Pop all pending messages
+            let mut error_found = false;
+            while let Some(msg) = bus.pop() {
+                use gst::MessageView;
+                match msg.view() {
+                    MessageView::Error(err) => {
+                        error_found = true;
+                        let err_msg = format!("Pipeline error: {} - {}", err.error(), err.debug().unwrap_or_else(|| "".into()));
+                        println!("[Composite FX] ❌ {}", err_msg);
+                        if let Some(src) = msg.src() {
+                            println!("[Composite FX] ❌ Error source: {}", src.name());
+                        }
+                    }
+                    MessageView::Warning(warn) => {
+                        println!("[Composite FX] ⚠️ Pipeline warning: {} - {}", warn.error(), warn.debug().unwrap_or_else(|| "".into()));
+                        if let Some(src) = msg.src() {
+                            println!("[Composite FX] ⚠️ Warning source: {}", src.name());
+                        }
+                    }
+                    MessageView::StateChanged(state) => {
+                        if let Some(src) = msg.src() {
+                            let src_name = src.name();
+                            if src_name.starts_with("fx") || src_name == "fxbin" {
+                                println!("[Composite FX] 🔄 {} state: {:?} → {:?}", src_name, state.old(), state.current());
+                            }
+                        }
+                    }
+                    MessageView::AsyncDone(_) => {
+                        println!("[Composite FX] 📢 Async done");
+                    }
+                    _ => {}
+                }
+            }
+            
+            if error_found {
+                return Err("FX playback failed - check logs above for details".to_string());
+            }
+        }
+        
+        println!("[Composite FX] 🎉 ===== FX SETUP COMPLETE =====");
+        println!("[Composite FX] 📊 Output: {}x{} @ {}fps", target_width, target_height, target_fps);
+        println!("[Composite FX] 📁 File: {}", file_path);
+        println!("[Composite FX] 🎨 Chroma key: {} (enabled: {})", keycolor, use_chroma_key);
         Ok(())
     }
     
