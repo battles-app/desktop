@@ -736,6 +736,7 @@ async fn initialize_composite_system() -> Result<String, String> {
     
     start_composite_websocket_server().await;
     start_camera_layer_websocket_server().await;
+    // Note: overlay_layer_websocket_server starts on first FX play (see play_composite_fx)
     
     println!("[Composite] ✅ Composite system initialized on port {}", COMPOSITE_WS_PORT);
     Ok(format!("Composite initialized - WebSocket on port {}", COMPOSITE_WS_PORT))
@@ -1056,8 +1057,8 @@ async fn stop_composite_fx() -> Result<(), String> {
     }
     drop(composite_lock);
 
-    let mut overlay_started = OVERLAY_WS_STARTED.lock().unwrap();
-    *overlay_started = false;
+    // Note: Keep overlay WebSocket server running (don't reset OVERLAY_WS_STARTED)
+    // It will be reused for the next FX play
 
     Ok(())
 }
