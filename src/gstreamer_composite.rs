@@ -278,6 +278,17 @@ impl GStreamerComposite {
         let target_height = *self.target_height.read();
         let target_fps = *self.target_fps.read();
         
+        println!("\n");
+        println!("[Composite FX] ╔════════════════════════════════════════════════════════════════");
+        println!("[Composite FX] ║ 🎬 NEW FX PLAYBACK REQUEST");
+        println!("[Composite FX] ╠════════════════════════════════════════════════════════════════");
+        println!("[Composite FX] ║ 📁 File: {}", file_path);
+        println!("[Composite FX] ║ 🎨 Chroma key: {} (enabled: {})", keycolor, use_chroma_key);
+        println!("[Composite FX] ║ 📐 Target resolution: {}x{}", target_width, target_height);
+        println!("[Composite FX] ║ 🎞️  Target FPS: {}", target_fps);
+        println!("[Composite FX] ╚════════════════════════════════════════════════════════════════");
+        println!("");
+        
         // Capsfilter to set output format and framerate
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
@@ -416,29 +427,63 @@ impl GStreamerComposite {
         // Connect decodebin dynamic pad
         let videoconvert_clone = videoconvert.clone();
         let file_path_for_log = file_path.clone();
+        let target_fps_for_log = target_fps;
         decodebin.connect_pad_added(move |_dbin, src_pad| {
-            println!("[Composite FX] 🔗 Decodebin pad-added callback triggered!");
-            println!("[Composite FX] 📁 File: {}", file_path_for_log);
-            println!("[Composite FX] 🏷️ Pad name: {}", src_pad.name());
+            println!("\n[Composite FX] ╔════════════════════════════════════════════════════════════════");
+            println!("[Composite FX] ║ 🔗 DECODEBIN PAD ADDED - Source Media Detected");
+            println!("[Composite FX] ╠════════════════════════════════════════════════════════════════");
+            println!("[Composite FX] ║ 📁 File: {}", file_path_for_log);
+            println!("[Composite FX] ║ 🏷️ Pad name: {}", src_pad.name());
             
             let caps = match src_pad.current_caps() {
                 Some(caps) => {
-                    println!("[Composite FX] 📊 Caps: {}", caps);
+                    println!("[Composite FX] ║");
+                    println!("[Composite FX] ║ 📊 RAW CAPS: {}", caps);
                     
-                    // Extract and log the source framerate
+                    // Extract detailed media info
                     if let Some(structure) = caps.structure(0) {
+                        println!("[Composite FX] ║");
+                        println!("[Composite FX] ║ 🎞️  SOURCE MEDIA DETAILS:");
+                        
+                        // Framerate
                         if let Ok(framerate) = structure.get::<gst::Fraction>("framerate") {
-                            println!("[Composite FX] 🎬 Source FPS: {} ({}/{})", 
-                                     framerate.numer() as f64 / framerate.denom() as f64,
-                                     framerate.numer(),
-                                     framerate.denom());
+                            let fps = framerate.numer() as f64 / framerate.denom() as f64;
+                            println!("[Composite FX] ║   • Source FPS: {:.2} ({}/{})", 
+                                     fps, framerate.numer(), framerate.denom());
+                            println!("[Composite FX] ║   • Target FPS: {}", target_fps_for_log);
+                            
+                            if fps < target_fps_for_log as f64 {
+                                let ratio = target_fps_for_log as f64 / fps;
+                                println!("[Composite FX] ║   • videorate will DUPLICATE frames ({}x)", ratio);
+                            } else if fps > target_fps_for_log as f64 {
+                                let ratio = fps / target_fps_for_log as f64;
+                                println!("[Composite FX] ║   • videorate will DROP frames (keep 1 in {})", ratio);
+                            } else {
+                                println!("[Composite FX] ║   • videorate will PASS-THROUGH (same FPS)");
+                            }
+                        }
+                        
+                        // Resolution
+                        if let (Ok(width), Ok(height)) = (structure.get::<i32>("width"), structure.get::<i32>("height")) {
+                            println!("[Composite FX] ║   • Source resolution: {}x{}", width, height);
+                        }
+                        
+                        // Format
+                        if let Ok(format) = structure.get::<&str>("format") {
+                            println!("[Composite FX] ║   • Source format: {}", format);
+                        }
+                        
+                        // Pixel aspect ratio
+                        if let Ok(par) = structure.get::<gst::Fraction>("pixel-aspect-ratio") {
+                            println!("[Composite FX] ║   • Pixel aspect ratio: {}/{}", par.numer(), par.denom());
                         }
                     }
                     
                     caps
                 },
                 None => {
-                    println!("[Composite FX] ⚠️ No caps yet on pad");
+                    println!("[Composite FX] ║ ⚠️ No caps yet on pad");
+                    println!("[Composite FX] ╚════════════════════════════════════════════════════════════════\n");
                     return;
                 },
             };
@@ -446,18 +491,25 @@ impl GStreamerComposite {
             let structure = match caps.structure(0) {
                 Some(s) => s,
                 None => {
-                    println!("[Composite FX] ⚠️ No structure in caps");
+                    println!("[Composite FX] ║ ⚠️ No structure in caps");
+                    println!("[Composite FX] ╚════════════════════════════════════════════════════════════════\n");
                     return;
                 },
             };
             
             let media_type = structure.name();
-            println!("[Composite FX] 🎬 Media type: {}", media_type);
+            println!("[Composite FX] ║   • Media type: {}", media_type);
             
             if !media_type.starts_with("video/") {
-                println!("[Composite FX] ⏭️ Skipping non-video pad: {}", media_type);
+                println!("[Composite FX] ║");
+                println!("[Composite FX] ║ ⏭️ Skipping non-video pad ({})", media_type);
+                println!("[Composite FX] ╚════════════════════════════════════════════════════════════════\n");
                 return;
             }
+            
+            println!("[Composite FX] ║");
+            println!("[Composite FX] ║ ✅ Video pad detected - proceeding with link");
+            println!("[Composite FX] ╚════════════════════════════════════════════════════════════════\n");
             
             let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
             
