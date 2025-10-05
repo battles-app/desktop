@@ -407,11 +407,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     /// Update texture array and bind group
-    fn update_texture_array(&mut self) {
-        // Create texture array views
-        let texture_views: Vec<_> = self.texture_array.iter().map(|tex| {
-            tex.create_view(&wgpu::TextureViewDescriptor::default())
-        }).collect();
+    pub fn update_texture_array(&mut self) {
+        // Collect all textures from layers that have them
+        self.texture_array.clear();
+        for layer in self.layers.values() {
+            if let Some(texture) = &layer.texture {
+                self.texture_array.push(texture.clone());
+            }
+        }
 
         // Create sampler
         let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
@@ -442,6 +445,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     },
                 ],
             }));
+        } else {
+            // No textures available
+            self.texture_bind_group = None;
         }
     }
 

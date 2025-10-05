@@ -267,14 +267,19 @@ impl WgpuGStreamerCompositor {
                             // Update textures for each layer
                             for layer_id in &layer_ids {
                                 if let Some(frame) = frame_buffer.get_latest_frame(layer_id) {
+                                    println!("[WGPU-GST Compositor] Processing frame for layer {}: {} bytes", layer_id, frame.data.len());
+
                                     // Send raw frame to frontend for debugging (camera layers only)
                                     if layer_id.starts_with("camera") {
-                                        Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, output_size.0, output_size.1);
+                                        Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, 1920, 1080); // Camera native resolution
                                     }
 
-                                    let texture = wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data);
+                                    // Use actual frame dimensions (camera is 1920x1080)
+                                    let texture = wgpu.create_texture_from_rgba(1920, 1080, &frame.data);
                                     if let Some(layer) = wgpu.get_layer_mut(layer_id) {
                                         layer.update_texture(texture);
+                                        // Update the texture array so bind group gets created
+                                        wgpu.update_texture_array();
                                     }
                                 }
                             }
@@ -289,7 +294,15 @@ impl WgpuGStreamerCompositor {
                             // Read back composited frame
                             match wgpu.read_output_texture(&output_texture) {
                                 Ok(rgba_data) => {
+                                    println!("[WGPU-GST Compositor] Read back {} bytes of composited data", rgba_data.len());
+
+                                    // Check if data is not all zeros (first 100 bytes)
+                                    let first_bytes: Vec<u8> = rgba_data.iter().take(100).cloned().collect();
+                                    let has_content = first_bytes.iter().any(|&b| b != 0);
+                                    println!("[WGPU-GST Compositor] First 100 bytes have content: {}", has_content);
+
                                     // Send frames to frontend for debugging
+                                    println!("[WGPU-GST Compositor] Sending composite-frame to frontend");
                                     Self::send_frame_to_frontend(&app_handle, "composite-layer-frame", &rgba_data, width, height);
                                     Self::send_frame_to_frontend(&app_handle, "composite-frame", &rgba_data, width, height);
                                 }
@@ -398,20 +411,34 @@ impl WgpuGStreamerCompositor {
 
     /// Send frame data to frontend via Tauri events
     fn send_frame_to_frontend(app_handle: &AppHandle, event_name: &str, rgba_data: &[u8], width: u32, height: u32) {
+        println!("[WGPU-GST Compositor] send_frame_to_frontend: {} ({}x{} = {} bytes)", event_name, width, height, rgba_data.len());
+
         // Create RGBA image from raw data
         if let Some(img) = image::RgbaImage::from_raw(width, height, rgba_data.to_vec()) {
+            println!("[WGPU-GST Compositor] Created RGBA image for {}", event_name);
+
             // Convert to RGB for JPEG encoding
             let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
 
             // Encode as JPEG
             let mut jpeg_data = Vec::new();
             if let Ok(_) = rgb_img.write_to(&mut std::io::Cursor::new(&mut jpeg_data), image::ImageFormat::Jpeg) {
+                println!("[WGPU-GST Compositor] Encoded JPEG for {}: {} bytes", event_name, jpeg_data.len());
+
                 // Encode as base64
                 let base64_frame = base64::engine::general_purpose::STANDARD.encode(&jpeg_data);
+                println!("[WGPU-GST Compositor] Encoded base64 for {}: {} bytes", event_name, base64_frame.len());
 
                 // Send to frontend
-                let _ = app_handle.emit(event_name, base64_frame);
+                match app_handle.emit(event_name, base64_frame) {
+                    Ok(_) => println!("[WGPU-GST Compositor] Successfully emitted {} event", event_name),
+                    Err(e) => println!("[WGPU-GST Compositor] Failed to emit {} event: {:?}", event_name, e),
+                }
+            } else {
+                println!("[WGPU-GST Compositor] Failed to encode JPEG for {}", event_name);
             }
+        } else {
+            println!("[WGPU-GST Compositor] Failed to create RGBA image for {} ({}x{})", event_name, width, height);
         }
     }
 }
