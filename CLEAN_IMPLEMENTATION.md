@@ -61,10 +61,14 @@ This is a complete rewrite of the GStreamer composite system focused on **simpli
    - Dynamic FX insertion/removal
    - Three output streams (composite + 2 debug layers)
 
-3. **main.rs** (616 lines, was 1534 lines)
-   - Simplified command handlers
-   - Clean WebSocket server setup
-   - Removed excessive monitor capture code
+3. **main.rs** (1534 lines, refactored)
+   - **ONLY camera/composite sections refactored** to use clean implementations
+   - **KEPT ALL ORIGINAL FEATURES**:
+     - Virtual camera (shared memory DirectShow integration)
+     - Monitor capture and screenshot caching
+     - TV monitor window management
+     - Cache plugin configuration
+     - All WebSocket servers
 
 ### Frontend (battles.app/components/)
 4. **CompositeCanvas.vue**
