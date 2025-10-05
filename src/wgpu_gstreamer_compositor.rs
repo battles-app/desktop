@@ -110,6 +110,8 @@ impl WgpuGStreamerCompositor {
         tokio::spawn(async move {
             let mut rx = rx;
             while let Ok(frame_data) = rx.recv().await {
+                println!("[WGPU-GST Compositor] Frame buffer received {} bytes for input {}", frame_data.len(), input_id);
+
                 let pts = gst::ClockTime::from_nseconds(
                     (chrono::Utc::now().timestamp_nanos() % 1_000_000_000) as u64
                 );
@@ -127,6 +129,7 @@ impl WgpuGStreamerCompositor {
                 };
 
                 frame_buffer.push_frame(frame);
+                println!("[WGPU-GST Compositor] Frame stored in buffer for source {}", input_id);
             }
         });
 

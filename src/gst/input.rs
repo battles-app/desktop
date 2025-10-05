@@ -60,7 +60,7 @@ impl GStreamerInput {
                 let source_element = format!("v4l2src device=/dev/video{} is-live=true", device_index);
 
                 #[cfg(target_os = "windows")]
-                let source_element = format!("ksvideosrc device-index={}", device_index);
+                let source_element = format!("mfvideosrc device-index={}", device_index);
 
                 #[cfg(target_os = "macos")]
                 let source_element = format!("avfvideosrc device-index={} is-live=true", device_index);
@@ -107,9 +107,13 @@ impl GStreamerInput {
                         return Ok(gst::FlowSuccess::Ok);
                     }
 
+                    println!("[GST Input {}] Received camera frame", input_id);
+
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+
+                    println!("[GST Input {}] Frame buffer size: {} bytes", input_id, map.size());
 
                     // Send frame data to WGPU compositor
                     if let Some(sender) = frame_sender.read().as_ref() {
@@ -169,8 +173,47 @@ impl GStreamerInput {
         }
 
         // Start pipeline
-        pipeline.set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to start pipeline: {}", e))?;
+        let state_result = pipeline.set_state(gst::State::Playing);
+        println!("[GST Input {}] Set pipeline state to Playing: {:?}", self.id, state_result);
+
+        state_result.map_err(|e| format!("Failed to start pipeline: {}", e))?;
+
+        // Wait for the pipeline to actually reach Playing state
+        println!("[GST Input {}] Waiting for pipeline to reach Playing state...", self.id);
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u32 = 50; // 5 seconds max
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let (state_change_result, current_state, pending_state) = pipeline.state(None);
+            println!("[GST Input {}] Pipeline state check - current: {:?}, pending: {:?}, result: {:?}", self.id, current_state, pending_state, state_change_result);
+
+            match current_state {
+                gst::State::Playing => {
+                    println!("[GST Input {}] Pipeline reached Playing state successfully", self.id);
+                    break;
+                }
+                gst::State::Paused => {
+                    if pending_state == gst::State::Playing {
+                        println!("[GST Input {}] Pipeline is transitioning to Playing...", self.id);
+                    } else {
+                        println!("[GST Input {}] Pipeline stuck in Paused state", self.id);
+                    }
+                }
+                gst::State::Ready | gst::State::Null => {
+                    println!("[GST Input {}] Pipeline in unexpected state: {:?}", self.id, current_state);
+                }
+                gst::State::VoidPending => {
+                    println!("[GST Input {}] Pipeline state void pending", self.id);
+                }
+            }
+
+            attempts += 1;
+            if attempts >= MAX_ATTEMPTS {
+                println!("[GST Input {}] Timeout waiting for Playing state after {} attempts", self.id, attempts);
+                return Err("Timeout waiting for pipeline to reach Playing state".to_string());
+            }
+        }
 
         *self.is_running.write() = true;
         self.pipeline = Some(pipeline);
