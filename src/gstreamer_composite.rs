@@ -316,85 +316,19 @@ impl GStreamerComposite {
             None
         };
         
-        // Videorate to match target FPS
-        // CRITICAL: Preserves original playback speed/duration!
-        // - skip-to-first=false: Don't skip frames at start (maintains timing)
-        // - drop-only=false: Allow frame duplication for upscaling FPS
-        // - Duplicates frames for low FPS (24fps → 60fps)
-        // - Drops frames for high FPS (60fps → 30fps)
-        // Result: Video plays at ORIGINAL speed, outputs at TARGET fps
-        let videorate = ElementFactory::make("videorate")
-            .name(&format!("fxvideorate_{}", fx_id))
-            .property("skip-to-first", false) // Maintain original timing
-            .property("drop-only", false) // Allow duplication (default, but explicit)
-            .property("average-period", 0u64) // No averaging, immediate conversion
-            .property("max-rate", i32::MAX) // No rate limiting
-            .build()
-            .map_err(|_| "Failed to create videorate")?;
+        // DISABLE videorate for perfect timing preservation
+        // The video should play at its natural speed regardless of FPS differences
+        // Let the compositor handle any timing differences
+        // let videorate = ElementFactory::make("videorate")
+        //     .name(&format!("fxvideorate_{}", fx_id))
+        //     .property("skip-to-first", false) // Maintain original timing
+        //     .property("drop-only", false) // Allow duplication (default, but explicit)
+        //     .property("average-period", 0u64) // No averaging, immediate conversion
+        //     .property("max-rate", i32::MAX) // No rate limiting
+        //     .build()
+        //     .map_err(|_| "Failed to create videorate")?;
         
-        // Add pad probes to monitor videorate input/output for debugging
-        let videorate_clone_for_probe = videorate.clone();
-        let fx_id_for_probe = fx_id;
-        std::thread::spawn(move || {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            use std::sync::Arc;
-            use parking_lot::Mutex;
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            
-            if let Some(sink_pad) = videorate_clone_for_probe.static_pad("sink") {
-                let frame_count_in = Arc::new(AtomicU64::new(0));
-                let last_pts_in = Arc::new(Mutex::new(None::<gst::ClockTime>));
-                
-                sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
-                    if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
-                        let count = frame_count_in.fetch_add(1, Ordering::Relaxed) + 1;
-                        let pts = buffer.pts();
-                        
-                        if count <= 3 || count % 30 == 0 {
-                            let last = *last_pts_in.lock();
-                            let duration = if let (Some(curr), Some(last)) = (pts, last) {
-                                if curr > last {
-                                    Some((curr.nseconds() - last.nseconds()) / 1_000_000)
-                                } else { None }
-                            } else { None };
-                            
-                            println!("[FX {} videorate IN] Frame #{}: PTS={:?}, Delta={:?}ms", 
-                                     fx_id_for_probe, count, pts.map(|p| p.mseconds()), duration);
-                        }
-                        
-                        *last_pts_in.lock() = pts;
-                    }
-                    gst::PadProbeReturn::Ok
-                });
-            }
-            
-            if let Some(src_pad) = videorate_clone_for_probe.static_pad("src") {
-                let frame_count_out = Arc::new(AtomicU64::new(0));
-                let last_pts_out = Arc::new(Mutex::new(None::<gst::ClockTime>));
-                
-                src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
-                    if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
-                        let count = frame_count_out.fetch_add(1, Ordering::Relaxed) + 1;
-                        let pts = buffer.pts();
-                        
-                        if count <= 3 || count % 30 == 0 {
-                            let last = *last_pts_out.lock();
-                            let duration = if let (Some(curr), Some(last)) = (pts, last) {
-                                if curr > last {
-                                    Some((curr.nseconds() - last.nseconds()) / 1_000_000)
-                                } else { None }
-                            } else { None };
-                            
-                            println!("[FX {} videorate OUT] Frame #{}: PTS={:?}, Delta={:?}ms", 
-                                     fx_id_for_probe, count, pts.map(|p| p.mseconds()), duration);
-                        }
-                        
-                        *last_pts_out.lock() = pts;
-                    }
-                    gst::PadProbeReturn::Ok
-                });
-            }
-        });
+        // Pad probes disabled since videorate is removed
         
         // Get target dimensions and FPS
         let target_width = *self.target_width.read();
@@ -476,12 +410,12 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create clocksync")?;
         
-        // Add all elements to bin
+        // Add all elements to bin (without videorate)
         if let Some(ref alpha) = alpha_elem {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
@@ -489,12 +423,12 @@ impl GStreamerComposite {
         gst::Element::link_many(&[&filesrc, &decodebin])
             .map_err(|_| "Failed to link filesrc → decodebin")?;
         
-        // Link post-decode chain
+        // Link post-decode chain (without videorate for perfect timing)
         if let Some(ref alpha) = alpha_elem {
-            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &capsfilter, &identity, &clocksync, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain with alpha")?;
         } else {
-            gst::Element::link_many(&[&videoconvert, &videoscale, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, &capsfilter, &identity, &clocksync, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain")?;
         }
         
@@ -576,19 +510,10 @@ impl GStreamerComposite {
                         // Framerate
                         if let Ok(framerate) = structure.get::<gst::Fraction>("framerate") {
                             let fps = framerate.numer() as f64 / framerate.denom() as f64;
-                            println!("[Composite FX] ║   • Source FPS: {:.2} ({}/{})", 
+                            println!("[Composite FX] ║   • Source FPS: {:.2} ({}/{})",
                                      fps, framerate.numer(), framerate.denom());
-                            println!("[Composite FX] ║   • Target FPS: {}", target_fps_for_log);
-                            
-                            if fps < target_fps_for_log as f64 {
-                                let ratio = target_fps_for_log as f64 / fps;
-                                println!("[Composite FX] ║   • videorate will DUPLICATE frames ({}x)", ratio);
-                            } else if fps > target_fps_for_log as f64 {
-                                let ratio = fps / target_fps_for_log as f64;
-                                println!("[Composite FX] ║   • videorate will DROP frames (keep 1 in {})", ratio);
-                            } else {
-                                println!("[Composite FX] ║   • videorate will PASS-THROUGH (same FPS)");
-                            }
+                            println!("[Composite FX] ║   • Compositor FPS: {}", target_fps_for_log);
+                            println!("[Composite FX] ║   • Timing: PRESERVED (no rate conversion)");
                         }
                         
                         // Resolution
@@ -739,14 +664,12 @@ impl GStreamerComposite {
         println!("[Composite FX] ║ Pipeline base_time: {:?}", pipeline_base_time);
         println!("[Composite FX] ║ Pipeline start_time: {:?}", pipeline_start_time);
         println!("[Composite FX] ║ FX bin ID: {}", fx_id);
-        
-        // Log videorate element state
-        println!("\n[Composite FX] 🎞️  VIDEORATE ELEMENT INFO:");
-        println!("[Composite FX] ║ Element name: fxvideorate_{}", fx_id);
-        println!("[Composite FX] ║ skip-to-first: false (maintains timing)");
-        println!("[Composite FX] ║ drop-only: false (allows duplication)");
-        println!("[Composite FX] ║ average-period: 0 (immediate conversion)");
-        println!("[Composite FX] ║ Target FPS: {}", target_fps);
+
+        // Log timing strategy (no videorate conversion)
+        println!("\n[Composite FX] 🎞️  TIMING STRATEGY:");
+        println!("[Composite FX] ║ No videorate conversion - preserving original video timing");
+        println!("[Composite FX] ║ Video will play at natural speed, compositor handles sync");
+        println!("[Composite FX] ║ Target FPS: {} (compositor requirement)", target_fps);
         
         // Use sync_state_with_parent() - the standard GStreamer approach
         // This automatically handles state transitions and timing
@@ -831,19 +754,18 @@ impl GStreamerComposite {
         println!("[Composite FX] ║ 🎞️  PIPELINE FLOW:");
         println!("[Composite FX] ║   filesrc → decodebin → videoconvert → videoscale →");
         if use_chroma_key {
-            println!("[Composite FX] ║   alpha (chroma key) → videorate → capsfilter → identity →");
+            println!("[Composite FX] ║   alpha (chroma key) → capsfilter → identity →");
         } else {
-            println!("[Composite FX] ║   videorate → capsfilter → identity →");
+            println!("[Composite FX] ║   capsfilter → identity →");
         }
         println!("[Composite FX] ║   tee → [compositor sink_1, overlay debug appsink]");
         println!("[Composite FX] ║");
         println!("[Composite FX] ║ ⚙️  ACTIVE TRANSFORMATIONS:");
-        println!("[Composite FX] ║   • videorate: Adapts source FPS → {} fps", target_fps);
         println!("[Composite FX] ║   • videoscale: Adapts source resolution → {}x{}", target_width, target_height);
         if use_chroma_key {
             println!("[Composite FX] ║   • alpha: Removes {} color", keycolor);
         }
-        println!("[Composite FX] ║   • identity: Applies ts-offset for timing sync");
+        println!("[Composite FX] ║   • identity: Preserves original timing (no rate conversion)");
         println!("[Composite FX] ║");
         println!("[Composite FX] ║ ⚡ FX should now be visible on:");
         println!("[Composite FX] ║   1. Composition canvas (camera + FX overlay)");
