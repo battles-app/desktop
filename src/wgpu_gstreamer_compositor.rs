@@ -5,7 +5,8 @@ use gstreamer as gst;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
+use base64::Engine;
 
 /// Main compositor that integrates WGPU rendering with GStreamer I/O
 #[derive(Clone)]
@@ -27,7 +28,7 @@ pub struct WgpuGStreamerCompositor {
 }
 
 impl WgpuGStreamerCompositor {
-    pub async fn new(width: u32, height: u32, fps: u32) -> Result<Self, String> {
+    pub async fn new(width: u32, height: u32, fps: u32, app_handle: AppHandle) -> Result<Self, String> {
         println!("[WGPU-GST Compositor] Creating compositor: {}x{} @ {}fps", width, height, fps);
 
         // Initialize GStreamer
@@ -55,6 +56,7 @@ impl WgpuGStreamerCompositor {
             frame_buffer,
             drift_compensator,
             is_running: Arc::new(RwLock::new(false)),
+            app_handle,
             width,
             height,
             fps,
@@ -238,6 +240,9 @@ impl WgpuGStreamerCompositor {
         let wgpu_compositor = self.wgpu_compositor.clone();
         let frame_buffer = self.frame_buffer.clone();
         let is_running = self.is_running.clone();
+        let app_handle = self.app_handle.clone();
+        let width = self.width;
+        let height = self.height;
 
         tokio::spawn(async move {
             println!("[WGPU-GST Compositor] Compositing loop started");
@@ -258,6 +263,8 @@ impl WgpuGStreamerCompositor {
                             };
 
                             let camera_texture = camera_frame.as_ref().map(|frame| {
+                                // Send raw camera frame to frontend for debugging
+                                Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, output_size.0, output_size.1);
                                 let mut wgpu = wgpu_compositor.write();
                                 wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data)
                             });
@@ -293,8 +300,10 @@ impl WgpuGStreamerCompositor {
 
                             // Read back composited frame
                             match wgpu.read_output_texture(&output_texture) {
-                                Ok(_data) => {
-                                    // TODO: Send to output channels
+                                Ok(rgba_data) => {
+                                    // Send frames to frontend for debugging
+                                    Self::send_frame_to_frontend(&app_handle, "composite-layer-frame", &rgba_data, width, height);
+                                    Self::send_frame_to_frontend(&app_handle, "composite-frame", &rgba_data, width, height);
                                 }
                                 Err(e) => {
                                     println!("[WGPU-GST Compositor] Readback error: {:?}", e);
@@ -397,5 +406,24 @@ impl WgpuGStreamerCompositor {
     /// Get current frame count
     pub fn current_frame(&self) -> u64 {
         self.master_clock.read().current_frame()
+    }
+
+    /// Send frame data to frontend via Tauri events
+    fn send_frame_to_frontend(app_handle: &AppHandle, event_name: &str, rgba_data: &[u8], width: u32, height: u32) {
+        // Create RGBA image from raw data
+        if let Some(img) = image::RgbaImage::from_raw(width, height, rgba_data.to_vec()) {
+            // Convert to RGB for JPEG encoding
+            let rgb_img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+
+            // Encode as JPEG
+            let mut jpeg_data = Vec::new();
+            if let Ok(_) = rgb_img.write_to(&mut std::io::Cursor::new(&mut jpeg_data), image::ImageFormat::Jpeg) {
+                // Encode as base64
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&jpeg_data);
+
+                // Send to frontend
+                let _ = app_handle.emit(event_name, base64_frame);
+            }
+        }
     }
 }

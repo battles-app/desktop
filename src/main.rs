@@ -610,7 +610,7 @@ async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<Str
     }
 
     // Create new compositor (1920x1080 @ 60fps)
-    let compositor = WgpuGStreamerCompositor::new(1920, 1080, 60).await
+    let compositor = WgpuGStreamerCompositor::new(1920, 1080, 60, app_handle.clone()).await
         .map_err(|e| format!("Failed to initialize WGPU compositor: {}", e))?;
 
     *WGPU_GSTREAMER_COMPOSITOR.write() = Some(compositor);
@@ -620,7 +620,7 @@ async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<Str
 }
 
 #[command]
-async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
+async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32, app: tauri::AppHandle) -> Result<(), String> {
     println!("[Composite] Starting WGPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
 
     // Parse device index
@@ -629,7 +629,7 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
 
     // Initialize compositor if needed
     if WGPU_GSTREAMER_COMPOSITOR.read().is_none() {
-        let compositor = WgpuGStreamerCompositor::new(width, height, fps).await
+        let compositor = WgpuGStreamerCompositor::new(width, height, fps, app.clone()).await
             .map_err(|e| format!("Failed to create WGPU compositor: {}", e))?;
         *WGPU_GSTREAMER_COMPOSITOR.write() = Some(compositor);
     }
