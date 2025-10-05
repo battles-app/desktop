@@ -773,7 +773,7 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
             
             // We can't initialize the composite system without a valid AppHandle
             // Just log the error and continue
-            println!("[Composite] Cannot initialize composite system without a valid AppHandle")
+            println!("[Composite] Cannot initialize composite system without a valid AppHandle");
             
             // Try again
             let composite_lock = WGPU_COMPOSITE.read();
