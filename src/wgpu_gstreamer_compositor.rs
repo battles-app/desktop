@@ -106,12 +106,20 @@ impl WgpuGStreamerCompositor {
         let frame_buffer = self.frame_buffer.clone();
         let drift_compensator = self.drift_compensator.clone();
         let input_id = id.clone();
+        let app_handle = self.app_handle.clone();
+        let camera_width = self.width;
+        let camera_height = self.height;
 
         tokio::spawn(async move {
             let mut rx = rx;
             while let Ok(frame_data) = rx.recv().await {
-                println!("[WGPU-GST Compositor] Frame buffer received {} bytes for input {}", frame_data.len(), input_id);
+                // Send camera frames directly to frontend for immediate display
+                if input_id.starts_with("camera_") {
+                    println!("[Camera] Sending frame to frontend: {}x{} ({} bytes)", camera_width, camera_height, frame_data.len());
+                    Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame_data, camera_width, camera_height);
+                }
 
+                // Also store in frame buffer for compositing (optional for now)
                 let pts = gst::ClockTime::from_nseconds(
                     (chrono::Utc::now().timestamp_nanos() % 1_000_000_000) as u64
                 );
@@ -129,7 +137,6 @@ impl WgpuGStreamerCompositor {
                 };
 
                 frame_buffer.push_frame(frame);
-                println!("[WGPU-GST Compositor] Frame stored in buffer for source {}", input_id);
             }
         });
 
