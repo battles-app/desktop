@@ -121,7 +121,11 @@ impl WgpuCompositor {
                 &wgpu::DeviceDescriptor {
                     label: Some("WGPU Compositor Device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: wgpu::Limits {
+                        max_texture_array_layers: 1,
+                        max_binding_array_elements_per_shader_stage: 1,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: wgpu::MemoryHints::default(),
                     trace: wgpu::Trace::default(),
                     experimental_features: wgpu::ExperimentalFeatures::default(),
@@ -133,7 +137,7 @@ impl WgpuCompositor {
         // Create vertex and index buffers for a quad
         let vertex_buffer = Self::create_vertex_buffer(&device);
         let index_buffer = Self::create_index_buffer(&device);
-        let instance_buffer = Self::create_instance_buffer(&device, 16); // Support up to 16 layers initially
+        let instance_buffer = Self::create_instance_buffer(&device, 4); // Support up to 4 layers initially
 
         // Create texture bind group layout for texture array
         let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -147,7 +151,7 @@ impl WgpuCompositor {
                         view_dimension: wgpu::TextureViewDimension::D2,
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
-                    count: std::num::NonZeroU32::new(16), // Array of 16 textures
+                    count: std::num::NonZeroU32::new(1), // Single texture for now
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,

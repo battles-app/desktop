@@ -7,12 +7,16 @@ use tauri::{command, Manager, Emitter};
 use base64::Engine;
 use std::sync::{Arc, Mutex};
 
+// Camera enumeration module (still needed for device listing)
+mod gstreamer_camera;
+
 // New WGPU + GStreamer compositor modules
 mod compositor;
 mod gst;
 mod clock;
 mod wgpu_gstreamer_compositor;
 
+use gstreamer_camera::GStreamerCamera;
 use wgpu_gstreamer_compositor::WgpuGStreamerCompositor;
 
 use shared_memory::{Shmem, ShmemConf};
@@ -543,9 +547,32 @@ async fn initialize_camera_system(_app_handle: tauri::AppHandle) -> Result<Strin
 
 #[command]
 async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
-    println!("[Camera] Camera enumeration handled by WGPU compositor");
-    // Return empty list for now - cameras will be enumerated by the compositor
-    Ok(vec![])
+    println!("[Camera] Enumerating available cameras");
+
+    // Use GStreamer to enumerate cameras (same as before)
+    let cameras_info = match GStreamerCamera::list_cameras() {
+        Ok(cameras) => cameras,
+        Err(e) => {
+            println!("[Camera] Failed to enumerate cameras: {}", e);
+            return Ok(vec![]); // Return empty list instead of error
+        }
+    };
+
+    let cameras: Vec<CameraDeviceInfo> = cameras_info
+        .into_iter()
+        .map(|cam| {
+            println!("[Camera] Found camera: {}", cam.name);
+            CameraDeviceInfo {
+                id: cam.id,
+                name: cam.name,
+                description: cam.description,
+                is_available: true,
+            }
+        })
+        .collect();
+
+    println!("[Camera] Total cameras found: {}", cameras.len());
+    Ok(cameras)
 }
 
 #[command]
