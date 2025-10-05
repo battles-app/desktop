@@ -5,6 +5,7 @@ use gstreamer as gst;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
+use tauri::AppHandle;
 
 /// Main compositor that integrates WGPU rendering with GStreamer I/O
 #[derive(Clone)]
@@ -17,6 +18,7 @@ pub struct WgpuGStreamerCompositor {
     frame_buffer: Arc<SynchronizedFrameBuffer>,
     drift_compensator: Arc<ClockDriftCompensator>,
     is_running: Arc<RwLock<bool>>,
+    app_handle: AppHandle,
 
     // Compositing settings
     width: u32,
@@ -74,7 +76,7 @@ impl WgpuGStreamerCompositor {
         let mut input = crate::gst::GStreamerInput::new(id.clone(), config)?;
 
         // Set up frame receiver
-        let (tx, rx) = broadcast::channel::<Vec<u8>>(16);
+        let (tx, rx) = broadcast::channel::<Vec<u8>>(32);
         input.set_frame_sender(tx);
 
         // Start input
@@ -142,7 +144,7 @@ impl WgpuGStreamerCompositor {
         let mut input = crate::gst::GStreamerInput::new(id.clone(), config)?;
 
         // Set up frame receiver
-        let (tx, rx) = broadcast::channel::<Vec<u8>>(16);
+        let (tx, rx) = broadcast::channel::<Vec<u8>>(32);
         input.set_frame_sender(tx);
 
         // Start input
@@ -201,7 +203,7 @@ impl WgpuGStreamerCompositor {
         let mut output = crate::gst::GStreamerOutput::new(id, config)?;
 
         // Set up frame receiver for composited output
-        let (tx, rx) = broadcast::channel::<Vec<u8>>(16);
+        let (tx, rx) = broadcast::channel::<Vec<u8>>(32);
         output.set_frame_receiver(rx);
 
         // Start output
@@ -310,8 +312,17 @@ impl WgpuGStreamerCompositor {
                         break;
                     }
                     Err(e) => {
-                        println!("[WGPU-GST Compositor] Frame receiver error: {:?}", e);
-                        break;
+                        match e {
+                            tokio::sync::broadcast::error::RecvError::Lagged(lag) => {
+                                println!("[WGPU-GST Compositor] Frame receiver lagged by {} frames, catching up...", lag);
+                                // Continue the loop - this is recoverable
+                                continue;
+                            }
+                            _ => {
+                                println!("[WGPU-GST Compositor] Frame receiver error: {:?}", e);
+                                break;
+                            }
+                        }
                     }
                 }
             }

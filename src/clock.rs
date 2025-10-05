@@ -282,7 +282,7 @@ impl ClockDriftCompensator {
             adjustment_factor: 1.0,
         });
 
-        if source_clock.last_pts != gst::ClockTime::ZERO {
+        if source_clock.last_pts != gst::ClockTime::ZERO && original_pts > source_clock.last_pts {
             let actual_interval = original_pts - source_clock.last_pts;
             let expected_ns = expected_interval.nseconds() as f64;
             let actual_ns = actual_interval.nseconds() as f64;
