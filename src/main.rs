@@ -7,12 +7,13 @@ use tauri::{command, Manager, Emitter};
 use base64::Engine;
 use std::sync::{Arc, Mutex};
 
-// GStreamer modules (REFACTORED - clean implementations)
-mod gstreamer_camera;
-mod gstreamer_composite;
+// New WGPU + GStreamer compositor modules
+mod compositor;
+mod gst;
+mod clock;
+mod wgpu_gstreamer_compositor;
 
-use gstreamer_camera::GStreamerCamera;
-use gstreamer_composite::GStreamerComposite;
+use wgpu_gstreamer_compositor::WgpuGStreamerCompositor;
 
 use shared_memory::{Shmem, ShmemConf};
 use tokio::sync::broadcast;
@@ -26,15 +27,9 @@ struct CameraDeviceInfo {
     is_available: bool,
 }
 
-// Global state for GStreamer (REFACTORED)
+// Global state for new WGPU + GStreamer compositor
 lazy_static::lazy_static! {
-    static ref GSTREAMER_CAMERA: Arc<parking_lot::RwLock<Option<GStreamerCamera>>> = Arc::new(parking_lot::RwLock::new(None));
-    static ref CAMERA_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
-    
-    static ref GSTREAMER_COMPOSITE: Arc<parking_lot::RwLock<Option<GStreamerComposite>>> = Arc::new(parking_lot::RwLock::new(None));
-    static ref COMPOSITE_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
-    static ref CAMERA_LAYER_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
-    static ref OVERLAY_LAYER_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
+    static ref WGPU_GSTREAMER_COMPOSITOR: Arc<parking_lot::RwLock<Option<WgpuGStreamerCompositor>>> = Arc::new(parking_lot::RwLock::new(None));
 }
 
 // IPC replaces WebSocket ports - no longer needed
@@ -650,42 +645,21 @@ async fn stop_camera_preview() -> Result<(), String> {
 
 #[command]
 async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<String, String> {
-    println!("[Composite] Initializing composite system");
-    
-    {
-        let sender_lock = COMPOSITE_FRAME_SENDER.read();
-        if sender_lock.is_some() {
-            println!("[Composite] Already initialized");
-            return Ok("Composite system already initialized".to_string());
-        }
-    }
-    
-    let composite = GStreamerComposite::new()
-        .map_err(|e| format!("Failed to initialize composite: {}", e))?;
-    
-    *GSTREAMER_COMPOSITE.write() = Some(composite);
-    
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
-    let (camera_layer_tx, _camera_layer_rx) = broadcast::channel::<Vec<u8>>(2);
-    let (overlay_layer_tx, _overlay_layer_rx) = broadcast::channel::<Vec<u8>>(2);
+    println!("[Composite] Initializing WGPU + GStreamer composite system");
 
-    if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
-        comp.set_frame_sender(tx.clone());
-        comp.set_camera_frame_sender(camera_layer_tx.clone());
-        comp.set_overlay_frame_sender(overlay_layer_tx.clone());
+    if WGPU_GSTREAMER_COMPOSITOR.read().is_some() {
+        println!("[Composite] Already initialized");
+        return Ok("Composite system already initialized".to_string());
     }
 
-    *COMPOSITE_FRAME_SENDER.write() = Some(tx);
-    *CAMERA_LAYER_FRAME_SENDER.write() = Some(camera_layer_tx);
-    *OVERLAY_LAYER_FRAME_SENDER.write() = Some(overlay_layer_tx);
-    
-    // Start IPC frame emitters instead of WebSocket servers
-    start_composite_frame_emitter(app_handle.clone()).await;
-    start_camera_layer_frame_emitter(app_handle.clone()).await;
-    start_overlay_layer_frame_emitter(app_handle.clone()).await;
-    
-    println!("[Composite] ✅ Composite system initialized with IPC");
-    Ok("Composite initialized with IPC".to_string())
+    // Create new compositor (1920x1080 @ 60fps)
+    let compositor = WgpuGStreamerCompositor::new(1920, 1080, 60).await
+        .map_err(|e| format!("Failed to initialize WGPU compositor: {}", e))?;
+
+    *WGPU_GSTREAMER_COMPOSITOR.write() = Some(compositor);
+
+    println!("[Composite] ✅ WGPU + GStreamer composite system initialized");
+    Ok("WGPU composite system initialized".to_string())
 }
 
 // IPC Frame Emitters (replaces WebSocket servers)
@@ -742,30 +716,36 @@ async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
 
 #[command]
 async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
-    println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-    
-    let mut composite_lock = GSTREAMER_COMPOSITE.write();
-    if let Some(composite) = composite_lock.as_mut() {
-        composite.start(&camera_device_id, width, height, fps, rotation)?;
-        println!("[Composite] ✅ Composite pipeline started");
+    println!("[Composite] Starting WGPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+
+    let mut compositor_lock = WGPU_GSTREAMER_COMPOSITOR.write();
+    if let Some(compositor) = compositor_lock.as_mut() {
+        // Add camera input
+        let device_index: u32 = camera_device_id.parse()
+            .map_err(|_| "Invalid camera device ID")?;
+
+        compositor.add_camera_input("camera".to_string(), device_index).await?;
+        compositor.start().await?;
+
+        println!("[Composite] ✅ WGPU composite pipeline started");
     } else {
         return Err("Composite pipeline not initialized".to_string());
     }
-    drop(composite_lock);
-    
+    drop(compositor_lock);
+
     Ok(())
 }
 
 #[command]
 async fn stop_composite_pipeline() -> Result<(), String> {
-    println!("[Composite] Stopping composite pipeline");
-    
-    let mut composite_lock = GSTREAMER_COMPOSITE.write();
-    if let Some(composite) = composite_lock.as_mut() {
-        composite.stop()?;
+    println!("[Composite] Stopping WGPU composite pipeline");
+
+    let mut compositor_lock = WGPU_GSTREAMER_COMPOSITOR.write();
+    if let Some(compositor) = compositor_lock.as_mut() {
+        compositor.stop().await?;
     }
-    drop(composite_lock);
-    
+    drop(compositor_lock);
+
     Ok(())
 }
 
@@ -820,89 +800,95 @@ async fn play_composite_fx(
     similarity: f64,
     use_chroma_key: bool
 ) -> Result<(), String> {
-    println!("[Composite] 🎬 Playing FX: {} (chroma: {})", filename, use_chroma_key);
-    
+    println!("[Composite] 🎬 Playing FX with WGPU: {} (chroma: {})", filename, use_chroma_key);
+
     let clean_filename = filename
         .replace("%20", "_")
         .replace("/", "_")
         .replace("\\", "_");
-    
+
     let temp_dir = std::env::temp_dir().join("battles_fx_cache");
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp directory: {}", e))?;
-    
+
     let local_path = temp_dir.join(&clean_filename);
-    
+
     if !local_path.exists() {
         println!("[Composite] 📥 Downloading FX from Nuxt proxy...");
-        
+
         let full_url = format!("https://local.battles.app:3000{}", file_url);
-        
+
         let local_path_clone = local_path.clone();
         let full_url_clone = full_url.clone();
         let _download_result = tokio::task::spawn_blocking(move || {
             use std::io::Write;
-            
+
             let client = reqwest::blocking::Client::builder()
                 .danger_accept_invalid_certs(true)
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-            
+
             let response = client
                 .get(&full_url_clone)
                 .send()
                 .map_err(|e| format!("Failed to download FX: {}", e))?;
-            
+
             if !response.status().is_success() {
                 return Err(format!("HTTP error: {}", response.status()));
             }
-            
+
             let bytes = response.bytes()
                 .map_err(|e| format!("Failed to read response: {}", e))?;
-            
+
             println!("[Composite] 💾 Writing {} bytes to cache...", bytes.len());
             let mut file = std::fs::File::create(&local_path_clone)
                 .map_err(|e| format!("Failed to create temp file: {}", e))?;
             file.write_all(&bytes)
                 .map_err(|e| format!("Failed to write temp file: {}", e))?;
-            
+
             Ok::<(), String>(())
         }).await.map_err(|e| format!("Download task failed: {}", e))??;
-        
+
         println!("[Composite] ✅ Cached to {:?}", local_path.file_name());
     } else {
         println!("[Composite] ⚡ Using existing cache (instant)");
     }
-    
+
     let file_path_str = local_path.to_string_lossy().to_string();
-    
-    // Overlay WebSocket server already started at initialization
-    
-    let mut composite_lock = GSTREAMER_COMPOSITE.write();
-    if let Some(composite) = composite_lock.as_mut() {
-        composite.play_fx_from_file(file_path_str, keycolor, tolerance, similarity, use_chroma_key)?;
-        println!("[Composite] ✅ FX playback started");
+
+    let mut compositor_lock = WGPU_GSTREAMER_COMPOSITOR.write();
+    if let Some(compositor) = compositor_lock.as_mut() {
+        // Add media input for FX
+        compositor.add_media_input("media".to_string(), file_path_str).await?;
+
+        // Set chroma key if enabled
+        if use_chroma_key {
+            let rgb = crate::gst::GStreamerUtils::hex_to_rgb(&keycolor)?;
+            compositor.set_chroma_key("media", rgb.0, rgb.1, rgb.2, tolerance as f32);
+        }
+
+        println!("[Composite] ✅ WGPU FX playback started");
     } else {
         return Err("Composite pipeline not initialized".to_string());
     }
-    drop(composite_lock);
-    
+    drop(compositor_lock);
+
     Ok(())
 }
 
 #[command]
 async fn stop_composite_fx() -> Result<(), String> {
-    println!("[Composite] Stopping FX");
+    println!("[Composite] Stopping WGPU FX");
 
-    let mut composite_lock = GSTREAMER_COMPOSITE.write();
-    if let Some(composite) = composite_lock.as_mut() {
-        composite.stop_fx()?;
-        println!("[Composite] ✅ FX stopped");
+    let mut compositor_lock = WGPU_GSTREAMER_COMPOSITOR.write();
+    if let Some(compositor) = compositor_lock.as_mut() {
+        compositor.set_layer_visible("media", false);
+        println!("[Composite] ✅ WGPU FX stopped");
     } else {
         return Err("Composite pipeline not initialized".to_string());
     }
-    drop(composite_lock);
+    drop(compositor_lock);
 
     Ok(())
 }

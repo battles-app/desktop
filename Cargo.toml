@@ -29,12 +29,17 @@ ureq = { version = "2.10", features = ["native-tls"] }
 reqwest = { version = "0.12", features = ["blocking"] }
 
 # GStreamer - Professional video pipeline with static features (no pkg-config needed)
-gstreamer = { version = "0.23", features = ["v1_20"] }
-gstreamer-app = { version = "0.23", features = ["v1_20"] }
-gstreamer-video = { version = "0.23", features = ["v1_20"] }
-gstreamer-audio = { version = "0.23", features = ["v1_20"] }
-gstreamer-sys = { version = "0.23", features = ["v1_20"] }
+gstreamer = { version = "0.22", features = ["v1_20"] }
+gstreamer-app = { version = "0.22", features = ["v1_20"] }
+gstreamer-video = { version = "0.22", features = ["v1_20"] }
+gstreamer-audio = { version = "0.22", features = ["v1_20"] }
 glib = "0.20"
+
+# WGPU - Modern GPU compute/graphics API
+wgpu = "0.20"
+winit = "0.30"
+glam = "0.29"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 image = { version = "0.25.6", features = ["png"] }
 tauri-plugin-cache = "0.1.5"
 
