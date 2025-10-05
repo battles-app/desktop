@@ -562,6 +562,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         // Only render if we have a texture and layers
         if let Some(bind_group) = &self.texture_bind_group {
             if !instances.is_empty() {
+                println!("[WGPU] Starting render pass: {} instances", instances.len());
                 // Set pipeline and bind groups
                 render_pass.set_pipeline(&self.render_pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
@@ -573,7 +574,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
                 // Draw instances
                 render_pass.draw_indexed(0..6, 0, 0..instances.len() as u32);
+                println!("[WGPU] Render pass completed: draw_indexed(0..6, 0, 0..{})", instances.len());
+            } else {
+                println!("[WGPU] No instances to render");
             }
+        } else {
+            println!("[WGPU] No texture bind group available for rendering");
         }
 
         drop(render_pass);
