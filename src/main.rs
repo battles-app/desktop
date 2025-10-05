@@ -7,13 +7,12 @@ use tauri::{command, Manager, Emitter};
 use base64::Engine;
 use std::sync::{Arc, Mutex};
 
-// Media modules
-mod gst;
-mod compositor;
-mod clock;
-mod wgpu_composite;
+// GStreamer modules (REFACTORED - clean implementations)
+mod gstreamer_camera;
+mod gstreamer_composite;
 
-use wgpu_composite::WgpuComposite;
+use gstreamer_camera::GStreamerCamera;
+use gstreamer_composite::GStreamerComposite;
 
 use shared_memory::{Shmem, ShmemConf};
 use tokio::sync::broadcast;
@@ -27,10 +26,12 @@ struct CameraDeviceInfo {
     is_available: bool,
 }
 
-// Global state for compositor
+// Global state for GStreamer (REFACTORED)
 lazy_static::lazy_static! {
-    static ref WGPU_COMPOSITE: Arc<parking_lot::RwLock<Option<WgpuComposite>>> = Arc::new(parking_lot::RwLock::new(None));
+    static ref GSTREAMER_CAMERA: Arc<parking_lot::RwLock<Option<GStreamerCamera>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref CAMERA_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
+    
+    static ref GSTREAMER_COMPOSITE: Arc<parking_lot::RwLock<Option<GStreamerComposite>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref COMPOSITE_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref CAMERA_LAYER_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref OVERLAY_LAYER_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
@@ -548,10 +549,17 @@ async fn initialize_camera_system(app_handle: tauri::AppHandle) -> Result<String
         return Ok("Camera system already initialized".to_string());
     }
     
-    // Initialize GStreamer
-    gst::utils::init().map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
+    let camera = GStreamerCamera::new()
+        .map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
+    
+    *GSTREAMER_CAMERA.write() = Some(camera);
     
     let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
+    
+    if let Some(cam) = GSTREAMER_CAMERA.read().as_ref() {
+        cam.set_frame_sender(tx.clone());
+    }
+    
     *CAMERA_FRAME_SENDER.write() = Some(tx);
     
     start_camera_frame_emitter(app_handle).await;
@@ -581,7 +589,7 @@ async fn start_camera_frame_emitter(app_handle: tauri::AppHandle) {
 async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
     println!("[Camera] Enumerating cameras");
     
-    let cameras_info = gst::utils::list_cameras().map_err(|e| format!("Failed to list cameras: {}", e))?;
+    let cameras_info = GStreamerCamera::list_cameras()?;
     
     let cameras: Vec<CameraDeviceInfo> = cameras_info
         .into_iter()
@@ -611,35 +619,14 @@ async fn start_camera_preview_with_quality(device_id: String, quality: String, _
     
     stop_camera_preview().await?;
     
-    // Map quality string to dimensions and fps
-    let (width, height, fps) = match quality.as_str() {
-        "low" => (640, 360, 30),
-        "medium" => (1280, 720, 30),
-        "high" => (1280, 720, 60),
-        "ultra" => (1920, 1080, 60),
-        _ => (1280, 720, 30),
-    };
-    
-    // Clone device_id for the async block
-    let device_id_clone = device_id.clone();
-    
-    // Use the WGPU compositor for camera preview
-    // Use a separate scope to ensure the lock is dropped before the await
-    let mut composite_opt = {
-        let composite_lock = WGPU_COMPOSITE.read();
-        composite_lock.as_ref().map(|c| c.clone())
-    };
-    
-    if let Some(ref mut composite) = composite_opt {
-        // We'll create a simple preview without starting the full pipeline
-        // Just to show the camera feed
-        let _ = composite.start(&device_id_clone, width, height, fps, 0)
-            .await
-            .map_err(|e| format!("Failed to start camera preview: {}", e))?;
-        println!("[Camera] ✅ Camera preview started successfully!");
+    let mut camera_lock = GSTREAMER_CAMERA.write();
+    if let Some(camera) = camera_lock.as_mut() {
+        camera.start_with_quality(&device_id, &quality)?;
+        println!("[Camera] ✅ Camera started successfully!");
     } else {
-        return Err("WGPU compositor not initialized".to_string());
+        return Err("Camera not initialized".to_string());
     }
+    drop(camera_lock);
     
     Ok(())
 }
@@ -648,12 +635,11 @@ async fn start_camera_preview_with_quality(device_id: String, quality: String, _
 async fn stop_camera_preview() -> Result<(), String> {
     println!("[Camera] Stopping preview");
     
-    // Use the WGPU compositor to stop the camera preview
-    let composite_lock = WGPU_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.stop().map_err(|e| format!("Failed to stop camera preview: {}", e))?;
+    let mut camera_lock = GSTREAMER_CAMERA.write();
+    if let Some(camera) = camera_lock.as_mut() {
+        camera.stop()?;
     }
-    drop(composite_lock);
+    drop(camera_lock);
     
     Ok(())
 }
@@ -666,145 +652,55 @@ async fn stop_camera_preview() -> Result<(), String> {
 async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<String, String> {
     println!("[Composite] Initializing composite system");
     
-    // Check if already initialized
-    let already_initialized = {
+    {
         let sender_lock = COMPOSITE_FRAME_SENDER.read();
-        sender_lock.is_some()
-    };
-    
-    if already_initialized {
-        println!("[Composite] Already initialized");
-        
-        // Even if already initialized, ensure the emitters are running
-        // This helps recover from situations where the channels might have closed
-        ensure_frame_emitters_running(app_handle.clone()).await;
-        
-        return Ok("Composite system already initialized".to_string());
+        if sender_lock.is_some() {
+            println!("[Composite] Already initialized");
+            return Ok("Composite system already initialized".to_string());
+        }
     }
     
-    // Create the WGPU compositor
-    let composite = WgpuComposite::new()
-        .await
-        .map_err(|e| format!("Failed to initialize WGPU compositor: {}", e))?;
+    let composite = GStreamerComposite::new()
+        .map_err(|e| format!("Failed to initialize composite: {}", e))?;
     
-    // Create broadcast channels for the frames with increased capacity
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(10);
-    let (camera_layer_tx, _camera_layer_rx) = broadcast::channel::<Vec<u8>>(10);
-    let (overlay_layer_tx, _overlay_layer_rx) = broadcast::channel::<Vec<u8>>(10);
+    *GSTREAMER_COMPOSITE.write() = Some(composite);
     
-    // Store the compositor and frame senders first
-    {
-        let mut wgpu_composite_write = WGPU_COMPOSITE.write();
-        *wgpu_composite_write = Some(composite.clone());
-    }
-    {
-        let mut composite_frame_sender_write = COMPOSITE_FRAME_SENDER.write();
-        *composite_frame_sender_write = Some(tx.clone());
-    }
-    {
-        let mut camera_layer_frame_sender_write = CAMERA_LAYER_FRAME_SENDER.write();
-        *camera_layer_frame_sender_write = Some(camera_layer_tx.clone());
-    }
-    {
-        let mut overlay_layer_frame_sender_write = OVERLAY_LAYER_FRAME_SENDER.write();
-        *overlay_layer_frame_sender_write = Some(overlay_layer_tx.clone());
-    }
-    
-    // Set the frame senders after storing them
-    composite.set_frame_sender(tx);
-    composite.set_camera_frame_sender(camera_layer_tx);
-    composite.set_overlay_frame_sender(overlay_layer_tx);
-    
-    // Start IPC frame emitters
-    ensure_frame_emitters_running(app_handle.clone()).await;
-    
-    println!("[Composite] ✅ WGPU composite system initialized with IPC");
-    Ok("WGPU composite initialized with IPC".to_string())
-}
+    let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
+    let (camera_layer_tx, _camera_layer_rx) = broadcast::channel::<Vec<u8>>(2);
+    let (overlay_layer_tx, _overlay_layer_rx) = broadcast::channel::<Vec<u8>>(2);
 
-// Helper function to ensure all frame emitters are running
-async fn ensure_frame_emitters_running(app_handle: tauri::AppHandle) {
-    println!("[Composite] Ensuring frame emitters are running");
-    
-    // Start the composite frame emitter
-    {
-        let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
-        if let Some(tx) = tx_opt {
-            if tx.receiver_count() == 0 {
-                println!("[Composite] Restarting composite frame emitter (no receivers)");
-                start_composite_frame_emitter(app_handle.clone()).await;
-            } else {
-                println!("[Composite] Composite frame emitter already has {} receivers", tx.receiver_count());
-            }
-        } else {
-            println!("[Composite] WARNING: No composite frame sender available");
-        }
+    if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
+        comp.set_frame_sender(tx.clone());
+        comp.set_camera_frame_sender(camera_layer_tx.clone());
+        comp.set_overlay_frame_sender(overlay_layer_tx.clone());
     }
+
+    *COMPOSITE_FRAME_SENDER.write() = Some(tx);
+    *CAMERA_LAYER_FRAME_SENDER.write() = Some(camera_layer_tx);
+    *OVERLAY_LAYER_FRAME_SENDER.write() = Some(overlay_layer_tx);
     
-    // Start the camera layer frame emitter
-    {
-        let tx_opt = CAMERA_LAYER_FRAME_SENDER.read().as_ref().cloned();
-        if let Some(tx) = tx_opt {
-            if tx.receiver_count() == 0 {
-                println!("[Composite] Restarting camera layer frame emitter (no receivers)");
-                start_camera_layer_frame_emitter(app_handle.clone()).await;
-            } else {
-                println!("[Composite] Camera layer frame emitter already has {} receivers", tx.receiver_count());
-            }
-        } else {
-            println!("[Composite] WARNING: No camera layer frame sender available");
-        }
-    }
+    // Start IPC frame emitters instead of WebSocket servers
+    start_composite_frame_emitter(app_handle.clone()).await;
+    start_camera_layer_frame_emitter(app_handle.clone()).await;
+    start_overlay_layer_frame_emitter(app_handle.clone()).await;
     
-    // Start the overlay layer frame emitter
-    {
-        let tx_opt = OVERLAY_LAYER_FRAME_SENDER.read().as_ref().cloned();
-        if let Some(tx) = tx_opt {
-            if tx.receiver_count() == 0 {
-                println!("[Composite] Restarting overlay layer frame emitter (no receivers)");
-                start_overlay_layer_frame_emitter(app_handle.clone()).await;
-            } else {
-                println!("[Composite] Overlay layer frame emitter already has {} receivers", tx.receiver_count());
-            }
-        } else {
-            println!("[Composite] WARNING: No overlay layer frame sender available");
-        }
-    }
+    println!("[Composite] ✅ Composite system initialized with IPC");
+    Ok("Composite initialized with IPC".to_string())
 }
 
 // IPC Frame Emitters (replaces WebSocket servers)
 async fn start_composite_frame_emitter(app_handle: tauri::AppHandle) {
     tokio::spawn(async move {
-        // Create a loop to handle channel recreation
-        loop {
-            let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
+        let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
+        
+        if let Some(tx) = tx_opt {
+            let mut rx = tx.subscribe();
+            println!("[Composite IPC] Frame emitter started");
             
-            if let Some(tx) = tx_opt {
-                let mut rx = tx.subscribe();
-                println!("[Composite IPC] Frame emitter started with {} receivers", tx.receiver_count());
-                
-                // Process frames until the channel is closed
-                while let Ok(frame_data) = rx.recv().await {
-                    // Emit as base64 to frontend
-                    let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                    println!("[Composite IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
-                    match app_handle.emit("composite-frame", base64_frame) {
-                        Ok(_) => println!("[Composite IPC] Frame emitted successfully"),
-                        Err(e) => println!("[Composite IPC] Error emitting frame: {}", e),
-                    }
-                }
-                println!("[Composite IPC] Frame receiver loop ended, channel may be closed");
-                
-                // Try to recreate the channel
-                let (new_tx, _) = broadcast::channel::<Vec<u8>>(5);
-                *COMPOSITE_FRAME_SENDER.write() = Some(new_tx.clone());
-                
-                // Wait a bit before restarting
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            } else {
-                println!("[Composite IPC] No frame sender available");
-                // Wait a bit before checking again
-                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            while let Ok(frame_data) = rx.recv().await {
+                // Emit as base64 to frontend
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                let _ = app_handle.emit("composite-frame", base64_frame);
             }
         }
     });
@@ -812,36 +708,16 @@ async fn start_composite_frame_emitter(app_handle: tauri::AppHandle) {
 
 async fn start_camera_layer_frame_emitter(app_handle: tauri::AppHandle) {
     tokio::spawn(async move {
-        // Create a loop to handle channel recreation
-        loop {
-            let tx_opt = CAMERA_LAYER_FRAME_SENDER.read().as_ref().cloned();
+        let tx_opt = CAMERA_LAYER_FRAME_SENDER.read().as_ref().cloned();
+        
+        if let Some(tx) = tx_opt {
+            let mut rx = tx.subscribe();
+            println!("[Camera Layer IPC] Frame emitter started");
             
-            if let Some(tx) = tx_opt {
-                let mut rx = tx.subscribe();
-                println!("[Camera Layer IPC] Frame emitter started with {} receivers", tx.receiver_count());
-                
-                // Process frames until the channel is closed
-                while let Ok(frame_data) = rx.recv().await {
-                    // Emit as base64 to frontend
-                    let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                    println!("[Camera Layer IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
-                    match app_handle.emit("camera-layer-frame", base64_frame) {
-                        Ok(_) => println!("[Camera Layer IPC] Frame emitted successfully"),
-                        Err(e) => println!("[Camera Layer IPC] Error emitting frame: {}", e),
-                    }
-                }
-                println!("[Camera Layer IPC] Frame receiver loop ended, channel may be closed");
-                
-                // Try to recreate the channel
-                let (new_tx, _) = broadcast::channel::<Vec<u8>>(5);
-                *CAMERA_LAYER_FRAME_SENDER.write() = Some(new_tx.clone());
-                
-                // Wait a bit before restarting
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            } else {
-                println!("[Camera Layer IPC] No frame sender available");
-                // Wait a bit before checking again
-                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            while let Ok(frame_data) = rx.recv().await {
+                // Emit as base64 to frontend
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                let _ = app_handle.emit("camera-layer-frame", base64_frame);
             }
         }
     });
@@ -849,110 +725,44 @@ async fn start_camera_layer_frame_emitter(app_handle: tauri::AppHandle) {
 
 async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
     tokio::spawn(async move {
-        // Create a loop to handle channel recreation
-        loop {
-            let tx_opt = OVERLAY_LAYER_FRAME_SENDER.read().as_ref().cloned();
+        let tx_opt = OVERLAY_LAYER_FRAME_SENDER.read().as_ref().cloned();
+        
+        if let Some(tx) = tx_opt {
+            let mut rx = tx.subscribe();
+            println!("[Overlay Layer IPC] Frame emitter started");
             
-            if let Some(tx) = tx_opt {
-                let mut rx = tx.subscribe();
-                println!("[Overlay Layer IPC] Frame emitter started with {} receivers", tx.receiver_count());
-                
-                // Process frames until the channel is closed
-                while let Ok(frame_data) = rx.recv().await {
-                    // Emit as base64 to frontend
-                    let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                    println!("[Overlay Layer IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
-                    match app_handle.emit("overlay-layer-frame", base64_frame) {
-                        Ok(_) => println!("[Overlay Layer IPC] Frame emitted successfully"),
-                        Err(e) => println!("[Overlay Layer IPC] Error emitting frame: {}", e),
-                    }
-                }
-                println!("[Overlay Layer IPC] Frame receiver loop ended, channel may be closed");
-                
-                // Try to recreate the channel
-                let (new_tx, _) = broadcast::channel::<Vec<u8>>(5);
-                *OVERLAY_LAYER_FRAME_SENDER.write() = Some(new_tx.clone());
-                
-                // Wait a bit before restarting
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            } else {
-                println!("[Overlay Layer IPC] No frame sender available");
-                // Wait a bit before checking again
-                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            while let Ok(frame_data) = rx.recv().await {
+                // Emit as base64 to frontend
+                let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
+                let _ = app_handle.emit("overlay-layer-frame", base64_frame);
             }
         }
     });
 }
 
 #[command]
-async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32, app_handle: tauri::AppHandle) -> Result<(), String> {
-    println!("[Composite] Starting WGPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-    println!("[Composite] IPC call received with camera_device_id: {}", camera_device_id);
+async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
+    println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
     
-    // Clone the values we need to pass to the async block
-    let camera_id = camera_device_id.clone();
-    
-    // Ensure frame emitters are running before starting the pipeline
-    ensure_frame_emitters_running(app_handle.clone()).await;
-    
-    // Check if compositor is initialized
-    let composite_initialized = {
-        let composite_lock = WGPU_COMPOSITE.read();
-        composite_lock.is_some()
-    };
-    
-    // Initialize if needed
-    if !composite_initialized {
-        println!("[Composite] ERROR: WGPU_COMPOSITE is None, initializing it now");
-        
-        // Try to initialize the composite system
-        match initialize_composite_system(app_handle.clone()).await {
-            Ok(_) => println!("[Composite] Successfully initialized composite system"),
-            Err(e) => {
-                let error_msg = format!("Failed to initialize composite system: {}", e);
-                println!("[Composite] ERROR: {}", error_msg);
-                return Err(error_msg);
-            }
-        }
-    }
-    
-    // Get the compositor after initialization
-    let mut composite_opt = {
-        let composite_lock = WGPU_COMPOSITE.read();
-        composite_lock.as_ref().map(|c| c.clone())
-    };
-    
-    if let Some(ref mut composite) = composite_opt {
-        // Now we can await without holding the lock
-        match composite.start(&camera_id, width, height, fps, rotation).await {
-            Ok(_) => {
-                println!("[Composite] ✅ WGPU composite pipeline started");
-                
-                // Double-check that emitters are running after starting the pipeline
-                ensure_frame_emitters_running(app_handle.clone()).await;
-            },
-            Err(e) => {
-                let error_msg = format!("Failed to start WGPU composite: {}", e);
-                println!("[Composite] ERROR: {}", error_msg);
-                return Err(error_msg);
-            }
-        }
+    let mut composite_lock = GSTREAMER_COMPOSITE.write();
+    if let Some(composite) = composite_lock.as_mut() {
+        composite.start(&camera_device_id, width, height, fps, rotation)?;
+        println!("[Composite] ✅ Composite pipeline started");
     } else {
-        let error_msg = "WGPU composite not initialized".to_string();
-        println!("[Composite] ERROR: {}", error_msg);
-        return Err(error_msg);
+        return Err("Composite pipeline not initialized".to_string());
     }
+    drop(composite_lock);
     
     Ok(())
 }
 
 #[command]
 async fn stop_composite_pipeline() -> Result<(), String> {
-    println!("[Composite] Stopping WGPU composite pipeline");
+    println!("[Composite] Stopping composite pipeline");
     
-    let composite_lock = WGPU_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.stop().map_err(|e| format!("Failed to stop WGPU composite: {}", e))?;
+    let mut composite_lock = GSTREAMER_COMPOSITE.write();
+    if let Some(composite) = composite_lock.as_mut() {
+        composite.stop()?;
     }
     drop(composite_lock);
     
@@ -961,10 +771,9 @@ async fn stop_composite_pipeline() -> Result<(), String> {
 
 #[command]
 async fn update_composite_layers(camera: (bool, f64), overlay: (bool, f64)) -> Result<(), String> {
-    let composite_lock = WGPU_COMPOSITE.read();
+    let composite_lock = GSTREAMER_COMPOSITE.read();
     if let Some(composite) = composite_lock.as_ref() {
-        composite.update_layers(camera, overlay)
-            .map_err(|e| format!("Failed to update layers: {}", e))?;
+        composite.update_layers(camera, overlay);
     }
     drop(composite_lock);
     
@@ -973,15 +782,14 @@ async fn update_composite_layers(camera: (bool, f64), overlay: (bool, f64)) -> R
 
 #[command]
 async fn start_composite_output(format: String, width: u32, height: u32) -> Result<(), String> {
-    println!("[Composite] Starting WGPU output: {} ({}x{})", format, width, height);
+    println!("[Composite] Starting output: {} ({}x{})", format, width, height);
     
-    let composite_lock = WGPU_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.set_output_format(&format, width, height)
-            .map_err(|e| format!("Failed to set output format: {}", e))?;
-        println!("[Composite] ✅ WGPU output started: {}", format);
+    let mut composite_lock = GSTREAMER_COMPOSITE.write();
+    if let Some(composite) = composite_lock.as_mut() {
+        composite.set_output_format(&format)?;
+        println!("[Composite] ✅ Output started: {}", format);
     } else {
-        return Err("WGPU composite not initialized".to_string());
+        return Err("Composite pipeline not initialized".to_string());
     }
     drop(composite_lock);
     
@@ -990,12 +798,11 @@ async fn start_composite_output(format: String, width: u32, height: u32) -> Resu
 
 #[command]
 async fn stop_composite_output() -> Result<(), String> {
-    println!("[Composite] Stopping WGPU output");
+    println!("[Composite] Stopping output");
     
-    let composite_lock = WGPU_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.set_output_format("preview", 0, 0)
-            .map_err(|e| format!("Failed to stop output: {}", e))?;
+    let mut composite_lock = GSTREAMER_COMPOSITE.write();
+    if let Some(composite) = composite_lock.as_mut() {
+        composite.set_output_format("preview")?;
     }
     drop(composite_lock);
     
@@ -1013,7 +820,7 @@ async fn play_composite_fx(
     similarity: f64,
     use_chroma_key: bool
 ) -> Result<(), String> {
-    println!("[Composite] 🎬 Playing FX with WGPU: {} (chroma: {})", filename, use_chroma_key);
+    println!("[Composite] 🎬 Playing FX: {} (chroma: {})", filename, use_chroma_key);
     
     let clean_filename = filename
         .replace("%20", "_")
@@ -1070,13 +877,14 @@ async fn play_composite_fx(
     
     let file_path_str = local_path.to_string_lossy().to_string();
     
-    let composite_lock = WGPU_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.play_fx_from_file(file_path_str, keycolor, tolerance, similarity, use_chroma_key)
-            .map_err(|e| format!("Failed to play FX: {}", e))?;
-        println!("[Composite] ✅ WGPU FX playback started");
+    // Overlay WebSocket server already started at initialization
+    
+    let mut composite_lock = GSTREAMER_COMPOSITE.write();
+    if let Some(composite) = composite_lock.as_mut() {
+        composite.play_fx_from_file(file_path_str, keycolor, tolerance, similarity, use_chroma_key)?;
+        println!("[Composite] ✅ FX playback started");
     } else {
-        return Err("WGPU composite not initialized".to_string());
+        return Err("Composite pipeline not initialized".to_string());
     }
     drop(composite_lock);
     
@@ -1085,14 +893,14 @@ async fn play_composite_fx(
 
 #[command]
 async fn stop_composite_fx() -> Result<(), String> {
-    println!("[Composite] Stopping WGPU FX");
+    println!("[Composite] Stopping FX");
 
-    let composite_lock = WGPU_COMPOSITE.read();
-    if let Some(composite) = composite_lock.as_ref() {
-        composite.stop_fx().map_err(|e| format!("Failed to stop FX: {}", e))?;
-        println!("[Composite] ✅ WGPU FX stopped");
+    let mut composite_lock = GSTREAMER_COMPOSITE.write();
+    if let Some(composite) = composite_lock.as_mut() {
+        composite.stop_fx()?;
+        println!("[Composite] ✅ FX stopped");
     } else {
-        return Err("WGPU composite not initialized".to_string());
+        return Err("Composite pipeline not initialized".to_string());
     }
     drop(composite_lock);
 
