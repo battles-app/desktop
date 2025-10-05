@@ -82,7 +82,7 @@ impl GstOutput {
             OutputFormat::Rtmp => {
                 let rtmp_url = url.as_deref().unwrap_or("rtmp://localhost/live/stream");
                 format!(
-                    "appsrc name=src is-live=true format=time caps=\"video/x-raw,format=RGBA,width={},height={},framerate={}/1\" ! \
+                    "appsrc name=src format=time caps=\"video/x-raw,format=RGBA,width={},height={},framerate={}/1\" ! \
                      videoconvert ! \
                      x264enc tune=zerolatency bitrate=4000 speed-preset=ultrafast ! \
                      flvmux ! \
@@ -92,7 +92,7 @@ impl GstOutput {
             }
             OutputFormat::VirtualCamera => {
                 format!(
-                    "appsrc name=src is-live=true format=time caps=\"video/x-raw,format=RGBA,width={},height={},framerate={}/1\" ! \
+                    "appsrc name=src format=time caps=\"video/x-raw,format=RGBA,width={},height={},framerate={}/1\" ! \
                      videoconvert ! \
                      dshowsink",
                     width, height, fps
@@ -100,7 +100,7 @@ impl GstOutput {
             }
             OutputFormat::Preview => {
                 format!(
-                    "appsrc name=src is-live=true format=time caps=\"video/x-raw,format=RGBA,width={},height={},framerate={}/1\" ! \
+                    "appsrc name=src format=time caps=\"video/x-raw,format=RGBA,width={},height={},framerate={}/1\" ! \
                      fakesink",
                     width, height, fps
                 )

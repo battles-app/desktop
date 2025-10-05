@@ -60,7 +60,7 @@ impl GstInput {
         // Build the pipeline string
         #[cfg(target_os = "windows")]
         let pipeline_str = format!(
-            "mfvideosrc device-index={} is-live=true ! \
+            "mfvideosrc device-index={} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
@@ -70,7 +70,7 @@ impl GstInput {
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "v4l2src device=/dev/video{} is-live=true ! \
+            "v4l2src device=/dev/video{} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
@@ -80,7 +80,7 @@ impl GstInput {
         
         #[cfg(target_os = "macos")]
         let pipeline_str = format!(
-            "avfvideosrc device-index={} is-live=true ! \
+            "avfvideosrc device-index={} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
@@ -171,7 +171,7 @@ impl GstInput {
         // Build the pipeline string
         #[cfg(target_os = "windows")]
         let pipeline_str = format!(
-            "dx9screencapsrc monitor={} is-live=true ! \
+            "dx9screencapsrc monitor={} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
@@ -181,7 +181,7 @@ impl GstInput {
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "ximagesrc xid={} is-live=true ! \
+            "ximagesrc xid={} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
@@ -191,7 +191,7 @@ impl GstInput {
         
         #[cfg(target_os = "macos")]
         let pipeline_str = format!(
-            "avfvideosrc capture-screen=true capture-screen-cursor=true device-index={} is-live=true ! \
+            "avfvideosrc capture-screen=true capture-screen-cursor=true device-index={} ! \
              videoconvert ! \
              videoscale ! \
              video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \

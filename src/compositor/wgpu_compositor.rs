@@ -632,10 +632,16 @@ impl WgpuCompositor {
         // Submit the command buffer
         self.queue.submit(std::iter::once(encoder.finish()));
         
+        // Calculate aligned bytes per row (must be a multiple of COPY_BYTES_PER_ROW_ALIGNMENT = 256)
+        let align = 256;
+        let bytes_per_row = self.width * 4;
+        let aligned_bytes_per_row = ((bytes_per_row + align - 1) / align) * align;
+        
         // Read back the rendered frame
+        let buffer_size = aligned_bytes_per_row as u64 * self.height as u64;
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Output Buffer"),
-            size: (self.width * self.height * 4) as u64,
+            size: buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -644,6 +650,11 @@ impl WgpuCompositor {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Copy Encoder"),
         });
+        
+        // Calculate aligned bytes per row (must be a multiple of COPY_BYTES_PER_ROW_ALIGNMENT = 256)
+        let align = 256;
+        let bytes_per_row = self.width * 4;
+        let aligned_bytes_per_row = ((bytes_per_row + align - 1) / align) * align;
         
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
@@ -656,7 +667,7 @@ impl WgpuCompositor {
                 buffer: &output_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.width * 4),
+                    bytes_per_row: Some(aligned_bytes_per_row),
                     rows_per_image: Some(self.height),
                 },
             },
@@ -688,7 +699,16 @@ impl WgpuCompositor {
         
         // Get the mapped data
         let data = buffer_slice.get_mapped_range();
-        let result = data.to_vec();
+        
+        // We need to convert from the aligned buffer to the actual image data
+        let mut result = Vec::with_capacity((self.width * self.height * 4) as usize);
+        
+        // Copy each row, skipping the padding bytes
+        for row in 0..self.height as usize {
+            let row_start = row * aligned_bytes_per_row as usize;
+            let row_end = row_start + (self.width * 4) as usize;
+            result.extend_from_slice(&data[row_start..row_end]);
+        }
         
         // Unmap the buffer
         drop(data);
