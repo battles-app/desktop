@@ -464,24 +464,19 @@ impl GStreamerComposite {
         let overlay_appsink = ElementFactory::make("appsink")
             .name(&format!("overlay_layer_{}", fx_id))
             .property("emit-signals", true)
-            .property("sync", true) // Sync to clock for proper timing
+            .property("sync", false) // Don't sync to clock - let frames flow naturally
+            .property("async", false) // Process frames immediately
             .property("max-buffers", 2u32)
             .property_from_str("drop", "true")
             .build()
             .map_err(|_| "Failed to create overlay_appsink")?;
         
-        // Add clocksync element to ensure frames are delivered at correct rate to compositor
-        let clocksync = ElementFactory::make("clocksync")
-            .name(&format!("fxclocksync_{}", fx_id))
-            .build()
-            .map_err(|_| "Failed to create clocksync")?;
-        
         // Add all elements to bin
         if let Some(ref alpha) = alpha_elem {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &videorate, &capsfilter, &identity, &overlay_tee, &overlay_queue1, &overlay_queue2, &overlay_convert, &overlay_jpegenc, &overlay_appsink])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
@@ -491,10 +486,10 @@ impl GStreamerComposite {
         
         // Link post-decode chain
         if let Some(ref alpha) = alpha_elem {
-            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, alpha, &videorate, &capsfilter, &identity, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain with alpha")?;
         } else {
-            gst::Element::link_many(&[&videoconvert, &videoscale, &videorate, &capsfilter, &identity, &clocksync, &overlay_tee])
+            gst::Element::link_many(&[&videoconvert, &videoscale, &videorate, &capsfilter, &identity, &overlay_tee])
                 .map_err(|_| "Failed to link post-decode chain")?;
         }
         
@@ -838,12 +833,12 @@ impl GStreamerComposite {
         println!("[Composite FX] ║   tee → [compositor sink_1, overlay debug appsink]");
         println!("[Composite FX] ║");
         println!("[Composite FX] ║ ⚙️  ACTIVE TRANSFORMATIONS:");
-        println!("[Composite FX] ║   • videorate: Adapts source FPS → {} fps", target_fps);
+        println!("[Composite FX] ║   • videorate: Adapts source FPS → {} fps (preserves frame count)", target_fps);
         println!("[Composite FX] ║   • videoscale: Adapts source resolution → {}x{}", target_width, target_height);
         if use_chroma_key {
             println!("[Composite FX] ║   • alpha: Removes {} color", keycolor);
         }
-        println!("[Composite FX] ║   • identity: Applies ts-offset for timing sync");
+        println!("[Composite FX] ║   • appsink sync=false: Frames flow at natural video speed without clock sync");
         println!("[Composite FX] ║");
         println!("[Composite FX] ║ ⚡ FX should now be visible on:");
         println!("[Composite FX] ║   1. Composition canvas (camera + FX overlay)");
