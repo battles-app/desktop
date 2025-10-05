@@ -1,4 +1,5 @@
 use gstreamer as gst;
+use gstreamer::prelude::*;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
@@ -14,7 +15,7 @@ pub struct MasterClock {
 
 impl MasterClock {
     pub fn new(target_fps: u32) -> Self {
-        let frame_interval = gst::ClockTime::from_seconds(1) / target_fps;
+        let frame_interval = gst::ClockTime::from_nseconds(1_000_000_000 / target_fps as u64);
 
         Self {
             pipeline: None,

@@ -39,19 +39,20 @@ struct Instance {
 impl Instance {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
+        static ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
+            2 => Float32x4,
+            3 => Float32x4,
+            4 => Float32x4,
+            5 => Float32x4,
+            6 => Float32,
+            7 => Float32x3,
+            8 => Float32,
+            9 => Uint32
+        ];
         wgpu::VertexBufferLayout {
             array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &wgpu::vertex_attr_array![
-                2 => Float32x4,
-                3 => Float32x4,
-                4 => Float32x4,
-                5 => Float32x4,
-                6 => Float32,
-                7 => Float32x3,
-                8 => Float32,
-                9 => Uint32
-            ],
+            attributes: &ATTRIBS,
         }
     }
 }
@@ -209,6 +210,7 @@ impl WgpuCompositor {
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
+            desired_maximum_frame_latency: 2,
         };
 
         surface.configure(&compositor.device, &surface_config);
@@ -357,6 +359,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 module: &shader,
                 entry_point: "vs_main",
                 buffers: &[Vertex::desc(), Instance::desc()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -366,6 +369,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -444,13 +448,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         });
 
         // Create bind group
+        let texture_view_refs: Vec<&wgpu::TextureView> = texture_views.iter().collect();
         self.texture_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Texture Array Bind Group"),
             layout: &self.texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureViewArray(&texture_views),
+                    resource: wgpu::BindingResource::TextureViewArray(&texture_view_refs),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

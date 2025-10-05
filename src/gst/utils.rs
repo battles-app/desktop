@@ -1,4 +1,5 @@
 use gstreamer as gst;
+use gstreamer::prelude::*;
 
 /// Utility functions for GStreamer operations
 pub struct GStreamerUtils;
@@ -105,7 +106,7 @@ pub struct FrameTiming;
 impl FrameTiming {
     /// Calculate frame duration from framerate
     pub fn frame_duration(framerate: u32) -> gst::ClockTime {
-        gst::ClockTime::from_seconds(1) / framerate
+        gst::ClockTime::from_nseconds(1_000_000_000 / framerate as u64)
     }
 
     /// Calculate framerate from frame duration

@@ -7,6 +7,7 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 
 /// Main compositor that integrates WGPU rendering with GStreamer I/O
+#[derive(Clone)]
 pub struct WgpuGStreamerCompositor {
     wgpu_compositor: Arc<RwLock<WgpuCompositor>>,
     input_manager: Arc<RwLock<InputManager>>,
@@ -223,7 +224,7 @@ impl WgpuGStreamerCompositor {
         *self.is_running.write() = true;
 
         // Create master pipeline for clock synchronization
-        let master_pipeline = gst::Pipeline::new(Some("master-clock"));
+        let master_pipeline = gst::Pipeline::new();
         self.master_clock.set_master_pipeline(master_pipeline);
 
         // Create frame scheduler
@@ -275,12 +276,21 @@ impl WgpuGStreamerCompositor {
                                 }
                             }
 
-                            // Render frame
-                            let output_texture = wgpu.create_output_texture();
-                            wgpu.render_frame(&output_texture)?;
+                        // Render frame
+                        let output_texture = wgpu.create_output_texture();
+                        if let Err(e) = wgpu.render_frame(&output_texture) {
+                            println!("[WGPU-GST Compositor] Render error: {:?}", e);
+                            continue;
+                        }
 
-                            // Read back composited frame
-                            let composited_data = wgpu.read_output_texture(&output_texture)?;
+                        // Read back composited frame
+                        let composited_data = match wgpu.read_output_texture(&output_texture) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                println!("[WGPU-GST Compositor] Readback error: {:?}", e);
+                                continue;
+                            }
+                        };
 
                             // Send to outputs
                             // TODO: Send to output channels

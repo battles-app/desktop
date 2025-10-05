@@ -155,7 +155,7 @@ impl GStreamerOutput {
                 }
             };
 
-            let frame_duration = gst::ClockTime::from_seconds(1) / framerate;
+            let frame_duration = gst::ClockTime::from_nseconds(1_000_000_000 / framerate as u64);
             let mut pts = gst::ClockTime::ZERO;
 
             println!("[GST Output {}] Frame receiver started, frame duration: {:?}", output_id, frame_duration);

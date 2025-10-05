@@ -2,7 +2,7 @@ use glam::{Vec2, Vec3, Quat, Mat4};
 use wgpu::Texture;
 
 /// Represents a single compositing layer with transform, opacity, and texture
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Layer {
     pub id: String,
     pub texture: Option<wgpu::Texture>,
