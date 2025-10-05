@@ -988,6 +988,16 @@ fn main() {
         .setup(|app| {
             let app_handle = app.handle().clone();
             start_monitor_broadcast(app_handle);
+
+            // Test camera enumeration on startup
+            println!("[Setup] Testing camera enumeration...");
+            tauri::async_runtime::spawn(async {
+                match get_available_cameras().await {
+                    Ok(cameras) => println!("[Setup] Camera test successful: found {} cameras", cameras.len()),
+                    Err(e) => println!("[Setup] Camera test failed: {}", e),
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

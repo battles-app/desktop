@@ -77,7 +77,7 @@ pub struct WgpuCompositor {
     // Texture array for layer textures
     texture_bind_group_layout: wgpu::BindGroupLayout,
     texture_bind_group: Option<wgpu::BindGroup>,
-    texture: Option<wgpu::Texture>,
+    texture_array: Vec<wgpu::Texture>,
 
     // Layers
     layers: HashMap<String, Layer>,
@@ -121,7 +121,11 @@ impl WgpuCompositor {
                 &wgpu::DeviceDescriptor {
                     label: Some("WGPU Compositor Device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: wgpu::Limits {
+                        max_texture_array_layers: 1,
+                        max_binding_array_elements_per_shader_stage: 1,
+                        ..wgpu::Limits::default()
+                    },
                     memory_hints: wgpu::MemoryHints::default(),
                     trace: wgpu::Trace::default(),
                     experimental_features: wgpu::ExperimentalFeatures::default(),
@@ -135,9 +139,9 @@ impl WgpuCompositor {
         let index_buffer = Self::create_index_buffer(&device);
         let instance_buffer = Self::create_instance_buffer(&device, 4); // Support up to 4 layers initially
 
-        // Create texture bind group layout for texture array
+        // Create texture bind group layout for single texture
         let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Texture Array Bind Group Layout"),
+            label: Some("Texture Bind Group Layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -147,7 +151,7 @@ impl WgpuCompositor {
                         view_dimension: wgpu::TextureViewDimension::D2,
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
-                    count: None, // No texture array - use individual bindings
+                    count: None, // Single texture, not an array
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
@@ -174,7 +178,7 @@ impl WgpuCompositor {
             instance_buffer,
             texture_bind_group_layout,
             texture_bind_group: None,
-            texture: None,
+            texture_array: Vec::new(),
             layers: HashMap::new(),
             sorted_layer_ids: Vec::new(),
             output_width: width,
@@ -289,14 +293,14 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 
 // Fragment shader for compositing with optional chroma keying
 @group(0) @binding(0)
-var texture_0: texture_2d<f32>;
+var texture: texture_2d<f32>;
 @group(0) @binding(1)
 var texture_sampler: sampler;
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Sample single texture (for now - camera + effects combined)
-    let tex_color = textureSample(texture_0, texture_sampler, input.tex_coords);
+    // Sample texture (single texture for now)
+    let tex_color = textureSample(texture, texture_sampler, input.tex_coords);
 
     // Apply chroma keying if chroma key is set (non-zero)
     if (length(input.chroma_key) > 0.0) {
@@ -366,13 +370,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         println!("[WGPU] Adding layer: {}", layer.id);
         self.layers.insert(layer.id.clone(), layer);
         self.update_sorted_layers();
-        self.update_texture_bind_group();
-    }
-
-    /// Set the current texture for compositing
-    pub fn set_texture(&mut self, texture: wgpu::Texture) {
-        self.texture = Some(texture);
-        self.update_texture_bind_group();
+        self.update_texture_array();
     }
 
     /// Remove a layer from the compositor
@@ -380,7 +378,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         if self.layers.remove(layer_id).is_some() {
             println!("[WGPU] Removed layer: {}", layer_id);
             self.update_sorted_layers();
-            self.update_texture_bind_group();
+            self.update_texture_array();
             true
         } else {
             false
@@ -409,23 +407,27 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     /// Update texture array and bind group
-    fn update_texture_bind_group(&mut self) {
-        if let Some(texture) = &self.texture {
-            // Create texture view
-            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    fn update_texture_array(&mut self) {
+        // Create texture array views
+        let texture_views: Vec<_> = self.texture_array.iter().map(|tex| {
+            tex.create_view(&wgpu::TextureViewDescriptor::default())
+        }).collect();
 
-            // Create sampler
-            let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
+        // Create sampler
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
-            // Create bind group with single texture
+        // Create bind group for single texture (use first texture in array)
+        if let Some(first_texture) = self.texture_array.first() {
+            let texture_view = first_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
             self.texture_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Texture Bind Group"),
                 layout: &self.texture_bind_group_layout,
@@ -497,8 +499,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 let transform = layer.transform_matrix(self.output_width as f32, self.output_height as f32);
                 let chroma_key = layer.chroma_key.unwrap_or([0.0, 0.0, 0.0]);
 
-                // Single texture - always use index 0
-                let texture_index = 0u32;
+                // Find texture index
+                let texture_index = self.texture_array.iter().position(|tex| {
+                    // Compare texture IDs (simplified - in real implementation you'd store texture IDs)
+                    true // Placeholder - need proper texture tracking
+                }).unwrap_or(0) as u32;
 
                 instances.push(Instance {
                     transform: transform.to_cols_array_2d(),

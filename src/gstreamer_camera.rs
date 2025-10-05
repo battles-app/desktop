@@ -38,47 +38,49 @@ impl GStreamerCamera {
     
     pub fn list_cameras() -> Result<Vec<CameraInfo>, String> {
         gst::init().map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
-
+        
         let mut cameras = Vec::new();
-
-        // Simple enumeration - try common device indices
-        // This is more reliable than device monitor which can be inconsistent
+        
         #[cfg(target_os = "windows")]
         {
-            // Try device indices 0-15 (most common range for Windows cameras)
-            for device_index in 0..16 {
-                cameras.push(CameraInfo {
-                    id: device_index.to_string(),
-                    name: format!("Camera {}", device_index),
-                    description: "Webcam".to_string(),
-                });
+            use gstreamer::DeviceMonitor;
+            
+            let monitor = DeviceMonitor::new();
+            let caps = gst::Caps::builder("video/x-raw").build();
+            monitor.add_filter(Some("Video/Source"), Some(&caps));
+            
+            if monitor.start().is_err() {
+                return Ok(cameras);
             }
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // On Linux, try common /dev/video* devices
-            for device_index in 0..8 {
-                cameras.push(CameraInfo {
-                    id: device_index.to_string(),
-                    name: format!("/dev/video{}", device_index),
-                    description: "V4L2 Camera".to_string(),
-                });
+            
+            let devices = monitor.devices();
+            let mut device_index = 0;
+            
+            for device in devices.iter() {
+                if let Some(device_caps) = device.caps() {
+                    if device_caps.is_empty() {
+                        continue;
+                    }
+                    
+                    let display_name = device.display_name();
+                    let has_valid_path = device.properties()
+                        .and_then(|props| props.get::<String>("device.path").ok())
+                        .is_some();
+                    
+                    if has_valid_path {
+                        cameras.push(CameraInfo {
+                            id: device_index.to_string(),
+                            name: display_name.to_string(),
+                            description: "Camera".to_string(),
+                        });
+                        device_index += 1;
+                    }
+                }
             }
+            
+            monitor.stop();
         }
-
-        #[cfg(target_os = "macos")]
-        {
-            // On macOS, try common device indices
-            for device_index in 0..4 {
-                cameras.push(CameraInfo {
-                    id: device_index.to_string(),
-                    name: format!("Camera {}", device_index),
-                    description: "AVFoundation Camera".to_string(),
-                });
-            }
-        }
-
+        
         Ok(cameras)
     }
     
