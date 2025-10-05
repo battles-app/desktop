@@ -736,7 +736,13 @@ async fn initialize_composite_system() -> Result<String, String> {
     
     start_composite_websocket_server().await;
     start_camera_layer_websocket_server().await;
-    // Note: overlay_layer_websocket_server starts on first FX play (see play_composite_fx)
+    start_overlay_layer_websocket_server().await; // Start immediately so frontend can connect
+    
+    // Mark as started to prevent duplicate server creation
+    {
+        let mut overlay_started = OVERLAY_WS_STARTED.lock().unwrap();
+        *overlay_started = true;
+    }
     
     println!("[Composite] ✅ Composite system initialized on port {}", COMPOSITE_WS_PORT);
     Ok(format!("Composite initialized - WebSocket on port {}", COMPOSITE_WS_PORT))
@@ -1020,18 +1026,8 @@ async fn play_composite_fx(
     
     let file_path_str = local_path.to_string_lossy().to_string();
     
-    // Start overlay WebSocket server when FX starts (only once)
-    let should_start_overlay_ws = {
-        let overlay_started = OVERLAY_WS_STARTED.lock().unwrap();
-        !*overlay_started
-    };
-
-    if should_start_overlay_ws {
-        start_overlay_layer_websocket_server().await;
-        let mut overlay_started = OVERLAY_WS_STARTED.lock().unwrap();
-        *overlay_started = true;
-    }
-
+    // Overlay WebSocket server already started at initialization
+    
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
         composite.play_fx_from_file(file_path_str, keycolor, tolerance, similarity, use_chroma_key)?;

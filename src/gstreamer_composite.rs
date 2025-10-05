@@ -262,10 +262,14 @@ impl GStreamerComposite {
         };
         
         // Videorate to match target FPS
-        // Note: Don't use drop-only=true! FX videos may be lower FPS (24fps)
-        // and need frame duplication to reach target FPS (30/60fps)
+        // CRITICAL: Preserves original playback speed/duration!
+        // - skip-to-first=false: Don't skip frames at start (maintains timing)
+        // - Duplicates frames for low FPS (24fps → 60fps)
+        // - Drops frames for high FPS (60fps → 30fps)
+        // Result: Video plays at ORIGINAL speed, outputs at TARGET fps
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
+            .property("skip-to-first", false) // Maintain original timing
             .build()
             .map_err(|_| "Failed to create videorate")?;
         
@@ -410,6 +414,17 @@ impl GStreamerComposite {
             let caps = match src_pad.current_caps() {
                 Some(caps) => {
                     println!("[Composite FX] 📊 Caps: {}", caps);
+                    
+                    // Extract and log the source framerate
+                    if let Some(structure) = caps.structure(0) {
+                        if let Ok(framerate) = structure.get::<gst::Fraction>("framerate") {
+                            println!("[Composite FX] 🎬 Source FPS: {} ({}/{})", 
+                                     framerate.numer() as f64 / framerate.denom() as f64,
+                                     framerate.numer(),
+                                     framerate.denom());
+                        }
+                    }
+                    
                     caps
                 },
                 None => {
@@ -548,9 +563,10 @@ impl GStreamerComposite {
         }
         
         println!("[Composite FX] 🎉 ===== FX SETUP COMPLETE =====");
-        println!("[Composite FX] 📊 Output: {}x{} @ {}fps", target_width, target_height, target_fps);
+        println!("[Composite FX] 📊 Target output: {}x{} @ {}fps", target_width, target_height, target_fps);
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] 🎨 Chroma key: {} (enabled: {})", keycolor, use_chroma_key);
+        println!("[Composite FX] ⏱️ Note: videorate will duplicate/drop frames to match {}fps while preserving original playback speed", target_fps);
         Ok(())
     }
     
