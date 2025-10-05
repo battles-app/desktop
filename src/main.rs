@@ -923,7 +923,6 @@ async fn start_overlay_layer_websocket_server() {
                         use futures_util::SinkExt;
                         use tokio_tungstenite::tungstenite::protocol::Message;
 
-                        println!("[Overlay Layer WS] 📡 Sending frame to client: {} bytes", frame_data.len());
                         if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
                             println!("[Overlay Layer WS] Client disconnected");
                             break;

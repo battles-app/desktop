@@ -270,6 +270,12 @@ impl GStreamerComposite {
         let camera_frame_sender = self.camera_frame_sender.clone();
         let is_running_camera = self.is_running.clone();
 
+        // Configure camera appsink to be non-blocking
+        camera_appsink.set_property("async", true);
+        camera_appsink.set_property("sync", false);
+        camera_appsink.set_property("max-buffers", 1u32);
+        camera_appsink.set_property_from_str("drop", "true");
+
         camera_appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
@@ -284,7 +290,8 @@ impl GStreamerComposite {
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
                         if let Some(sender) = camera_frame_sender.read().as_ref() {
-                            let _ = sender.send(jpeg_data.to_vec());
+                            // Non-blocking send - don't wait if channel is full
+                            let _ = sender.try_send(jpeg_data.to_vec());
                         }
                     }
 
@@ -511,8 +518,6 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
 
-        println!("[Composite FX] 🎭 Creating overlay debug elements...");
-
         // Create overlay layer tee and appsink for debugging
         let overlay_tee = ElementFactory::make("tee")
             .name("overlay_tee")
@@ -540,9 +545,11 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create overlay videoconvert")?;
 
-        // Note: We'll use the ghost pad directly instead of a separate queue
-
-        println!("[Composite FX] ✅ Overlay debug elements created");
+        let overlay_queue = ElementFactory::make("queue")
+            .name("overlay_queue")
+            .property("max-size-buffers", 2u32)
+            .build()
+            .map_err(|_| "Failed to create overlay queue")?;
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
@@ -595,51 +602,77 @@ impl GStreamerComposite {
             println!("[Composite FX] ✅ Chain linked: videoscale → identity → queue → capsfilter");
         }
 
-        // Link capsfilter to overlay tee
-        println!("[Composite FX] 🔗 Linking capsfilter → overlay_tee...");
-        gst::Element::link(&capsfilter, &overlay_tee)
-            .map_err(|_| "Failed to link capsfilter to overlay tee")?;
-        println!("[Composite FX] ✅ Capsfilter → overlay_tee linked");
-
-        // Request pads from overlay tee for branching
-        println!("[Composite FX] 🔌 Requesting overlay tee pads...");
-        let overlay_tee_src1 = overlay_tee.request_pad_simple("src_%u")
-            .ok_or("Failed to request overlay tee src1 pad")?;
-        let overlay_tee_src2 = overlay_tee.request_pad_simple("src_%u")
-            .ok_or("Failed to request overlay tee src2 pad")?;
-        println!("[Composite FX] ✅ Overlay tee pads requested: src1={}, src2={}",
-                 overlay_tee_src1.name(), overlay_tee_src2.name());
-
-        // For the compositor branch, we'll use the capsfilter directly
-        // The tee src1 will connect to the compositor via the ghost pad
-        println!("[Composite FX] 🔗 Setting up overlay tee branching...");
-
-        // Link tee src1 to a queue that will connect to compositor
-        let compositor_queue = ElementFactory::make("queue")
-            .name("compositor_queue")
-            .property("max-size-buffers", 2u32)
+        // For overlay debug view, create a completely separate decoding pipeline
+        // that reads from the same file independently
+        let overlay_filesrc = ElementFactory::make("filesrc")
+            .name("overlay_filesrc")
+            .property("location", &file_path)
             .build()
-            .map_err(|_| "Failed to create compositor queue")?;
+            .map_err(|_| "Failed to create overlay filesrc")?;
 
-        overlay_tee_src1.link(&compositor_queue.static_pad("sink").unwrap())
-            .map_err(|_| "Failed to link overlay tee src1 to compositor queue")?;
-        println!("[Composite FX] ✅ Overlay tee src1 → compositor_queue linked");
+        let overlay_decodebin = ElementFactory::make("decodebin")
+            .name("overlay_decode")
+            .property("force-sw-decoders", true)
+            .build()
+            .map_err(|_| "Failed to create overlay decodebin")?;
 
-        // Link tee src2 to debug branch
-        overlay_tee_src2.link(&overlay_videoconvert.static_pad("sink").unwrap())
-            .map_err(|_| "Failed to link overlay tee src2 to videoconvert")?;
-        println!("[Composite FX] ✅ Overlay tee src2 → overlay_videoconvert linked");
+        // Add overlay debug elements to bin
+        fx_bin.add_many(&[&overlay_filesrc, &overlay_decodebin])
+            .map_err(|_| "Failed to add overlay debug elements to bin")?;
 
-        // Link debug branch elements
+        // Link overlay debug pipeline independently
+        gst::Element::link(&overlay_filesrc, &overlay_decodebin)
+            .map_err(|_| "Failed to link overlay filesrc to decodebin")?;
+
+        // Set up decodebin pad handler for overlay debug
+        let overlay_videoconvert_clone = overlay_videoconvert.clone();
+        let overlay_filesrc_name = overlay_filesrc.name().to_string();
+        overlay_decodebin.connect_pad_added(move |_dbin, src_pad| {
+            println!("[Overlay Debug] 🎬 Overlay decodebin pad added");
+            let caps = match src_pad.current_caps() {
+                Some(caps) => caps,
+                None => return,
+            };
+
+            let structure = match caps.structure(0) {
+                Some(s) => s,
+                None => return,
+            };
+
+            if !structure.name().starts_with("video/") {
+                return;
+            }
+
+            let sink_pad = overlay_videoconvert_clone.static_pad("sink").unwrap();
+            if sink_pad.is_linked() {
+                return;
+            }
+
+            match src_pad.link(&sink_pad) {
+                Ok(_) => {
+                    println!("[Overlay Debug] ✅ Overlay debug pipeline linked - independent framerate");
+                },
+                Err(e) => {
+                    println!("[Overlay Debug] ❌ Failed to link overlay debug: {:?}", e);
+                }
+            }
+        });
+
+        // Link the rest of overlay debug pipeline
         gst::Element::link_many(&[&overlay_videoconvert, &overlay_jpegenc, &overlay_appsink])
             .map_err(|_| "Failed to link overlay debug branch")?;
-        println!("[Composite FX] ✅ Overlay debug branch linked: videoconvert → jpegenc → appsink");
 
-        // Add compositor queue to bin
-        fx_bin.add(&compositor_queue)
-            .map_err(|_| "Failed to add compositor queue to FX bin")?;
+        // Configure overlay debug appsink for independent operation
+        overlay_appsink.set_property("async", true);
+        overlay_appsink.set_property("sync", false);
+        overlay_appsink.set_property("max-buffers", 1u32);
+        overlay_appsink.set_property_from_str("drop", "true");
 
-        let final_element = compositor_queue;
+        // For compositor, use the original capsfilter -> queue path
+        gst::Element::link(&capsfilter, &overlay_queue)
+            .map_err(|_| "Failed to link capsfilter to queue")?;
+
+        let final_element = overlay_queue.clone();
         
         // Create ghost pad on the bin
         let final_src_pad = final_element.static_pad("src")
@@ -671,7 +704,8 @@ impl GStreamerComposite {
                     if jpeg_data.len() > 100 {
                         println!("[Overlay Layer] 📸 Sending frame: {} bytes", jpeg_data.len());
                         if let Some(sender) = overlay_frame_sender_clone.read().as_ref() {
-                            let _ = sender.send(jpeg_data.to_vec());
+                            // Non-blocking send - don't wait if channel is full
+                            let _ = sender.try_send(jpeg_data.to_vec());
                         }
                     }
 
