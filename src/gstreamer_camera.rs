@@ -84,6 +84,7 @@ impl GStreamerCamera {
         Ok(cameras)
     }
     
+    #[allow(dead_code)]
     pub fn start(&mut self, device_id: &str) -> Result<(), String> {
         self.start_with_quality(device_id, "high")
     }

@@ -224,7 +224,7 @@ impl GStreamerComposite {
         Ok(())
     }
     
-    pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
+    pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, _similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] Playing: {} (chroma: {})", file_path, use_chroma_key);
         
         let pipeline = self.pipeline.as_ref()
@@ -296,12 +296,15 @@ impl GStreamerComposite {
         // Videorate to match target FPS
         // CRITICAL: Preserves original playback speed/duration!
         // - skip-to-first=false: Don't skip frames at start (maintains timing)
+        // - drop-only=false: Allow frame duplication for upscaling FPS
         // - Duplicates frames for low FPS (24fps → 60fps)
         // - Drops frames for high FPS (60fps → 30fps)
         // Result: Video plays at ORIGINAL speed, outputs at TARGET fps
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
             .property("skip-to-first", false) // Maintain original timing
+            .property("drop-only", false) // Allow duplication (default, but explicit)
+            .property("average-period", 0u64) // No averaging, immediate conversion
             .build()
             .map_err(|_| "Failed to create videorate")?;
         
@@ -377,7 +380,8 @@ impl GStreamerComposite {
         let overlay_appsink = ElementFactory::make("appsink")
             .name("overlay_layer")
             .property("emit-signals", true)
-            .property("sync", false)
+            .property("sync", false) // Don't sync to clock
+            .property("async", false) // Process buffers immediately
             .property("max-buffers", 2u32)
             .property_from_str("drop", "true")
             .build()
@@ -590,12 +594,8 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
         
-        // Make compositor ignore timestamps on this pad - just composite frames as they arrive
-        // This is the KEY to preventing speed issues!
-        comp_sink_pad.set_property("ignore-eos", false);
-        println!("[Composite FX] ⏱️ Compositor will composite frames as they arrive (no timestamp sync)");
-        
-        // Sync state with parent - this is the correct GStreamer way
+        // Use sync_state_with_parent() - the standard GStreamer approach
+        // This automatically handles state transitions and timing
         println!("[Composite FX] ▶️ Syncing FX bin state with parent pipeline...");
         fx_bin.sync_state_with_parent()
             .map_err(|e| format!("Failed to sync FX bin state: {:?}", e))?;
@@ -707,8 +707,13 @@ impl GStreamerComposite {
                     }
                 }
                 
-                fx_bin.set_state(gst::State::Null).ok();
+                // Remove bin from pipeline - DON'T set to Null first!
+                // Setting to Null resets internal timing and causes speed issues
+                // Just remove it and let GStreamer handle cleanup
                 pipeline.remove(&fx_bin).ok();
+                
+                // Now set to Null AFTER removing to properly clean up
+                fx_bin.set_state(gst::State::Null).ok();
             }
         }
         
