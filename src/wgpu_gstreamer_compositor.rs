@@ -248,57 +248,32 @@ impl WgpuGStreamerCompositor {
                         let camera_frame = frame_buffer.get_latest_frame("camera");
                         let media_frame = frame_buffer.get_latest_frame("media");
 
-                        // Update WGPU textures and render
-                        let (camera_texture, media_texture) = {
-                            let output_size = {
-                                let wgpu = wgpu_compositor.read();
-                                wgpu.output_size()
-                            };
-
-                            let camera_texture = camera_frame.as_ref().map(|frame| {
-                                let mut wgpu = wgpu_compositor.write();
-                                wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data)
-                            });
-
-                            let media_texture = media_frame.as_ref().map(|frame| {
-                                let mut wgpu = wgpu_compositor.write();
-                                wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data)
-                            });
-
-                            (camera_texture, media_texture)
+                        // Simple compositing: use camera frame if available, otherwise media frame
+                        let frame_data = if let Some(camera_frame) = camera_frame.as_ref() {
+                            &camera_frame.data
+                        } else if let Some(media_frame) = media_frame.as_ref() {
+                            &media_frame.data
+                        } else {
+                            continue; // No frames available
                         };
 
-                        // Update layer textures
+                        // Create single composited texture and set it
+                        let output_size = {
+                            let wgpu = wgpu_compositor.read();
+                            wgpu.output_size()
+                        };
+
+                        let composited_texture = {
+                            let mut wgpu = wgpu_compositor.write();
+                            wgpu.create_texture_from_rgba(output_size.0, output_size.1, frame_data)
+                        };
+
+                        // Set the texture for rendering
                         {
                             let mut wgpu = wgpu_compositor.write();
-                            if let Some(texture) = camera_texture {
-                                if let Some(layer) = wgpu.get_layer_mut("camera") {
-                                    layer.update_texture(texture);
-                                }
-                            }
-                            if let Some(texture) = media_texture {
-                                if let Some(layer) = wgpu.get_layer_mut("media") {
-                                    layer.update_texture(texture);
-                                }
-                            }
+                            wgpu.set_texture(composited_texture);
 
-                            // Render frame
-                            let output_texture = wgpu.create_output_texture();
-                            if let Err(e) = wgpu.render_frame(&output_texture) {
-                                println!("[WGPU-GST Compositor] Render error: {:?}", e);
-                                continue;
-                            }
-
-                            // Read back composited frame
-                            match wgpu.read_output_texture(&output_texture) {
-                                Ok(_data) => {
-                                    // TODO: Send to output channels
-                                }
-                                Err(e) => {
-                                    println!("[WGPU-GST Compositor] Readback error: {:?}", e);
-                                    continue;
-                                }
-                            }
+                            // TODO: Send composited frame to output when output system is implemented
                         }
 
                         if frame_number % 60 == 0 {
