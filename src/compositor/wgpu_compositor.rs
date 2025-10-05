@@ -720,6 +720,11 @@ impl WgpuCompositor {
                     self.width * self.height * 4, result.len());
             }
             
+            // Debug: Print the first few bytes of the frame
+            if !result.is_empty() {
+                println!("[WgpuCompositor] First 16 bytes of frame: {:?}", &result[0..std::cmp::min(16, result.len())]);
+            }
+            
             match sender.send(result.clone()) {
                 Ok(_) => println!("[WgpuCompositor] Frame sent successfully to {} receivers", sender.receiver_count()),
                 Err(e) => println!("[WgpuCompositor] Error sending frame: {}", e),
