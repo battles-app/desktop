@@ -642,14 +642,30 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
         // Spawn a task to handle the async operations
         tokio::spawn(async move {
             let camera_id = format!("camera_{}", device_index);
+
+            // Remove any existing camera inputs first
+            // Check all possible camera IDs (camera_0 to camera_10)
+            for i in 0..11 {
+                let existing_id = format!("camera_{}", i);
+                if let Err(e) = compositor_clone.remove_camera_input(existing_id).await {
+                    // Ignore errors for non-existent inputs
+                    if !e.contains("was not found") {
+                        println!("[Composite] Warning removing camera input: {}", e);
+                    }
+                }
+            }
+
             if let Err(e) = compositor_clone.add_camera_input(camera_id, device_index).await {
                 println!("[Composite] Failed to add camera input: {}", e);
                 return;
             }
 
-            if let Err(e) = compositor_clone.start().await {
-                println!("[Composite] Failed to start compositor: {}", e);
-                return;
+            // Only start the compositor if it's not already running
+            if !compositor_clone.is_running() {
+                if let Err(e) = compositor_clone.start().await {
+                    println!("[Composite] Failed to start compositor: {}", e);
+                    return;
+                }
             }
 
             println!("[Composite] ✅ WGPU composite pipeline started successfully");

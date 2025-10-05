@@ -136,6 +136,29 @@ impl WgpuGStreamerCompositor {
         Ok(())
     }
 
+    /// Remove a camera input source
+    pub async fn remove_camera_input(&self, id: String) -> Result<(), String> {
+        println!("[WGPU-GST Compositor] Removing camera input: {}", id);
+
+        // Remove from input manager
+        {
+            let mut input_mgr = self.input_manager.write();
+            input_mgr.remove_input(&id)
+                .map_err(|e| format!("Failed to remove input: {}", e))?;
+        }
+
+        // Remove layer from WGPU compositor
+        {
+            let mut wgpu = self.wgpu_compositor.write();
+            if !wgpu.remove_layer(&id) {
+                println!("[WGPU-GST Compositor] Warning: Layer {} was not found", id);
+            }
+        }
+
+        println!("[WGPU-GST Compositor] Camera input removed: {}", id);
+        Ok(())
+    }
+
     /// Add a media file input source
     pub async fn add_media_input(&self, id: String, file_path: String) -> Result<(), String> {
         println!("[WGPU-GST Compositor] Adding media input: {} ({})", id, file_path);
