@@ -590,27 +590,16 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         println!("[Composite FX] ✅ FX bin linked to compositor");
         
-        // Set timestamp offset on identity element to align FX start with current pipeline time
-        // This prevents the FX from trying to "catch up" to when the pipeline originally started
-        if let Some(identity_elem) = fx_bin.by_name("fxidentity") {
-            if let (Some(clock), Some(base_time)) = (pipeline.clock(), pipeline.base_time()) {
-                if let Some(clock_time) = clock.time() {
-                    // ts-offset = current_time - base_time
-                    // This makes timestamp 0 from the FX align with "now" in the pipeline
-                    let ts_offset = (clock_time.nseconds() as i64) - (base_time.nseconds() as i64);
-                    identity_elem.set_property("ts-offset", ts_offset);
-                    println!("[Composite FX] ⏱️ Set identity ts-offset: {} ns (clock: {:?}, base: {:?})", 
-                             ts_offset, clock_time, base_time);
-                }
-            }
-        }
+        // Make compositor ignore timestamps on this pad - just composite frames as they arrive
+        // This is the KEY to preventing speed issues!
+        comp_sink_pad.set_property("ignore-eos", false);
+        println!("[Composite FX] ⏱️ Compositor will composite frames as they arrive (no timestamp sync)");
         
-        // Use the proper GStreamer method for adding elements to a running pipeline
-        // sync_state_with_parent() automatically handles all timing and clock synchronization
-        println!("[Composite FX] ⏱️ Syncing FX bin state with parent pipeline...");
+        // Sync state with parent - this is the correct GStreamer way
+        println!("[Composite FX] ▶️ Syncing FX bin state with parent pipeline...");
         fx_bin.sync_state_with_parent()
             .map_err(|e| format!("Failed to sync FX bin state: {:?}", e))?;
-        println!("[Composite FX] ✅ FX bin synced with parent pipeline");
+        println!("[Composite FX] ✅ FX bin synced to PLAYING");
         
         // Wait for state change to complete (with 2 second timeout)
         match fx_bin.state(Some(gst::ClockTime::from_seconds(2))) {
