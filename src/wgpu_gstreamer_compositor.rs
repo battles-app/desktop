@@ -65,7 +65,7 @@ impl WgpuGStreamerCompositor {
 
     /// Add a camera input source
     pub async fn add_camera_input(&self, id: String, device_index: u32) -> Result<(), String> {
-        println!("[WGPU-GST Compositor] Adding camera input: {} (device {})", id, device_index);
+        println!("[WGPU-GST Compositor] Adding camera input: {} (device {}) at {}x{} @ {}fps", id, device_index, self.width, self.height, self.fps);
 
         let config = InputConfig {
             input_type: InputType::Camera { device_index },
@@ -435,6 +435,16 @@ impl WgpuGStreamerCompositor {
     /// Get compositor status
     pub fn is_running(&self) -> bool {
         *self.is_running.read()
+    }
+
+    /// Get compositor dimensions
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Get compositor fps
+    pub fn fps(&self) -> u32 {
+        self.fps
     }
 
     /// Get current frame count

@@ -604,16 +604,11 @@ async fn stop_camera_preview() -> Result<(), String> {
 async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<String, String> {
     println!("[Composite] Initializing WGPU + GStreamer composite system");
 
+    // No longer pre-create compositor - let start_composite_pipeline create it with correct dimensions
     if WGPU_GSTREAMER_COMPOSITOR.read().is_some() {
         println!("[Composite] Already initialized");
         return Ok("Composite system already initialized".to_string());
     }
-
-    // Create new compositor (1920x1080 @ 60fps)
-    let compositor = WgpuGStreamerCompositor::new(1920, 1080, 60, app_handle.clone()).await
-        .map_err(|e| format!("Failed to initialize WGPU compositor: {}", e))?;
-
-    *WGPU_GSTREAMER_COMPOSITOR.write() = Some(compositor);
 
     println!("[Composite] ✅ WGPU + GStreamer composite system initialized");
     Ok("WGPU composite system initialized".to_string())
@@ -622,16 +617,28 @@ async fn initialize_composite_system(app_handle: tauri::AppHandle) -> Result<Str
 #[command]
 async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32, app: tauri::AppHandle) -> Result<(), String> {
     println!("[Composite] Starting WGPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+    println!("[Composite] Camera device: {}", camera_device_id);
 
     // Parse device index
     let device_index: u32 = camera_device_id.parse()
         .map_err(|_| "Invalid camera device ID")?;
 
-    // Initialize compositor if needed
-    if WGPU_GSTREAMER_COMPOSITOR.read().is_none() {
+    // Always create new compositor with correct dimensions (or reuse if dimensions match)
+    let needs_new_compositor = if let Some(existing) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        // Check if dimensions match
+        let (existing_width, existing_height) = existing.dimensions();
+        existing_width != width || existing_height != height || existing.fps() != fps
+    } else {
+        true // No existing compositor
+    };
+
+    if needs_new_compositor {
+        println!("[Composite] Creating new compositor with dimensions {}x{} @ {}fps", width, height, fps);
         let compositor = WgpuGStreamerCompositor::new(width, height, fps, app.clone()).await
             .map_err(|e| format!("Failed to create WGPU compositor: {}", e))?;
         *WGPU_GSTREAMER_COMPOSITOR.write() = Some(compositor);
+    } else {
+        println!("[Composite] Reusing existing compositor with matching dimensions");
     }
 
     // Add camera input and start the pipeline
