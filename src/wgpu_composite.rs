@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, Result};
-use glam::Vec2;
+use glam::{Vec2, Mat4};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
@@ -272,8 +272,8 @@ impl WgpuComposite {
             true,
             0,
             0,
-            width,
-            height,
+            self.width,
+            self.height,
         );
         
         // Add the debug layer to the compositor
@@ -460,7 +460,18 @@ impl WgpuComposite {
         self.inputs.lock().unwrap().insert("overlay".to_string(), fx_input);
         
         // Create an overlay layer in the compositor
-        let mut overlay_layer = Layer::new("overlay");
+        let mut overlay_layer = Layer::new(
+            "overlay".to_string(),
+            Mat4::IDENTITY,
+            1.0,
+            0.0,
+            1,
+            true,
+            0,
+            0,
+            self.width,
+            self.height,
+        );
         overlay_layer.z_order = 1; // Above the camera
         self.compositor.lock().unwrap().add_layer(overlay_layer)?;
         

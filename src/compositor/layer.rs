@@ -46,7 +46,26 @@ pub struct Layer {
 
 impl Layer {
     /// Create a new layer with default values
-    pub fn new(id: &str) -> Self {
+    pub fn new(id: String, _transform: Mat4, opacity: f32, rotation: f32, z_order: i32, visible: bool, pts: u64, duration: u64, width: u32, height: u32) -> Self {
+        Self {
+            id,
+            texture: None,
+            texture_view: None,
+            position: Vec2::ZERO,
+            scale: Vec2::ONE,
+            rotation,
+            opacity,
+            z_order,
+            visible,
+            pts,
+            duration,
+            width,
+            height,
+        }
+    }
+    
+    /// Create a new layer with simple parameters
+    pub fn new_simple(id: &str) -> Self {
         Self {
             id: id.to_string(),
             texture: None,
