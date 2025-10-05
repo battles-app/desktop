@@ -651,11 +651,6 @@ impl WgpuCompositor {
             label: Some("Copy Encoder"),
         });
         
-        // Calculate aligned bytes per row (must be a multiple of COPY_BYTES_PER_ROW_ALIGNMENT = 256)
-        let align = 256;
-        let bytes_per_row = self.width * 4;
-        let aligned_bytes_per_row = ((bytes_per_row + align - 1) / align) * align;
-        
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
                 texture: self.output_texture.as_ref().unwrap(),
