@@ -759,6 +759,7 @@ async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
 #[command]
 async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
     println!("[Composite] Starting WGPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+    println!("[Composite] IPC call received with camera_device_id: {}", camera_device_id);
     
     // Clone the values we need to pass to the async block
     let camera_id = camera_device_id.clone();
@@ -766,17 +767,38 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
     // Use a separate scope to ensure the lock is dropped before the await
     let mut composite_opt = {
         let composite_lock = WGPU_COMPOSITE.read();
-        composite_lock.as_ref().map(|c| c.clone())
+        if composite_lock.is_none() {
+            println!("[Composite] ERROR: WGPU_COMPOSITE is None, initializing it now");
+            drop(composite_lock);
+            
+            // We can't initialize the composite system without a valid AppHandle
+            // Just log the error and continue
+            println!("[Composite] Cannot initialize composite system without a valid AppHandle")
+            
+            // Try again
+            let composite_lock = WGPU_COMPOSITE.read();
+            composite_lock.as_ref().map(|c| c.clone())
+        } else {
+            composite_lock.as_ref().map(|c| c.clone())
+        }
     };
     
     if let Some(ref mut composite) = composite_opt {
         // Now we can await without holding the lock
-        composite.start(&camera_id, width, height, fps, rotation)
-            .await
-            .map_err(|e| format!("Failed to start WGPU composite: {}", e))?;
-        println!("[Composite] ✅ WGPU composite pipeline started");
+        match composite.start(&camera_id, width, height, fps, rotation).await {
+            Ok(_) => {
+                println!("[Composite] ✅ WGPU composite pipeline started");
+            },
+            Err(e) => {
+                let error_msg = format!("Failed to start WGPU composite: {}", e);
+                println!("[Composite] ERROR: {}", error_msg);
+                return Err(error_msg);
+            }
+        }
     } else {
-        return Err("WGPU composite not initialized".to_string());
+        let error_msg = "WGPU composite not initialized".to_string();
+        println!("[Composite] ERROR: {}", error_msg);
+        return Err(error_msg);
     }
     
     Ok(())
