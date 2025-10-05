@@ -16,6 +16,7 @@ pub struct GStreamerComposite {
     target_fps: Arc<RwLock<u32>>,
     target_width: Arc<RwLock<u32>>,
     target_height: Arc<RwLock<u32>>,
+    fx_counter: Arc<RwLock<u32>>, // Counter for unique FX bin names
 }
 
 impl GStreamerComposite {
@@ -32,6 +33,7 @@ impl GStreamerComposite {
             target_fps: Arc::new(RwLock::new(30)),
             target_width: Arc::new(RwLock::new(1280)),
             target_height: Arc::new(RwLock::new(720)),
+            fx_counter: Arc::new(RwLock::new(0)),
         })
     }
     
@@ -233,9 +235,23 @@ impl GStreamerComposite {
         let compositor = pipeline.by_name("comp")
             .ok_or("Compositor not found")?;
         
-        // Remove existing FX bin if any
-        if let Some(existing_fx) = pipeline.by_name("fxbin") {
+        // Increment FX counter for unique bin names
+        let fx_id = {
+            let mut counter = self.fx_counter.write();
+            *counter += 1;
+            *counter
+        };
+        println!("[Composite FX] 🆔 FX Instance ID: {}", fx_id);
+        
+        // Remove existing FX bin if any (search for any fxbin_*)
+        let existing_bins: Vec<_> = pipeline.children().iter()
+            .filter(|el| el.name().starts_with("fxbin_"))
+            .cloned()
+            .collect();
+        
+        for existing_fx in existing_bins {
             if let Ok(bin) = existing_fx.dynamic_cast::<gst::Bin>() {
+                println!("[Composite FX] 🗑️ Removing old FX bin: {}", bin.name());
                 // Unlink from compositor
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
@@ -244,33 +260,40 @@ impl GStreamerComposite {
                     }
                 }
                 
-                bin.set_state(gst::State::Null).ok();
+                // Remove bin from pipeline - DON'T set to Null first!
+                // Setting to Null resets internal timing and causes speed issues
+                // Just remove it and let GStreamer handle cleanup
                 pipeline.remove(&bin).ok();
+                
+                // Now set to Null AFTER removing to properly clean up
+                bin.set_state(gst::State::Null).ok();
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
         
-        // Create FX bin: filesrc → decodebin → videoconvert → videoscale → [alpha] → videorate → compositor
-        let fx_bin = gst::Bin::builder().name("fxbin").build();
+        // Create FX bin with UNIQUE name: filesrc → decodebin → videoconvert → videoscale → [alpha] → videorate → compositor
+        let bin_name = format!("fxbin_{}", fx_id);
+        let fx_bin = gst::Bin::builder().name(&bin_name).build();
+        println!("[Composite FX] 📦 Creating new FX bin: {}", bin_name);
         
         let filesrc = ElementFactory::make("filesrc")
-            .name("fxfilesrc")
+            .name(&format!("fxfilesrc_{}", fx_id))
             .property("location", &file_path)
             .build()
             .map_err(|e| format!("Failed to create filesrc: {}", e))?;
         
         let decodebin = ElementFactory::make("decodebin")
-            .name("fxdecode")
+            .name(&format!("fxdecode_{}", fx_id))
             .build()
             .map_err(|e| format!("Failed to create decodebin: {}", e))?;
         
         let videoconvert = ElementFactory::make("videoconvert")
-            .name("fxconvert")
+            .name(&format!("fxconvert_{}", fx_id))
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
         
         let videoscale = ElementFactory::make("videoscale")
-            .name("fxscale")
+            .name(&format!("fxscale_{}", fx_id))
             .build()
             .map_err(|_| "Failed to create videoscale")?;
         
@@ -280,7 +303,7 @@ impl GStreamerComposite {
         // Create alpha element if chroma keying enabled
         let alpha_elem = if use_chroma_key {
             let alpha = ElementFactory::make("alpha")
-                .name("fxalpha")
+                .name(&format!("fxalpha_{}", fx_id))
                 .property_from_str("method", "custom")
                 .property("target-r", rgb.0 as u32)
                 .property("target-g", rgb.1 as u32)
@@ -301,7 +324,7 @@ impl GStreamerComposite {
         // - Drops frames for high FPS (60fps → 30fps)
         // Result: Video plays at ORIGINAL speed, outputs at TARGET fps
         let videorate = ElementFactory::make("videorate")
-            .name("fxvideorate")
+            .name(&format!("fxvideorate_{}", fx_id))
             .property("skip-to-first", false) // Maintain original timing
             .property("drop-only", false) // Allow duplication (default, but explicit)
             .property("average-period", 0u64) // No averaging, immediate conversion
@@ -333,7 +356,7 @@ impl GStreamerComposite {
             .build();
         
         let capsfilter = ElementFactory::make("capsfilter")
-            .name("fxcaps")
+            .name(&format!("fxcaps_{}", fx_id))
             .property("caps", &caps)
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
@@ -341,44 +364,44 @@ impl GStreamerComposite {
         // Identity element for timestamp offsetting
         // This will be configured later to align FX start with current pipeline time
         let identity = ElementFactory::make("identity")
-            .name("fxidentity")
+            .name(&format!("fxidentity_{}", fx_id))
             .property("sync", false) // Don't sync to clock
             .build()
             .map_err(|_| "Failed to create identity")?;
         
         // Tee for overlay layer debug output
         let overlay_tee = ElementFactory::make("tee")
-            .name("overlay_tee")
+            .name(&format!("overlay_tee_{}", fx_id))
             .build()
             .map_err(|_| "Failed to create overlay tee")?;
         
         let overlay_queue1 = ElementFactory::make("queue")
-            .name("overlay_queue1")
+            .name(&format!("overlay_queue1_{}", fx_id))
             .property("max-size-buffers", 2u32)
             .property("max-size-time", 0u64) // Disable time-based buffering
             .build()
             .map_err(|_| "Failed to create overlay_queue1")?;
         
         let overlay_queue2 = ElementFactory::make("queue")
-            .name("overlay_queue2")
+            .name(&format!("overlay_queue2_{}", fx_id))
             .property("max-size-buffers", 2u32)
             .property("max-size-time", 0u64) // Disable time-based buffering
             .build()
             .map_err(|_| "Failed to create overlay_queue2")?;
         
         let overlay_convert = ElementFactory::make("videoconvert")
-            .name("overlay_convert")
+            .name(&format!("overlay_convert_{}", fx_id))
             .build()
             .map_err(|_| "Failed to create overlay_convert")?;
         
         let overlay_jpegenc = ElementFactory::make("jpegenc")
-            .name("overlay_jpegenc")
+            .name(&format!("overlay_jpegenc_{}", fx_id))
             .property("quality", 90i32)
             .build()
             .map_err(|_| "Failed to create overlay_jpegenc")?;
         
         let overlay_appsink = ElementFactory::make("appsink")
-            .name("overlay_layer")
+            .name(&format!("overlay_layer_{}", fx_id))
             .property("emit-signals", true)
             .property("sync", false) // Don't sync to clock
             .property("async", false) // Process buffers immediately
@@ -697,8 +720,15 @@ impl GStreamerComposite {
             None => return Ok(()),
         };
         
-        if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
+        // Remove all FX bins (search for any fxbin_*)
+        let existing_bins: Vec<_> = pipeline.children().iter()
+            .filter(|el| el.name().starts_with("fxbin_"))
+            .cloned()
+            .collect();
+        
+        for fx_bin_element in existing_bins {
             if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
+                println!("[Composite FX] 🗑️ Removing FX bin: {}", fx_bin.name());
                 // Unlink from compositor
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
