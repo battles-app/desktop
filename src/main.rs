@@ -716,7 +716,11 @@ async fn start_composite_frame_emitter(app_handle: tauri::AppHandle) {
             while let Ok(frame_data) = rx.recv().await {
                 // Emit as base64 to frontend
                 let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                let _ = app_handle.emit("composite-frame", base64_frame);
+                println!("[Composite IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
+                match app_handle.emit("composite-frame", base64_frame) {
+                    Ok(_) => println!("[Composite IPC] Frame emitted successfully"),
+                    Err(e) => println!("[Composite IPC] Error emitting frame: {}", e),
+                }
             }
         }
     });
@@ -733,7 +737,11 @@ async fn start_camera_layer_frame_emitter(app_handle: tauri::AppHandle) {
             while let Ok(frame_data) = rx.recv().await {
                 // Emit as base64 to frontend
                 let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                let _ = app_handle.emit("camera-layer-frame", base64_frame);
+                println!("[Camera Layer IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
+                match app_handle.emit("camera-layer-frame", base64_frame) {
+                    Ok(_) => println!("[Camera Layer IPC] Frame emitted successfully"),
+                    Err(e) => println!("[Camera Layer IPC] Error emitting frame: {}", e),
+                }
             }
         }
     });
@@ -750,7 +758,11 @@ async fn start_overlay_layer_frame_emitter(app_handle: tauri::AppHandle) {
             while let Ok(frame_data) = rx.recv().await {
                 // Emit as base64 to frontend
                 let base64_frame = base64::engine::general_purpose::STANDARD.encode(&frame_data);
-                let _ = app_handle.emit("overlay-layer-frame", base64_frame);
+                println!("[Overlay Layer IPC] Emitting frame, size: {}, base64 length: {}", frame_data.len(), base64_frame.len());
+                match app_handle.emit("overlay-layer-frame", base64_frame) {
+                    Ok(_) => println!("[Overlay Layer IPC] Frame emitted successfully"),
+                    Err(e) => println!("[Overlay Layer IPC] Error emitting frame: {}", e),
+                }
             }
         }
     });

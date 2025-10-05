@@ -711,7 +711,21 @@ impl WgpuCompositor {
         
         // Send the frame to listeners
         if let Some(sender) = self.frame_sender.lock().unwrap().as_ref() {
-            let _ = sender.send(result.clone());
+            println!("[WgpuCompositor] Sending frame to listeners, size: {}, dimensions: {}x{}, expected size: {}", 
+                result.len(), self.width, self.height, self.width * self.height * 4);
+            
+            // Verify the frame size matches what we expect
+            if result.len() != (self.width * self.height * 4) as usize {
+                println!("[WgpuCompositor] WARNING: Frame size mismatch! Expected: {}, actual: {}", 
+                    self.width * self.height * 4, result.len());
+            }
+            
+            match sender.send(result.clone()) {
+                Ok(_) => println!("[WgpuCompositor] Frame sent successfully to {} receivers", sender.receiver_count()),
+                Err(e) => println!("[WgpuCompositor] Error sending frame: {}", e),
+            }
+        } else {
+            println!("[WgpuCompositor] No frame sender available");
         }
         
         Ok(result)

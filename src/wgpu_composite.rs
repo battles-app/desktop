@@ -188,7 +188,13 @@ impl WgpuComposite {
                     
                     // Forward the camera frame to listeners
                     if let Some(sender) = camera_frame_sender_clone.lock().unwrap().as_ref() {
-                        let _ = sender.send(camera_data);
+                        println!("[WgpuComposite] Sending camera frame to listeners, size: {}", camera_data.len());
+                        match sender.send(camera_data) {
+                            Ok(_) => println!("[WgpuComposite] Camera frame sent successfully to {} receivers", sender.receiver_count()),
+                            Err(e) => println!("[WgpuComposite] Error sending camera frame: {}", e),
+                        }
+                    } else {
+                        println!("[WgpuComposite] No camera frame sender available");
                     }
                 }
                 
