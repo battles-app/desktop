@@ -466,14 +466,34 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
-        // This blocks and waits for each frame's timestamp to arrive in real-time
-        let identity_sync = ElementFactory::make("identity")
-            .name("fxsync")
-            .property("sync", true)              // Block until buffer timestamp arrives in real-time
-            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
+        // Colorspace conversion (right after decode)
+        let videoconvert = ElementFactory::make("videoconvert")
+            .name("fxconvert")
+            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
             .build()
-            .map_err(|_| "Failed to create identity sync")?;
+            .map_err(|_| "Failed to create videoconvert")?;
+
+        // Chroma-key element (conditional - only if use_chroma_key is true)
+        let chromakey = if use_chroma_key {
+            let (r, g, b) = Self::hex_to_rgb(&keycolor)?;
+            println!("[Composite FX] 🎨 Chroma-key enabled: color=#{} (R={}, G={}, B={}), tolerance={:.2}, similarity={:.2}", 
+                     keycolor.trim_start_matches('#'), r, g, b, tolerance, similarity);
+            
+            let chromakey_elem = ElementFactory::make("chromakey")
+                .name("fxchroma")
+                .property("target-r", r as i32)
+                .property("target-g", g as i32)
+                .property("target-b", b as i32)
+                .property("tolerance", (tolerance * 180.0) as i32)  // Convert 0-1 to 0-180
+                .property("similarity", (similarity * 180.0) as i32)  // Convert 0-1 to 0-180
+                .build()
+                .map_err(|e| format!("Failed to create chromakey: {}", e))?;
+            
+            Some(chromakey_elem)
+        } else {
+            println!("[Composite FX] ⏭️ Chroma-key disabled - raw video playback");
+            None
+        };
 
         // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
@@ -493,14 +513,17 @@ impl GStreamerComposite {
             .property("caps", &rate_caps)
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
+
+        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
+        // This blocks and waits for each frame's timestamp to arrive in real-time
+        let identity_sync = ElementFactory::make("identity")
+            .name("fxsync")
+            .property("sync", true)              // Block until buffer timestamp arrives in real-time
+            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
+            .build()
+            .map_err(|_| "Failed to create identity sync")?;
         
         println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
-
-        let videoconvert = ElementFactory::make("videoconvert")
-            .name("fxconvert")
-            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
-            .build()
-            .map_err(|_| "Failed to create videoconvert")?;
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
