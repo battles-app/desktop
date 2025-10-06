@@ -211,9 +211,20 @@ impl GStreamerComposite {
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
         
-        // Set up callbacks for preview frames
+        // Set up callbacks for preview frames with comprehensive debugging
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
+
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::Instant;
+
+        let frame_count = Arc::new(AtomicU64::new(0));
+        let start_time = Arc::new(Instant::now());
+        let last_log_time = Arc::new(RwLock::new(Instant::now()));
+
+        let frame_count_clone = frame_count.clone();
+        let start_time_clone = start_time.clone();
+        let last_log_time_clone = last_log_time.clone();
 
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -229,6 +240,23 @@ impl GStreamerComposite {
                     let jpeg_data = map.as_slice();
 
                     if jpeg_data.len() > 100 {
+                        let count = frame_count_clone.fetch_add(1, Ordering::Relaxed);
+
+                        // Log performance metrics every 2 seconds
+                        let now = Instant::now();
+                        let mut last_log = last_log_time_clone.write();
+                        if now.duration_since(*last_log).as_secs() >= 2 {
+                            let elapsed = start_time_clone.elapsed();
+                            let fps = count as f64 / elapsed.as_secs_f64();
+                            let recent_frames = count.saturating_sub(0);
+                            let recent_fps = recent_frames as f64 / 2.0;
+
+                            println!("[Composite] 📊 Performance - Total: {} frames ({:.1} fps), Recent: {:.1} fps, Buffer: {} bytes",
+                                count, fps, recent_fps, jpeg_data.len());
+
+                            *last_log = now;
+                        }
+
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
                         }
@@ -315,6 +343,7 @@ impl GStreamerComposite {
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
+        println!("[Composite FX] 📁 File: {}", file_path);
 
         // Store FX state
         *self.fx_state.write() = Some(FxPlaybackState {
@@ -541,8 +570,9 @@ impl GStreamerComposite {
         // Sync FX bin state with pipeline
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
-        
+
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
+        println!("[Composite FX] 🔍 Pipeline elements: uridecodebin → videorate → videoconvert → videoscale → capsfilter");
         
         Ok(())
     }

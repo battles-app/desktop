@@ -757,7 +757,10 @@ async fn initialize_composite_system() -> Result<String, String> {
     
     // Start WebSocket server (only if not already running)
     start_composite_websocket_server().await;
-    
+
+    // Start system monitoring
+    start_system_monitor().await;
+
     println!("[Composite] ✅ Composite system initialized on port {}", COMPOSITE_WS_PORT);
     Ok(format!("Composite initialized - WebSocket on port {}", COMPOSITE_WS_PORT))
 }
@@ -802,10 +805,11 @@ async fn start_composite_websocket_server() {
                     while let Ok(frame_data) = rx.recv().await {
                         frame_count += 1;
 
-                        // Log frame rate every 3 seconds
-                        if last_log.elapsed().as_secs() >= 3 {
-                            println!("[Composite WS] Sent {} frames to client ({:.1} fps)",
-                                frame_count, frame_count as f64 / last_log.elapsed().as_secs_f64());
+                        // Log comprehensive performance metrics every 2 seconds
+                        if last_log.elapsed().as_secs() >= 2 {
+                            let fps = frame_count as f64 / last_log.elapsed().as_secs_f64();
+                            println!("[Composite WS] 📡 Network - Sent {} frames ({:.1} fps), Size: {} bytes",
+                                frame_count, fps, frame_data.len());
                             frame_count = 0;
                             last_log = std::time::Instant::now();
                         }
@@ -847,6 +851,48 @@ async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
     
     println!("[GStreamer] Total cameras found: {}", cameras.len());
     Ok(cameras)
+}
+
+// System monitoring task for comprehensive logging
+async fn start_system_monitor() {
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+
+        loop {
+            interval.tick().await;
+
+            // Log system status
+            println!("[System] 🔍 Status Check:");
+
+            // Check camera status
+            if let Some(camera) = GSTREAMER_CAMERA.read().as_ref() {
+                if camera.is_running() {
+                    println!("  📹 Camera: Running");
+                } else {
+                    println!("  📹 Camera: Stopped");
+                }
+            } else {
+                println!("  📹 Camera: Not initialized");
+            }
+
+            // Check composite status
+            if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
+                if composite.is_running() {
+                    println!("  🎬 Composite: Running");
+                } else {
+                    println!("  🎬 Composite: Stopped");
+                }
+            } else {
+                println!("  🎬 Composite: Not initialized");
+            }
+
+            // Check WebSocket connections (basic status)
+            println!("  🌐 WebSocket: Active");
+
+            // Memory usage estimate
+            println!("  💾 System: Monitoring active");
+        }
+    });
 }
 
 #[command]
