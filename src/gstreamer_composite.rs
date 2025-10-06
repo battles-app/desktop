@@ -128,12 +128,18 @@ impl GStreamerComposite {
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
-                 t. ! queue ! {} \
+                 t. ! queue leaky=downstream max-size-buffers=2 ! \
+                   jpegenc quality=90 ! \
+                   appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
+                 t. ! queue leaky=downstream max-size-buffers=2 ! {} \
                  mfvideosrc device-index={} ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  videoflip method={} ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  videoconvert ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  videoscale ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
@@ -154,11 +160,16 @@ impl GStreamerComposite {
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
-                 t. ! queue ! {} \
+                 t. ! queue leaky=downstream max-size-buffers=2 ! \
+                   jpegenc quality=90 ! \
+                   appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
+                 t. ! queue leaky=downstream max-size-buffers=2 ! {} \
                  mfvideosrc device-index={} ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  videoconvert ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  videoscale ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
@@ -174,17 +185,22 @@ impl GStreamerComposite {
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "compositor name=comp \
-               sink_0::zorder=0 sink_0::alpha={} \
-               sink_1::zorder=1 sink_1::alpha={} ! \
+            "compositor name=comp background=black \
+               sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
+               sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
-             t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
-             t. ! queue ! {} \
+             t. ! queue leaky=downstream max-size-buffers=2 ! \
+               jpegenc quality=90 ! \
+               appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
+             t. ! queue leaky=downstream max-size-buffers=2 ! {} \
              v4l2src device=/dev/video{} ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              videoconvert ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              videoscale ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              video/x-raw,width={},height={},format=BGRA ! \
              comp.sink_0",
             self.layers.read().camera_opacity,
@@ -197,7 +213,7 @@ impl GStreamerComposite {
             height
         );
         
-        println!("[Composite] ⚡ Raw composite pipeline (sink sync disabled): {}", pipeline_str);
+        println!("[Composite] ⚡ Raw composite pipeline (professional low-latency): {}", pipeline_str);
         
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
@@ -448,6 +464,22 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
 
+        // Add debug probe to videorate src pad to monitor actual framerate
+        if let Some(src_pad) = videorate.static_pad("src") {
+            src_pad.add_probe(gst::PadProbeType::BUFFER, |_pad, info| {
+                if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
+                    if let Some(caps) = buffer.caps() {
+                        if let Some(structure) = caps.structure(0) {
+                            if let Ok(framerate) = structure.get::<gst::Fraction>("framerate") {
+                                println!("[Composite FX] 🎬 VideoRate output framerate: {}/{} fps", framerate.numer(), framerate.denom());
+                            }
+                        }
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
+
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
             .build()
@@ -653,9 +685,9 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Don't set base time - let FX play with its own timing
-        // This prevents timing conflicts between multiple FX playbacks
-        println!("[Composite FX] ⏱️ Using independent FX timing (no base time sync)");
+        // Let GStreamer handle timing automatically for consistent playback
+        // The videorate element should control the 30fps playback speed
+        println!("[Composite FX] ⏱️ Using automatic timing - videorate controls 30fps playback");
 
         // Sync FX bin state with pipeline
         fx_bin.sync_state_with_parent()

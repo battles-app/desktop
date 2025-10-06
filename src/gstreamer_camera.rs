@@ -155,9 +155,13 @@ impl GStreamerCamera {
         #[cfg(target_os = "windows")]
         let pipeline_str = format!(
             "mfvideosrc device-index={} ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              videoconvert ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              videoscale ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              video/x-raw,width={},height={} ! \
+             queue leaky=downstream max-size-buffers=2 ! \
              jpegenc quality={} ! \
              appsink name=sink emit-signals=true sync=true max-buffers=2 drop=true",
             device_index, width, height, jpeg_quality
@@ -166,8 +170,11 @@ impl GStreamerCamera {
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
             "v4l2src device=/dev/video{} ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              videoconvert ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
+             queue leaky=downstream max-size-buffers=2 ! \
              jpegenc quality=80 ! \
              appsink name=sink emit-signals=true sync=true max-buffers=2 drop=true",
             device_index
@@ -176,14 +183,17 @@ impl GStreamerCamera {
         #[cfg(target_os = "macos")]
         let pipeline_str = format!(
             "avfvideosrc device-index={} ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              videoconvert ! \
+             queue leaky=downstream max-size-buffers=3 ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
+             queue leaky=downstream max-size-buffers=2 ! \
              jpegenc quality=80 ! \
              appsink name=sink emit-signals=true sync=true max-buffers=2 drop=true",
             device_index
         );
         
-        println!("[GStreamer] ⚡ Raw camera pipeline (sink sync disabled): {}", pipeline_str);
+        println!("[GStreamer] ⚡ Raw camera pipeline (low-latency with queues): {}", pipeline_str);
         
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
