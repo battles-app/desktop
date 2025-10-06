@@ -88,6 +88,11 @@ impl WgpuGStreamerCompositor {
         let mut layer = Layer::new(id.clone());
         layer = layer.with_z_order(0); // Camera on bottom
         layer = layer.with_position(0.0, 0.0); // Position at top-left
+
+        // Scale to fit: camera outputs 720x1280, output is 1280x720
+        // Width: 1280/720 = 1.777..., Height: 720/1280 = 0.5625
+        // But in NDC space, scale (1.0, 1.0) fills the output
+        // The texture coordinates will handle the aspect ratio
         layer = layer.with_scale(1.0, 1.0); // Full size
         layer = layer.with_opacity(1.0); // Fully opaque
 
@@ -303,8 +308,9 @@ impl WgpuGStreamerCompositor {
                                 if let Some(frame) = frame_buffer.get_latest_frame(layer_id) {
                                     println!("[WGPU-GST Compositor] Processing frame for layer {}: {} bytes", layer_id, frame.data.len());
 
-                                    // Use output dimensions for texture (camera frames should be scaled to match)
-                                    let texture = wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data);
+                                    // Camera frames are 720x1280 (portrait due to rotation), but we need to render to 1280x720 (landscape)
+                                    // Create texture at actual frame dimensions
+                                    let texture = wgpu.create_texture_from_rgba(720, 1280, &frame.data);
                                     if let Some(layer) = wgpu.get_layer_mut(layer_id) {
                                         layer.update_texture(texture);
                                         // Update the texture array so bind group gets created
