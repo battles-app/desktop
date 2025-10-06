@@ -122,79 +122,82 @@ impl GStreamerComposite {
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
-                "mfvideosrc device-index={} ! \
-                 videoflip method={} ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0 \
-                 compositor name=comp \
+                "compositor name=comp \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
                  t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {}",
+                 t. ! queue ! {} \
+                 mfvideosrc device-index={} ! \
+                 videoflip method={} ! \
+                 videoconvert ! \
+                 videoscale ! \
+                 video/x-raw,width={},height={},format=BGRA,framerate={}/1 ! \
+                 comp.sink_0",
+                self.layers.read().camera_opacity,
+                self.layers.read().overlay_opacity,
+                width,
+                height,
+                self.get_output_branch(),
                 device_index,
                 videoflip_method,
                 width,
                 height,
-                self.layers.read().camera_opacity,
-                self.layers.read().overlay_opacity,
-                width,
-                height,
-                self.get_output_branch()
+                fps
             )
         } else {
             format!(
-                "mfvideosrc device-index={} ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0 \
-                 compositor name=comp \
+                "compositor name=comp \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
                  t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {}",
-                device_index,
-                width,
-                height,
+                 t. ! queue ! {} \
+                 mfvideosrc device-index={} ! \
+                 videoconvert ! \
+                 videoscale ! \
+                 video/x-raw,width={},height={},format=BGRA,framerate={}/1 ! \
+                 comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
-                self.get_output_branch()
+                self.get_output_branch(),
+                device_index,
+                width,
+                height,
+                fps
             )
         };
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "v4l2src device=/dev/video{} ! \
-             videoconvert ! \
-             videoscale ! \
-             video/x-raw,width={},height={},format=BGRA ! \
-             comp.sink_0 \
-             compositor name=comp \
+            "compositor name=comp \
                sink_0::zorder=0 sink_0::alpha={} \
                sink_1::zorder=1 sink_1::alpha={} ! \
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
              t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-             t. ! queue ! {}",
-            device_index,
-            width,
-            height,
+             t. ! queue ! {} \
+             v4l2src device=/dev/video{} ! \
+             videoconvert ! \
+             videoscale ! \
+             video/x-raw,width={},height={},format=BGRA,framerate={}/1 ! \
+             comp.sink_0",
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
             width,
             height,
-            self.get_output_branch()
+            self.get_output_branch(),
+            device_index,
+            width,
+            height,
+            fps
         );
         
         println!("[Composite] Pipeline: {}", pipeline_str);
@@ -227,19 +230,11 @@ impl GStreamerComposite {
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
 
                     let jpeg_data = map.as_slice();
-                    println!("[Composite] Frame captured: {} bytes", jpeg_data.len());
 
                     if jpeg_data.len() > 100 {
                         if let Some(sender) = frame_sender.read().as_ref() {
-                            match sender.send(jpeg_data.to_vec()) {
-                                Ok(_) => println!("[Composite] Frame sent via broadcast channel"),
-                                Err(e) => println!("[Composite] Failed to send frame: {:?}", e),
-                            }
-                        } else {
-                            println!("[Composite] No frame sender available");
+                            let _ = sender.send(jpeg_data.to_vec());
                         }
-                    } else {
-                        println!("[Composite] Frame too small ({} bytes), discarding", jpeg_data.len());
                     }
 
                     Ok(gst::FlowSuccess::Ok)
@@ -673,4 +668,6 @@ impl GStreamerComposite {
         Ok((r, g, b))
     }
 }
+
+
 
