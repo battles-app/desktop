@@ -825,6 +825,14 @@ impl GStreamerComposite {
                 // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
+                        // FLUSH the media pad on manual stop to reset timing state
+                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                            peer_pad.send_event(gst::event::FlushStart::new());
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                            peer_pad.send_event(gst::event::FlushStop::new(true));
+                            println!("[Composite FX] 🔄 Flushed sink_1 on manual stop");
+                        }
+                        
                         ghost_pad.unlink(&peer_pad).ok();
                         // Only release if pad still belongs to compositor
                         if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
