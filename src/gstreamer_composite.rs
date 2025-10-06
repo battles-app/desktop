@@ -123,8 +123,8 @@ impl GStreamerComposite {
         let pipeline_str = if videoflip_method != "none" {
             format!(
                 "compositor name=comp background=black \
-                   sink_0::zorder=0 sink_0::alpha={} \
-                   sink_1::zorder=1 sink_1::alpha={} ! \
+                   sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
+                   sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
@@ -149,8 +149,8 @@ impl GStreamerComposite {
         } else {
             format!(
                 "compositor name=comp background=black \
-                   sink_0::zorder=0 sink_0::alpha={} \
-                   sink_1::zorder=1 sink_1::alpha={} ! \
+                   sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
+                   sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
@@ -180,7 +180,7 @@ impl GStreamerComposite {
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
-             t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+             t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
              t. ! queue ! {} \
              v4l2src device=/dev/video{} ! \
              videoconvert ! \
