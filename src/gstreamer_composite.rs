@@ -504,53 +504,36 @@ impl GStreamerComposite {
 
         // Add chroma keying if enabled
         let chroma_element = if use_chroma_key {
-            println!("[Composite FX] 🎨 Adding chroma key removal for green screen");
+            println!("[Composite FX] 🎨 Green screen removal requested");
             println!("[Composite FX] 🎨 Key color: '{}', tolerance: {}", keycolor, tolerance);
 
-            // Convert hex color to RGB for chromaizer
+            // Convert hex color to RGB for alpha element
             match Self::hex_to_rgb(&keycolor) {
                 Ok(rgb_color) => {
                     println!("[Composite FX] 🎨 RGB color: ({}, {}, {})", rgb_color.0, rgb_color.1, rgb_color.2);
 
-                    // Try alpha element with chroma key method (most compatible)
-                    // GstAlphaMethod enum: 0=set, 1=green, 2=blue, 3=alpha, 4=custom
+                    // Use alpha element for chroma keying - try green method first (simpler)
                     let alpha_result = ElementFactory::make("alpha")
                         .name("fxchroma")
-                        .property("method", 1i32)  // 1 = green chroma key method
-                        .property("target-r", rgb_color.0 as f64 / 255.0)
-                        .property("target-g", rgb_color.1 as f64 / 255.0)
-                        .property("target-b", rgb_color.2 as f64 / 255.0)
-                        .property("tolerance", tolerance)
-                        .build();
+                        .property("black-sensitivity", (tolerance * 128.0) as u32)  // Convert 0.0-1.0 to 0-128
+                        .property("white-sensitivity", (tolerance * 128.0) as u32)
+                        .build()
+                        .map_err(|_| "Failed to create alpha element".to_string())
+                        .and_then(|alpha| {
+                            // Set method property separately to avoid enum issues
+                            alpha.set_property_from_str("method", "green");
+                            Ok(alpha)
+                        });
 
                     match alpha_result {
                         Ok(element) => {
-                            println!("[Composite FX] 🎨 Using alpha element for chroma keying");
+                            println!("[Composite FX] ✅ Using alpha element for chroma keying");
                             Some(element)
                         },
-                        Err(_) => {
-                            println!("[Composite FX] ⚠️ alpha element not available, trying chromahold...");
-                            // Try chromahold with correct YUV chroma value
-                            // Convert RGB green (0,255,0) to YUV chroma
-                            // YUV chroma is approximately (U, V) = (43, 21) for green
-                            match ElementFactory::make("chromahold")
-                                .name("fxchroma")
-                                .property("chroma", 43u32)  // U component for green
-                                .property("target-r", 0.0f64)
-                                .property("target-g", 0.0f64)
-                                .property("target-b", 0.0f64)
-                                .property("tolerance", tolerance as f64)
-                                .build() {
-                                Ok(element) => {
-                                    println!("[Composite FX] 🎨 Using chromahold for chroma keying");
-                                    Some(element)
-                                },
-                                Err(_) => {
-                                    println!("[Composite FX] ⚠️ Neither alpha nor chromahold available - playing FX without chroma keying");
-                                    println!("[Composite FX] 💡 To enable chroma keying, install gst-plugins-good and gst-plugins-bad");
-                                    None
-                                }
-                            }
+                        Err(e) => {
+                            println!("[Composite FX] ❌ Failed to create alpha element: {:?}", e);
+                            println!("[Composite FX] 🎬 Playing FX without chroma keying");
+                            None
                         }
                     }
                 },
