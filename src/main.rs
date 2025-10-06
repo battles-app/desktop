@@ -889,7 +889,15 @@ async fn start_system_monitor() {
             // Check WebSocket connections (basic status)
             println!("  🌐 WebSocket: Active");
 
-            // Memory usage estimate
+            // Pipeline state details
+            if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
+                if let Some(state) = composite.get_pipeline_state() {
+                    println!("  🔧 Pipeline State: {:?}", state);
+                } else {
+                    println!("  🔧 Pipeline State: No pipeline");
+                }
+            }
+
             println!("  💾 System: Monitoring active");
         }
     });

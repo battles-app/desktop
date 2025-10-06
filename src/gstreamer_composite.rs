@@ -221,10 +221,12 @@ impl GStreamerComposite {
         let frame_count = Arc::new(AtomicU64::new(0));
         let start_time = Arc::new(Instant::now());
         let last_log_time = Arc::new(RwLock::new(Instant::now()));
+        let last_frame_count = Arc::new(AtomicU64::new(0));
 
         let frame_count_clone = frame_count.clone();
         let start_time_clone = start_time.clone();
         let last_log_time_clone = last_log_time.clone();
+        let last_frame_count_clone = last_frame_count.clone();
 
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -248,7 +250,8 @@ impl GStreamerComposite {
                         if now.duration_since(*last_log).as_secs() >= 2 {
                             let elapsed = start_time_clone.elapsed();
                             let fps = count as f64 / elapsed.as_secs_f64();
-                            let recent_frames = count.saturating_sub(0);
+                            let prev_count = last_frame_count_clone.swap(count, Ordering::Relaxed);
+                            let recent_frames = count.saturating_sub(prev_count);
                             let recent_fps = recent_frames as f64 / 2.0;
 
                             println!("[Composite] 📊 Performance - Total: {} frames ({:.1} fps), Recent: {:.1} fps, Buffer: {} bytes",
@@ -338,6 +341,10 @@ impl GStreamerComposite {
     
     pub fn is_running(&self) -> bool {
         *self.is_running.read()
+    }
+
+    pub fn get_pipeline_state(&self) -> Option<gst::State> {
+        self.pipeline.as_ref().map(|p| p.current_state())
     }
     
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
@@ -579,7 +586,7 @@ impl GStreamerComposite {
     
     /// Stop the currently playing FX
     pub fn stop_fx(&mut self) -> Result<(), String> {
-        println!("[Composite FX] Stopping FX and cleaning memory...");
+        println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
         
         *self.fx_state.write() = None;
         
