@@ -687,12 +687,6 @@ impl GStreamerComposite {
             .request_pad_simple("sink_1")
             .ok_or("Failed to request compositor sink_1 pad")?;
 
-        // CRITICAL: Flush the media pad (sink_1) to reset timing state, not the camera!
-        comp_sink_pad.send_event(gst::event::FlushStart::new());
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        comp_sink_pad.send_event(gst::event::FlushStop::new(true));  // true = reset running time
-        println!("[Composite FX] 🔄 Flushed compositor sink_1 (media) to reset timing");
-
         // Store the sink pad for proper cleanup
         if let Some(ref mut fx_state) = *self.fx_state.write() {
             fx_state.compositor_sink_pad = Some(comp_sink_pad.clone());
@@ -733,7 +727,7 @@ impl GStreamerComposite {
         // This prevents "late frames" → "QoS catch-up sprint" on replays
         let pipeline_weak_ts = pipeline.downgrade();
         ghost_pad.add_probe(
-            gst::PadProbeType::BUFFER | gst::PadProbeType::BLOCK,
+            gst::PadProbeType::BUFFER,  // No BLOCK flag = instant start, no delay!
             move |pad, info| {
                 if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
                     if let Some(pipeline) = pipeline_weak_ts.upgrade() {
