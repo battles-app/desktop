@@ -555,6 +555,56 @@ impl GStreamerComposite {
         pipeline.add(&fx_bin)
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
+        // Monitor FX bin for End-of-Stream (EOS) to auto-cleanup when video finishes
+        let fx_bin_weak = fx_bin.downgrade();
+        let pipeline_weak = pipeline.downgrade();
+        let compositor_weak = compositor.downgrade();
+        
+        fx_bin.connect("element-added", false, move |args| {
+            // This won't work for EOS detection, need bus monitoring instead
+            None
+        });
+        
+        // Add bus watch for EOS message from FX bin
+        if let Some(bus) = fx_bin.bus() {
+            let fx_bin_name = fx_bin.name();
+            bus.add_watch(move |_bus, msg| {
+                use gst::MessageView;
+                
+                match msg.view() {
+                    MessageView::Eos(_) => {
+                        println!("[Composite FX] 🎬 Video finished (EOS) - auto-cleaning...");
+                        
+                        // Auto-cleanup on video completion
+                        if let (Some(fx_bin), Some(pipeline), Some(compositor)) = 
+                            (fx_bin_weak.upgrade(), pipeline_weak.upgrade(), compositor_weak.upgrade()) {
+                            
+                            // Unlink and release pad
+                            if let Some(ghost_pad) = fx_bin.static_pad("src") {
+                                if let Some(peer_pad) = ghost_pad.peer() {
+                                    ghost_pad.unlink(&peer_pad).ok();
+                                    compositor.release_request_pad(&peer_pad);
+                                }
+                            }
+                            
+                            // Stop and remove bin
+                            fx_bin.set_state(gst::State::Null).ok();
+                            pipeline.remove(&fx_bin).ok();
+                            
+                            println!("[Composite FX] ✅ Auto-cleanup complete");
+                        }
+                        
+                        gst::BusWatchReturn::Remove
+                    },
+                    MessageView::Error(err) => {
+                        println!("[Composite FX] ❌ Error: {}", err.error());
+                        gst::BusWatchReturn::Continue
+                    },
+                    _ => gst::BusWatchReturn::Continue,
+                }
+            }).ok();
+        }
+        
         // Connect uridecodebin's dynamic pads (video AND audio for proper clock sync)
         let videorate_clone = videorate.clone();
 
