@@ -118,13 +118,13 @@ impl GStreamerComposite {
                 "compositor name=comp sink_0::zorder=0 sink_0::alpha=1.0 ! \
                  videoconvert ! video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! videoconvert ! video/x-raw,format=BGRA ! appsink name=preview emit-signals=true sync=false max-buffers=10 drop=true \
                  mfvideosrc device-index={} ! \
                  videoflip method={} ! \
                  videoconvert ! videoscale ! video/x-raw,format=BGRA,width={},height={} ! \
                  videorate ! video/x-raw,framerate={}/1 ! \
                  tee name=camera_tee \
-                 camera_tee. ! queue ! videoconvert ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRA ! appsink name=camera_layer emit-signals=true sync=false max-buffers=10 drop=true \
                  camera_tee. ! queue ! comp.sink_0",
                 width, height, fps,
                 device_index,
@@ -137,12 +137,12 @@ impl GStreamerComposite {
                 "compositor name=comp sink_0::zorder=0 sink_0::alpha=1.0 ! \
                  videoconvert ! video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! videoconvert ! video/x-raw,format=BGRA ! appsink name=preview emit-signals=true sync=false max-buffers=10 drop=true \
                  mfvideosrc device-index={} ! \
                  videoconvert ! videoscale ! video/x-raw,format=BGRA,width={},height={} ! \
                  videorate ! video/x-raw,framerate={}/1 ! \
                  tee name=camera_tee \
-                 camera_tee. ! queue ! videoconvert ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRA ! appsink name=camera_layer emit-signals=true sync=false max-buffers=10 drop=true \
                  camera_tee. ! queue ! comp.sink_0",
                 width, height, fps,
                 device_index,
@@ -178,8 +178,28 @@ impl GStreamerComposite {
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
 
+                    let bgra_data = map.as_slice();
+                    let pixel_count = bgra_data.len() / 4;
+
+                    if pixel_count > 0 {
+                        // Convert BGRA to RGBA for browser compatibility
+                        let mut rgba_data = Vec::with_capacity(bgra_data.len());
+
+                        for chunk in bgra_data.chunks_exact(4) {
+                            rgba_data.push(chunk[2]); // R
+                            rgba_data.push(chunk[1]); // G
+                            rgba_data.push(chunk[0]); // B
+                            rgba_data.push(chunk[3]); // A
+                        }
+
                         if let Some(sender) = frame_sender.read().as_ref() {
-                        let _ = sender.send(map.as_slice().to_vec());
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as u64;
+                            println!("[Composite] Preview frame sent: {} bytes @ {}ms", rgba_data.len(), timestamp);
+                            let _ = sender.send(rgba_data);
+                        }
                     }
 
                     Ok(gst::FlowSuccess::Ok)
