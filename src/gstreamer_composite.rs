@@ -131,7 +131,7 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue leaky=downstream max-size-buffers=2 ! \
                    jpegenc quality=90 ! \
-                   appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
+                   appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue leaky=downstream max-size-buffers=2 ! {} \
                  mfvideosrc device-index={} ! \
                  queue leaky=downstream max-size-buffers=3 ! \
@@ -163,7 +163,7 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue leaky=downstream max-size-buffers=2 ! \
                    jpegenc quality=90 ! \
-                   appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
+                   appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue leaky=downstream max-size-buffers=2 ! {} \
                  mfvideosrc device-index={} ! \
                  queue leaky=downstream max-size-buffers=3 ! \
@@ -194,7 +194,7 @@ impl GStreamerComposite {
              tee name=t \
              t. ! queue leaky=downstream max-size-buffers=2 ! \
                jpegenc quality=90 ! \
-               appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
+               appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              t. ! queue leaky=downstream max-size-buffers=2 ! {} \
              v4l2src device=/dev/video{} ! \
              queue leaky=downstream max-size-buffers=3 ! \
@@ -458,6 +458,10 @@ impl GStreamerComposite {
             .build()
             .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
 
+        // Try to reduce GPU usage by preferring software decoders
+        // Note: This may not work on all systems, but worth trying
+        let _ = uridecode.set_property("force-sw-decoders", &true);
+
         // Let video play at natural framerate - no rate control needed
 
         let videoconvert = ElementFactory::make("videoconvert")
@@ -561,34 +565,8 @@ impl GStreamerComposite {
                     println!("[Composite FX] ⏰ Link time: {:?}", std::time::Instant::now());
                 }
             } else if name.starts_with("audio/") {
-                // Handle audio pads for proper clock synchronization
-                println!("[Composite FX] 🔊 Audio stream detected - connecting to fakesink for clock sync");
-
-                // Create a simple audio pipeline that goes to fakesink (provides clock sync)
-                if let Ok(audio_convert) = gst::ElementFactory::make("audioconvert").name("fx_audio_convert").build() {
-                    if let Ok(audio_sink) = gst::ElementFactory::make("fakesink").name("fx_audio_sink").property("sync", true).build() {
-                        // Add audio elements to the bin
-                        let _ = fx_bin_clone.add(&audio_convert);
-                        let _ = fx_bin_clone.add(&audio_sink);
-
-                        // Set audio sink to sync=true for master clock
-                        let _ = audio_sink.set_property("sync", true);
-
-                        // Link audio chain
-                        if gst::Element::link_many(&[&audio_convert, &audio_sink]).is_ok() {
-                            if let Some(audio_sink_pad) = audio_convert.static_pad("sink") {
-                                if let Err(e) = src_pad.link(&audio_sink_pad) {
-                                    println!("[Composite FX] ❌ Failed to link audio pad: {:?}", e);
-                                } else {
-                                    println!("[Composite FX] ✅ Audio pad linked - clock sync enabled");
-                                    // Set elements to playing state
-                                    let _ = audio_convert.sync_state_with_parent();
-                                    let _ = audio_sink.sync_state_with_parent();
-                                }
-                            }
-                        }
-                    }
-                }
+                // Skip audio pads to avoid timing interference
+                println!("[Composite FX] 🔇 Audio stream detected - skipping to prevent timing conflicts");
             } else {
                 // Skip other pads (subtitles, etc.)
                 println!("[Composite FX] ⏭️ Skipping non-media pad: {}", name);
@@ -678,16 +656,11 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Force fresh timing for each FX play to prevent speed accumulation
-        // Set base time to current time to ensure consistent playback speed
-        if let Some(clock) = pipeline.clock() {
-            let current_time = clock.time().unwrap_or(gst::ClockTime::ZERO);
-            fx_bin.set_base_time(current_time);
-            fx_bin.set_start_time(gst::ClockTime::ZERO);
-            println!("[Composite FX] ⏱️ Fresh timing set - Base: {:?}, Start: 0 (prevents speed accumulation)", current_time);
-        } else {
-            println!("[Composite FX] ⚠️ No pipeline clock available");
-        }
+        // Let FX play with independent timing - don't sync to pipeline base time
+        // This allows natural 30fps playback without pipeline timing interference
+        fx_bin.set_base_time(gst::ClockTime::ZERO);
+        fx_bin.set_start_time(gst::ClockTime::NONE);
+        println!("[Composite FX] ⏱️ Independent timing - Base: 0, Start: NONE (natural 30fps playback)");
 
         // Sync FX bin state with pipeline
         fx_bin.sync_state_with_parent()
