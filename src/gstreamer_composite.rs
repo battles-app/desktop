@@ -563,9 +563,6 @@ impl GStreamerComposite {
                     let fx_state_weak_clone = fx_state_weak.clone();
                     
                     std::thread::spawn(move || {
-                        // Small delay to ensure EOS propagates
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                        
                         if let (Some(fx_bin), Some(pipeline), Some(compositor)) = 
                             (fx_bin_weak_clone.upgrade(), pipeline_weak_clone.upgrade(), compositor_weak_clone.upgrade()) {
                             
@@ -578,9 +575,8 @@ impl GStreamerComposite {
                                     let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
                                     
                                     if should_release {
-                                        // FLUSH the media pad after EOS to reset timing
+                                        // FLUSH the media pad after EOS to reset timing (no wait = instant)
                                         peer_pad.send_event(gst::event::FlushStart::new());
-                                        std::thread::sleep(std::time::Duration::from_millis(10));
                                         peer_pad.send_event(gst::event::FlushStop::new(true));
                                         println!("[Composite FX] 🔄 Flushed sink_1 after EOS");
                                     }
@@ -789,10 +785,9 @@ impl GStreamerComposite {
                 // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
-                        // FLUSH the media pad on manual stop to reset timing
+                        // FLUSH the media pad on manual stop to reset timing (no wait = instant)
                         if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
                             peer_pad.send_event(gst::event::FlushStart::new());
-                            std::thread::sleep(std::time::Duration::from_millis(10));
                             peer_pad.send_event(gst::event::FlushStop::new(true));
                             println!("[Composite FX] 🔄 Flushed sink_1 on manual stop");
                         }
@@ -808,27 +803,19 @@ impl GStreamerComposite {
                     }
                 }
 
-                // Set bin to NULL state and WAIT for completion
-                if let Ok(_) = fx_bin.set_state(gst::State::Null) {
-                    // Wait for state change to complete (timeout 1 second)
-                    let _ = fx_bin.state(Some(gst::ClockTime::from_seconds(1)));
-                }
+                // Set bin to NULL state (non-blocking)
+                let _ = fx_bin.set_state(gst::State::Null);
 
-                // Set all child elements to NULL and wait
+                // Set all child elements to NULL (non-blocking)
                 let iterator = fx_bin.iterate_elements();
                 for item in iterator {
                     if let Ok(element) = item {
-                        if let Ok(_) = element.set_state(gst::State::Null) {
-                            let _ = element.state(Some(gst::ClockTime::from_mseconds(100)));
-                        }
+                        let _ = element.set_state(gst::State::Null);
                     }
                 }
                 
                 // Remove bin from pipeline
                 pipeline.remove(&fx_bin).ok();
-                
-                // Give GStreamer time to cleanup and reset element state
-                std::thread::sleep(std::time::Duration::from_millis(100));
                 
                 println!("[Composite FX] ✅ FX branch removed and memory freed");
             }
