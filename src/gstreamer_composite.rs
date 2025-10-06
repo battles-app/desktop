@@ -16,11 +16,6 @@ pub struct GStreamerComposite {
     pipeline_fps: Arc<RwLock<u32>>,
     pipeline_width: Arc<RwLock<u32>>,
     pipeline_height: Arc<RwLock<u32>>,
-
-    // Persistent FX branch elements (pre-wired to compositor.sink_1)
-    fx_uridecodebin: Option<gst::Element>,
-    fx_valve: Option<gst::Element>,
-    fx_ghost_pad: Option<gst::Pad>,
 }
 
 #[derive(Clone, Debug)]
@@ -76,219 +71,11 @@ impl GStreamerComposite {
             pipeline_fps: Arc::new(RwLock::new(30)),
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
-
-            // Persistent FX elements (initialized when pipeline starts)
-            fx_uridecodebin: None,
-            fx_valve: None,
-            fx_ghost_pad: None,
         })
     }
     
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.frame_sender.write() = Some(sender);
-    }
-
-    /// Create persistent FX branch wired to compositor.sink_1
-    fn create_persistent_fx_branch(&mut self, pipeline: &Pipeline, compositor: &gst::Element) -> Result<(), String> {
-        println!("[Composite FX] 🔧 Building persistent FX branch...");
-
-        // Request sink_1 pad from compositor (persistent connection)
-        let comp_sink_pad = compositor
-            .request_pad_simple("sink_1")
-            .ok_or("Failed to request compositor sink_1 pad")?;
-
-        println!("[Composite FX] 📡 Got persistent sink_1 pad from compositor");
-
-        // Create FX elements
-        use gstreamer::ElementFactory;
-
-        // Decoder
-        let uridecode = ElementFactory::make("uridecodebin")
-            .name("fx_uridecodebin")
-            .build()
-            .map_err(|_| "Failed to create uridecodebin")?;
-
-        // Queues for decoupling
-        let decode_queue = ElementFactory::make("queue")
-            .name("fx_decode_queue")
-            .property("leaky", gst::QueueLeaky::Downstream)
-            .property("max-size-buffers", 2u32)
-            .build()
-            .map_err(|_| "Failed to create decode queue")?;
-
-        let output_queue = ElementFactory::make("queue")
-            .name("fx_output_queue")
-            .property("leaky", gst::QueueLeaky::Downstream)
-            .property("max-size-buffers", 2u32)
-            .build()
-            .map_err(|_| "Failed to create output queue")?;
-
-        // Video processing
-        let videoconvert = ElementFactory::make("videoconvert")
-            .name("fx_convert")
-            .property_from_str("qos", "false")
-            .build()
-            .map_err(|_| "Failed to create videoconvert")?;
-
-        // RGBA caps for chroma keyer
-        let rgba_caps = gst::Caps::builder("video/x-raw")
-            .field("format", "RGBA")
-            .build();
-        let rgba_filter = ElementFactory::make("capsfilter")
-            .name("fx_rgba_filter")
-            .property("caps", &rgba_caps)
-            .build()
-            .map_err(|_| "Failed to create RGBA capsfilter")?;
-
-        // Alpha chroma keyer
-        let alpha = ElementFactory::make("alpha")
-            .name("fx_alpha")
-            .property_from_str("method", "green")
-            .property("angle", 20.0f32)  // Default similarity
-            .property("noise-level", 2.0f32)  // Default smoothness
-            .build()
-            .map_err(|_| "Failed to create alpha keyer")?;
-        let _ = alpha.set_property_from_str("qos", "false"); // Best effort
-
-        // Video rate control
-        let videorate = ElementFactory::make("videorate")
-            .name("fx_videorate")
-            .property("drop-only", true)
-            .build()
-            .map_err(|_| "Failed to create videorate")?;
-
-        // 30fps caps
-        let fps_caps = gst::Caps::builder("video/x-raw")
-            .field("framerate", gst::Fraction::new(30, 1))
-            .build();
-        let fps_filter = ElementFactory::make("capsfilter")
-            .name("fx_fps_filter")
-            .property("caps", &fps_caps)
-            .build()
-            .map_err(|_| "Failed to create fps capsfilter")?;
-
-        // Identity for timeline management
-        let identity = ElementFactory::make("identity")
-            .name("fx_identity")
-            .property("single-segment", true)
-            .property("sync", false)  // Don't block, let compositor pace
-            .build()
-            .map_err(|_| "Failed to create identity")?;
-
-        // Video scaler
-        let videoscale = ElementFactory::make("videoscale")
-            .name("fx_scale")
-            .property_from_str("qos", "false")
-            .build()
-            .map_err(|_| "Failed to create videoscale")?;
-
-        // BGRA caps for compositor
-        let bgra_caps = gst::Caps::builder("video/x-raw")
-            .field("format", "BGRA")
-            .build();
-        let bgra_filter = ElementFactory::make("capsfilter")
-            .name("fx_bgra_filter")
-            .property("caps", &bgra_caps)
-            .build()
-            .map_err(|_| "Failed to create BGRA capsfilter")?;
-
-        // Valve for gating during reset
-        let valve = ElementFactory::make("valve")
-            .name("fx_valve")
-            .property("drop", true)
-            .property_from_str("drop-mode", "transform-to-gap")
-            .build()
-            .map_err(|_| "Failed to create valve")?;
-
-        // Add all elements to pipeline
-        pipeline.add_many(&[
-            &uridecode, &decode_queue, &videoconvert, &rgba_filter, &alpha,
-            &videorate, &fps_filter, &identity, &videoscale, &bgra_filter,
-            &output_queue, &valve
-        ]).map_err(|_| "Failed to add FX elements to pipeline")?;
-
-        // Link the chain (except uridecodebin which connects dynamically)
-        gst::Element::link_many(&[
-            &decode_queue, &videoconvert, &rgba_filter, &alpha,
-            &videorate, &fps_filter, &identity, &videoscale, &bgra_filter,
-            &output_queue, &valve
-        ]).map_err(|_| "Failed to link FX elements")?;
-
-        // Connect valve to compositor sink_1
-        let valve_src_pad = valve.static_pad("src")
-            .ok_or("Failed to get valve src pad")?;
-        valve_src_pad.link(&comp_sink_pad)
-            .map_err(|e| format!("Failed to link valve to compositor: {:?}", e))?;
-
-        // Store persistent elements
-        self.fx_uridecodebin = Some(uridecode.clone());
-        self.fx_valve = Some(valve.clone());
-
-        // Set compositor sink properties (persistent)
-        comp_sink_pad.set_property("zorder", 1u32);
-        comp_sink_pad.set_property("alpha", self.layers.read().overlay_opacity);
-        comp_sink_pad.set_property("xpos", 0i32);
-        comp_sink_pad.set_property("ypos", 0i32);
-        comp_sink_pad.set_property("width", *self.pipeline_width.read() as i32);
-        comp_sink_pad.set_property("height", *self.pipeline_height.read() as i32);
-
-        // Create ghost pad for external control
-        let valve_sink_pad = valve.static_pad("sink")
-            .ok_or("Failed to get valve sink pad")?;
-        let ghost_pad = gst::GhostPad::with_target(&valve_sink_pad)
-            .map_err(|_| "Failed to create FX ghost pad")?;
-        ghost_pad.set_active(true).ok();
-
-        // Add ghost pad to pipeline (not to a bin, directly to pipeline)
-        pipeline.add_pad(&ghost_pad)
-            .map_err(|_| "Failed to add FX ghost pad to pipeline")?;
-
-        self.fx_ghost_pad = Some(ghost_pad);
-
-        println!("[Composite FX] ✅ Persistent FX branch wired to compositor.sink_1");
-        println!("[Composite FX] 🔗 Chain: uridecodebin → queue → videoconvert → RGBA → alpha → videorate → 30fps → identity → videoscale → BGRA → queue → valve → compositor");
-
-        Ok(())
-    }
-
-    /// Add camera branch protection against flush events
-    fn protect_camera_from_flush(&self, pipeline: &Pipeline) -> Result<(), String> {
-        println!("[Composite] 🛡️ Adding camera flush protection...");
-
-        // Find the camera source element
-        let camera_src = pipeline.by_name("mfvideosrc0")
-            .or_else(|| pipeline.by_name("v4l2src0"))
-            .or_else(|| pipeline.by_name("avfvideosrc0"))
-            .ok_or("Failed to find camera source element")?;
-
-        // Get the camera src pad
-        let camera_src_pad = camera_src.static_pad("src")
-            .ok_or("Failed to get camera src pad")?;
-
-        // Add probe to drop flush events on camera branch
-        let probe_id = camera_src_pad.add_probe(
-            gst::PadProbeType::EVENT_DOWNSTREAM | gst::PadProbeType::EVENT_FLUSH,
-            move |pad, info| {
-                if let Some(ev) = info.event() {
-                    use gst::EventView::*;
-                    match ev.view() {
-                        FlushStart(_) | FlushStop(_) => {
-                            println!("[Composite] 🛡️ Dropped flush event on camera branch");
-                            return gst::PadProbeReturn::Drop;
-                        }
-                        _ => {}
-                    }
-                }
-                gst::PadProbeReturn::Pass
-            }
-        );
-
-        if probe_id == gst::PadProbeId::INVALID {
-            return Err("Failed to add camera flush protection probe".to_string());
-        }
-
-        println!("[Composite] ✅ Camera branch protected from flush events");
-        Ok(())
     }
     
     pub fn update_layers(&self, camera: (bool, f64), overlay: (bool, f64)) {
@@ -433,16 +220,7 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
             .dynamic_cast::<Pipeline>()
             .map_err(|_| "Failed to cast to Pipeline".to_string())?;
-
-        // Create persistent FX branch wired to compositor.sink_1
-        let compositor = pipeline
-            .by_name("comp")
-            .ok_or("Failed to get compositor element")?;
-        self.create_persistent_fx_branch(&pipeline, &compositor)?;
-
-        // Protect camera branch from flush events
-        self.protect_camera_from_flush(&pipeline)?;
-
+        
         // Get the appsink for preview
         let appsink = pipeline
             .by_name("preview")
@@ -570,155 +348,41 @@ impl GStreamerComposite {
         self.pipeline.as_ref().map(|p| p.current_state())
     }
     
-    /// Play FX using persistent branch with localized flushing seek
+    /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
-        println!("[Composite FX] 🎬 Starting FX playback with localized flush");
+        println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
-
-        // Get persistent elements
-        let uridecodebin = self.fx_uridecodebin.as_ref()
-            .ok_or("FX branch not initialized")?;
-        let valve = self.fx_valve.as_ref()
-            .ok_or("FX valve not initialized")?;
-        let ghost_pad = self.fx_ghost_pad.as_ref()
-            .ok_or("FX ghost pad not initialized")?;
-        let pipeline = self.pipeline.as_ref()
-            .ok_or("Pipeline not running")?;
-
-
-        // Update FX state
-        *self.fx_state.write() = Some(FxPlaybackState {
-            file_url: file_path.clone(),
-            keycolor: keycolor.clone(),
-            tolerance,
-            similarity,
-            use_chroma_key,
-            compositor_sink_pad: None, // Not used in persistent setup
-        });
-
-        // Configure chroma key if enabled
-        if use_chroma_key {
-            println!("[Composite FX] 🎨 Configuring chroma key: color={}, tolerance={:.2}, similarity={:.2}",
-                     keycolor, tolerance, similarity);
-
-            // Get alpha element and configure
-            let alpha = pipeline.by_name("fx_alpha")
-                .ok_or("Alpha element not found")?;
-
-            // Set chroma key parameters
-            let rgb_color = GStreamerComposite::hex_to_rgb(&keycolor)?;
-            alpha.set_property_from_str("method", "green")?;
-            alpha.set_property("angle", (similarity * 2.5) as f32)?; // Map 0-100 to reasonable angle
-            alpha.set_property("noise-level", (tolerance / 10.0) as f32)?; // Map to noise level
-            let _ = alpha.set_property_from_str("qos", "false");
-
-            println!("[Composite FX] ✅ Chroma key configured");
-        } else {
-            // Disable chroma key (set method to none or similar)
-            if let Some(alpha) = pipeline.by_name("fx_alpha") {
-                let _ = alpha.set_property_from_str("method", "none");
+        
+        // Get the pipeline
+        let pipeline = match &self.pipeline {
+            Some(p) => p,
+            None => {
+                return Err("[Composite FX] ❌ No pipeline running - please select a camera first!".to_string());
             }
-        }
+        };
+        
+        // Get compositor element
+        let compositor = pipeline
+            .by_name("comp")
+            .ok_or("Failed to get compositor element")?;
+        
+        // Stop any existing FX first (with complete pad cleanup)
+        if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
+            println!("[Composite FX] 🧹 Aggressive cleanup of existing FX pipeline...");
 
-        // 0) Close valve to send GAPs during reset
-        println!("[Composite FX] 🔒 Closing valve (sending GAPs to compositor)");
-        valve.set_property("drop", true)?;
-
-        // 1) Set new file URI
-        let file_uri = format!("file:///{}", file_path.replace("\\", "/"));
-        println!("[Composite FX] 📁 Setting URI: {}", file_uri);
-        uridecodebin.set_property("uri", &file_uri);
-
-        // 2) Perform localized flushing seek on FX decoder
-        println!("[Composite FX] 🔄 Performing localized flushing seek...");
-        uridecodebin.seek_simple(
-            gst::Format::Time,
-            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT | gst::SeekFlags::ACCURATE,
-            0.into()
-        )?;
-
-        println!("[Composite FX] ✅ Seek issued - FX branch reset locally");
-
-        // 3) Add first-buffer probe to align timestamps and open valve
-        let valve_weak = valve.downgrade();
-        let pipeline_weak = pipeline.downgrade();
-        let ghost_pad_clone = ghost_pad.clone();
-
-        ghost_pad.add_probe(
-            gst::PadProbeType::BUFFER,
-            move |pad, info| {
-                if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
-                    println!("[Composite FX] 🎬 First buffer received - aligning timestamps...");
-
-                    // Align timestamp to running-time
-                    if let Some(pipeline) = pipeline_weak.upgrade() {
-                        if let Some(clock) = pipeline.clock() {
-                            if let (Some(now), Some(pts), Some(base)) = (clock.time(), buf.pts(), pipeline.base_time()) {
-                                let running = now.saturating_sub(base);
-                                if running > pts {
-                                    let delta = (running.nseconds() - pts.nseconds()) as i64;
-                                    pad.set_offset(delta);
-                                    println!("[Composite FX] ⏱️ Applied ts-offset {} ns to align FX to running-time", delta);
-                                }
-                            }
-                        }
-                    }
-
-                    // 4) Open valve - FX now flows to compositor
-                    if let Some(valve) = valve_weak.upgrade() {
-                        let _ = valve.set_property("drop", false);
-                        println!("[Composite FX] 🔓 Valve opened - FX streaming to compositor");
-                    }
-
-                    // Remove this probe (one-time setup)
-                    return gst::PadProbeReturn::Remove;
-                }
-                gst::PadProbeReturn::Ok
-            }
-        );
-
-        println!("[Composite FX] ✅ FX playback initiated - localized reset complete");
-        println!("[Composite FX] 🎯 Camera continues unaffected, FX resets cleanly");
-
-        Ok(())
-    }
-
-    /// Stop the currently playing FX
-    pub fn stop_fx(&mut self) -> Result<(), String> {
-        println!("[Composite FX] 🛑 Stopping FX playback...");
-
-        // Close valve to stop FX flow
-        if let Some(valve) = &self.fx_valve {
-            valve.set_property("drop", true)?;
-            println!("[Composite FX] 🔒 Valve closed - FX flow stopped");
-        }
-
-        // Clear FX state
-        *self.fx_state.write() = None;
-
-        println!("[Composite FX] ✅ FX stopped - valve closed, ready for next playback");
-        Ok(())
-    }
-
-    /// Convert hex color to RGB tuple
-    fn hex_to_rgb(hex: &str) -> Result<(u8, u8, u8), String> {
-        let hex = hex.trim_start_matches('#');
-
-        if hex.len() != 6 {
-            return Err(format!("Invalid hex color: {}", hex));
-        }
-
-        let r = u8::from_str_radix(&hex[0..2], 16)
-            .map_err(|_| format!("Invalid hex color: {}", hex))?;
-        let g = u8::from_str_radix(&hex[2..4], 16)
-            .map_err(|_| format!("Invalid hex color: {}", hex))?;
-        let b = u8::from_str_radix(&hex[4..6], 16)
-            .map_err(|_| format!("Invalid hex color: {}", hex))?;
-
-        Ok((r, g, b))
-    }
-}
+            // Cast to Bin and aggressively cleanup all resources
+            if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
+                // Unlink from compositor FIRST to stop data flow
+                if let Some(ghost_pad) = bin.static_pad("src") {
+                    if let Some(peer_pad) = ghost_pad.peer() {
+                        // Check if pad belongs to compositor BEFORE unlinking
+                        let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
+                        
+                        if should_release {
+                            // FLUSH the media pad BEFORE unlinking/releasing to reset timing (no wait = faster)
+                            peer_pad.send_event(gst::event::FlushStart::new());
+                            peer_pad.send_event(gst::event::FlushStop::new(true));
                             println!("[Composite FX] 🔄 Flushed media pad to reset timing");
                         }
                         
@@ -844,29 +508,6 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add chroma key element if enabled
-        let alphacolor = if use_chroma_key {
-            println!("[Composite FX] 🎨 Adding chroma key: color={}, tolerance={:.2}, similarity={:.2}",
-                     keycolor, tolerance, similarity);
-
-            // Convert hex color to RGB tuple
-            let rgb_color = GStreamerComposite::hex_to_rgb(&keycolor)?;
-
-            // Create alphacolor element for real-time chroma keying
-            let chroma_element = ElementFactory::make("alphacolor")
-                .name("fxchromakey")
-                .property("color", format!("0x{:02x}{:02x}{:02x}ff", rgb_color.0, rgb_color.1, rgb_color.2))
-                .property("tolerance", tolerance as f32)
-                .property("slope", 0.0f32)  // Hard key for clean edges
-                .build()
-                .map_err(|_| "Failed to create alphacolor element")?;
-
-            Some(chroma_element)
-        } else {
-            println!("[Composite FX] 🎬 No chroma key - direct playback");
-            None
-        };
-
         // BGRA caps for compositor
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
@@ -886,26 +527,13 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Add elements to bin (conditionally include alphacolor)
-        let mut elements: Vec<&gst::Element> = vec![&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale];
-        if let Some(ref chroma) = alphacolor {
-            elements.push(chroma);
-        }
-        elements.push(&capsfilter);
-
-        fx_bin.add_many(&elements)
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements with conditional chroma key
-        if let Some(ref chroma) = alphacolor {
-            // Pipeline: videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> alphacolor -> capsfilter
-            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, chroma, &capsfilter])
-                .map_err(|_| "Failed to link FX elements with chroma key")?;
-        } else {
-            // Pipeline: videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to link FX elements")?;
-        }
+        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
         
@@ -1123,7 +751,84 @@ impl GStreamerComposite {
         
         Ok(())
     }
+    
+    /// Stop the currently playing FX
+    pub fn stop_fx(&mut self) -> Result<(), String> {
+        println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
+        
+        // Get the pipeline
+        let pipeline = match &self.pipeline {
+            Some(p) => p,
+            None => {
+                println!("[Composite FX] No pipeline running");
+                *self.fx_state.write() = None;
+                return Ok(());
+            }
+        };
+        
+        // Get compositor element
+        let compositor = match pipeline.by_name("comp") {
+            Some(c) => c,
+            None => {
+                println!("[Composite FX] Compositor not found");
+                *self.fx_state.write() = None;
+                return Ok(());
+            }
+        };
+        
+        // Find and remove FX bin
+        if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
+            println!("[Composite FX] 🧹 Cleaning up FX bin...");
 
+            // Cast to Bin and set all child elements to NULL to release resources
+            if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
+                // Unlink from compositor FIRST to stop data flow
+                if let Some(ghost_pad) = fx_bin.static_pad("src") {
+                    if let Some(peer_pad) = ghost_pad.peer() {
+                        // FLUSH the media pad on manual stop to reset timing (no wait = instant)
+                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                            peer_pad.send_event(gst::event::FlushStart::new());
+                            peer_pad.send_event(gst::event::FlushStop::new(true));
+                            println!("[Composite FX] 🔄 Flushed sink_1 on manual stop");
+                        }
+                        
+                        ghost_pad.unlink(&peer_pad).ok();
+                        // Only release if pad still belongs to compositor
+                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                            compositor.release_request_pad(&peer_pad);
+                            println!("[Composite FX] 🧹 Released compositor sink_1 pad");
+                        } else {
+                            println!("[Composite FX] ⚠️ Pad already released, skipping");
+                        }
+                    }
+                }
+
+                // Set bin to NULL state (non-blocking)
+                let _ = fx_bin.set_state(gst::State::Null);
+
+                // Set all child elements to NULL (non-blocking)
+                let iterator = fx_bin.iterate_elements();
+                for item in iterator {
+                    if let Ok(element) = item {
+                        let _ = element.set_state(gst::State::Null);
+                    }
+                }
+                
+                // Remove bin from pipeline
+                pipeline.remove(&fx_bin).ok();
+                
+                println!("[Composite FX] ✅ FX branch removed and memory freed");
+            }
+        } else {
+            println!("[Composite FX] No FX bin found to remove");
+        }
+        
+        // Clear FX state after cleanup complete
+        *self.fx_state.write() = None;
+        
+        Ok(())
+    }
+    
     /// Convert hex color to RGB tuple
     fn hex_to_rgb(hex: &str) -> Result<(u8, u8, u8), String> {
         let hex = hex.trim_start_matches('#');
