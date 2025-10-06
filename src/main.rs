@@ -32,6 +32,11 @@ lazy_static::lazy_static! {
     static ref WGPU_GSTREAMER_COMPOSITOR: Arc<parking_lot::RwLock<Option<WgpuGStreamerCompositor>>> = Arc::new(parking_lot::RwLock::new(None));
 }
 
+// Legacy composite state (for compatibility)
+lazy_static::lazy_static! {
+    static ref GSTREAMER_COMPOSITE: Arc<parking_lot::RwLock<Option<WgpuGStreamerCompositor>>> = Arc::new(parking_lot::RwLock::new(None));
+}
+
 // IPC replaces WebSocket ports - no longer needed
 
 // Monitor info structure
@@ -556,13 +561,71 @@ async fn start_camera_preview(device_id: String, _app: tauri::AppHandle) -> Resu
 
 #[command]
 async fn start_camera_preview_with_quality(device_id: String, quality: String, _app: tauri::AppHandle) -> Result<(), String> {
-    println!("[Camera] Camera preview with quality '{}' handled by WGPU compositor", quality);
+    println!("[Camera] Starting camera preview with quality '{}' for device {}", quality, device_id);
+
+    // Parse quality settings
+    let (width, height, fps) = match quality.as_str() {
+        "low" => (640, 360, 15),
+        "medium" => (1280, 720, 25),
+        "high" => (1280, 720, 30),
+        "ultra" => (1920, 1080, 30),
+        _ => (1280, 720, 30), // Default to high
+    };
+
+    println!("[Camera] Quality '{}' -> {}x{} @ {}fps", quality, width, height, fps);
+
+    // Initialize compositor if needed
+    if WGPU_GSTREAMER_COMPOSITOR.read().is_none() {
+        println!("[Camera] Initializing WGPU compositor for camera preview");
+        let compositor = WgpuGStreamerCompositor::new(width, height, fps).await
+            .map_err(|e| format!("Failed to create WGPU compositor: {}", e))?;
+        *WGPU_GSTREAMER_COMPOSITOR.write() = Some(compositor);
+    }
+
+    // Parse device index
+    let device_index: u32 = device_id.parse()
+        .map_err(|_| "Invalid camera device ID")?;
+
+    // Add camera input and start the pipeline
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        let mut compositor_clone = compositor.clone();
+
+        tokio::spawn(async move {
+            let camera_id = format!("camera_{}", device_index);
+            if let Err(e) = compositor_clone.add_camera_input(camera_id, device_index).await {
+                println!("[Camera] Failed to add camera input: {}", e);
+                return;
+            }
+
+            if let Err(e) = compositor_clone.start().await {
+                println!("[Camera] Failed to start compositor: {}", e);
+                return;
+            }
+
+            println!("[Camera] ✅ Camera preview started successfully with quality {}", quality);
+        });
+    }
+
     Ok(())
 }
 
 #[command]
 async fn stop_camera_preview() -> Result<(), String> {
-    println!("[Camera] Camera preview stop handled by WGPU compositor");
+    println!("[Camera] Stopping camera preview");
+
+    if let Some(compositor) = WGPU_GSTREAMER_COMPOSITOR.read().as_ref() {
+        let mut compositor_clone = compositor.clone();
+        tokio::spawn(async move {
+            if let Err(e) = compositor_clone.stop().await {
+                println!("[Camera] Failed to stop compositor: {}", e);
+            } else {
+                println!("[Camera] ✅ Camera preview stopped successfully");
+            }
+        });
+    } else {
+        println!("[Camera] No compositor running to stop");
+    }
+
     Ok(())
 }
 
