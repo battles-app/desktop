@@ -469,7 +469,7 @@ impl GStreamerComposite {
         // CRITICAL: Queue to decouple decode thread from FX chain (prevents blocking)
         let decode_queue = ElementFactory::make("queue")
             .name("fxqueue")
-            .property("leaky", 2u32)                    // 2 = downstream (drop old frames)
+            .property_from_str("leaky", "downstream")   // Drop old frames if chain falls behind
             .property("max-size-buffers", 2u32)         // Keep only 2 frames max
             .property("max-size-bytes", 0u32)           // No byte limit
             .property("max-size-time", 0u64)            // No time limit
