@@ -497,7 +497,7 @@ impl GStreamerComposite {
             .name("fxthrottle")
             .property("max-size-buffers", 3u32)          // Hold max 3 frames (100ms at 30fps)
             .property("max-size-time", 100_000_000u64)   // 100ms time limit
-            .property("leaky", 2i32)                     // Drop old frames if full
+            .property_from_str("leaky", "downstream")    // Drop old frames if full
             .build()
             .map_err(|_| "Failed to create throttle queue")?;
 
