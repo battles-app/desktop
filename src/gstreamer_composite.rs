@@ -502,50 +502,6 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
-        // Add chroma keying if enabled
-        let chroma_element = if use_chroma_key {
-            println!("[Composite FX] 🎨 Green screen removal requested");
-            println!("[Composite FX] 🎨 Key color: '{}', tolerance: {}", keycolor, tolerance);
-
-            // Convert hex color to RGB for alpha element
-            match Self::hex_to_rgb(&keycolor) {
-                Ok(rgb_color) => {
-                    println!("[Composite FX] 🎨 RGB color: ({}, {}, {})", rgb_color.0, rgb_color.1, rgb_color.2);
-
-                    // Use alpha element for chroma keying - try green method first (simpler)
-                    let alpha_result = ElementFactory::make("alpha")
-                        .name("fxchroma")
-                        .property("black-sensitivity", (tolerance * 128.0) as u32)  // Convert 0.0-1.0 to 0-128
-                        .property("white-sensitivity", (tolerance * 128.0) as u32)
-                        .build()
-                        .map_err(|_| "Failed to create alpha element".to_string())
-                        .and_then(|alpha| {
-                            // Set method property separately to avoid enum issues
-                            alpha.set_property_from_str("method", "green");
-                            Ok(alpha)
-                        });
-
-                    match alpha_result {
-                        Ok(element) => {
-                            println!("[Composite FX] ✅ Using alpha element for chroma keying");
-                            Some(element)
-                        },
-                        Err(e) => {
-                            println!("[Composite FX] ❌ Failed to create alpha element: {:?}", e);
-                            println!("[Composite FX] 🎬 Playing FX without chroma keying");
-                            None
-                        }
-                    }
-                },
-                Err(e) => {
-                    println!("[Composite FX] ⚠️ Invalid key color '{}': {} - playing FX without chroma keying", keycolor, e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
             .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
@@ -571,20 +527,12 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Build pipeline elements list (conditionally include chroma keying)
-        let mut elements = vec![&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert];
-        if let Some(ref chroma) = chroma_element {
-            elements.push(chroma);
-        }
-        elements.extend(&[&videoscale, &capsfilter]);
-
-        // Add elements to bin
-        fx_bin.add_many(elements.as_slice())
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
         // Link elements: videorate enforces 30fps, identity syncs to real-time clock
-        let link_elements: Vec<&gst::Element> = elements.iter().skip(1).cloned().collect(); // Skip uridecodebin
-        gst::Element::link_many(link_elements.as_slice())
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -797,15 +745,9 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        let chroma_status = if chroma_element.is_some() { "with chroma keying" } else { "without chroma keying" };
-        println!("[Composite FX] ✅ FX added to pipeline - playing from file {}", chroma_status);
+        println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        let pipeline_desc = if chroma_element.is_some() {
-            "uridecodebin → videorate → rate_filter → identity_sync → videoconvert → alpha → videoscale → capsfilter"
-        } else {
-            "uridecodebin → videorate → rate_filter → identity_sync → videoconvert → videoscale → capsfilter"
-        };
-        println!("[Composite FX] 🔍 Pipeline: {}", pipeline_desc);
+        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
         
         Ok(())
     }
