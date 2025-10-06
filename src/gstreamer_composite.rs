@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 use tauri::Emitter;
 
 pub struct GStreamerComposite {
-    pipeline: Option<Pipeline>,
+    pipeline: Arc<RwLock<Option<Pipeline>>>,
     frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     camera_frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     overlay_frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
@@ -65,7 +65,7 @@ impl GStreamerComposite {
         println!("[Composite] Initialized successfully");
         
         Ok(Self {
-            pipeline: None,
+            pipeline: Arc::new(RwLock::new(None)),
             frame_sender: Arc::new(RwLock::new(None)),
             camera_frame_sender: Arc::new(RwLock::new(None)),
             overlay_frame_sender: Arc::new(RwLock::new(None)),
@@ -94,6 +94,14 @@ impl GStreamerComposite {
 
     pub fn set_app_handle(&self, app_handle: tauri::AppHandle) {
         *self.app_handle.write() = Some(app_handle);
+    }
+
+    pub fn get_app_handle(&self) -> Option<tauri::AppHandle> {
+        self.app_handle.read().clone()
+    }
+
+    pub fn set_pipeline(&self, pipeline: Option<Pipeline>) {
+        *self.pipeline.write() = pipeline;
     }
     
     pub fn update_layers(&self, camera: (bool, f64), overlay: (bool, f64)) {
@@ -139,7 +147,7 @@ impl GStreamerComposite {
         println!("[Composite] 🚀 Starting camera capture: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
 
         // Stop existing pipeline
-        if let Some(pipeline) = &self.pipeline {
+        if let Some(pipeline) = &*self.pipeline.read() {
             let _ = pipeline.set_state(gst::State::Null);
         }
 
@@ -196,7 +204,7 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to start pipeline: {}", e))?;
 
         println!("[Composite] ✅ Camera pipeline started successfully!");
-        self.pipeline = Some(pipeline);
+        *self.pipeline.write() = Some(pipeline);
 
         Ok(())
     }
@@ -247,13 +255,13 @@ impl GStreamerComposite {
         
         *self.is_running.write() = false;
         
-        if let Some(pipeline) = &self.pipeline {
+        if let Some(pipeline) = &*self.pipeline.read() {
             pipeline
                 .set_state(gst::State::Null)
                 .map_err(|e| format!("Failed to stop pipeline: {}", e))?;
         }
-        
-        self.pipeline = None;
+
+        *self.pipeline.write() = None;
         println!("[Composite] Composite pipeline stopped");
         
         Ok(())
@@ -287,7 +295,7 @@ impl GStreamerComposite {
                  rgb.0, rgb.1, rgb.2, tolerance, similarity);
         
         // Get the pipeline
-        let pipeline = match &self.pipeline {
+        let pipeline = match &*self.pipeline.read() {
             Some(p) => {
                 println!("[Composite FX] ✅ Pipeline found - state: {:?}", p.current_state());
                 p
@@ -756,7 +764,7 @@ impl GStreamerComposite {
         *self.fx_state.write() = None;
         
         // Get the pipeline
-        let pipeline = match &self.pipeline {
+        let pipeline = match &*self.pipeline.read() {
             Some(p) => p,
             None => {
                 println!("[Composite FX] No pipeline running");

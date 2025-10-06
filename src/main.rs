@@ -6,6 +6,10 @@
 use tauri::{command, Manager, Emitter};
 use base64::Engine;
 use std::sync::{Arc, Mutex};
+use gstreamer as gst;
+use gstreamer::Pipeline;
+use gstreamer::prelude::Cast;
+use gstreamer_app::AppSink;
 
 // GStreamer camera module (OBS-quality video pipeline)
 mod gstreamer_camera;
@@ -996,30 +1000,88 @@ async fn stop_camera_preview() -> Result<(), String> {
 // COMPOSITE PIPELINE COMMANDS (OBS REPLACEMENT)
 // ====================
 
+// Simple camera feed only - no composition
 #[command]
-async fn start_composite_pipeline(app: tauri::AppHandle, camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
-    println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+async fn start_camera_feed(app: tauri::AppHandle, camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
+    println!("[Camera] 🚀 Starting camera feed only: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
 
+    // Stop any existing composite pipeline
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
-        // Set app handle for event emission
-        composite.set_app_handle(app.clone());
-
-        // Use test source for debugging if camera_device_id is "test"
-        let actual_device_id = if camera_device_id == "test" {
-            println!("[Composite] 🧪 Using video test source for debugging");
-            "test".to_string()
-        } else {
-            camera_device_id
-        };
-
-        composite.start(&actual_device_id, width, height, fps, rotation, app)?;
-        println!("[Composite] ✅ Composite pipeline started");
-    } else {
-        return Err("Composite pipeline not initialized".to_string());
+        composite.stop().ok();
     }
     drop(composite_lock);
 
+    // Create ultra-simple camera pipeline
+    let pipeline_str = {
+        let camera_source = if camera_device_id == "test" {
+            "videotestsrc pattern=smpte".to_string()
+        } else {
+            let device_index: u32 = camera_device_id.parse().map_err(|_| "Invalid camera device ID")?;
+            format!("mfvideosrc device-index={}", device_index)
+        };
+
+        let rotation_filter = match rotation {
+            90 => " ! videoflip method=clockwise",
+            180 => " ! videoflip method=rotate-180",
+            270 => " ! videoflip method=counterclockwise",
+            _ => "",
+        };
+
+        format!("{} {} ! videoconvert ! video/x-raw,format=RGB ! avenc_mjpeg quality=85 ! appsink name=camera_feed emit-signals=true sync=false max-buffers=1 drop=true",
+                camera_source, rotation_filter)
+    };
+
+    println!("[Camera] 📹 Camera pipeline: {}", pipeline_str);
+
+    gst::init().map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
+
+    let pipeline = gst::parse::launch(&pipeline_str)
+        .map_err(|e| format!("Failed to create pipeline: {}", e))?
+        .dynamic_cast::<Pipeline>()
+        .map_err(|_| "Failed to cast to Pipeline".to_string())?;
+
+    let camera_feed = pipeline
+        .by_name("camera_feed")
+        .ok_or("Failed to get camera_feed sink")?
+        .dynamic_cast::<AppSink>()
+        .map_err(|_| "Failed to cast camera_feed to AppSink")?;
+
+    // Store pipeline globally for cleanup
+    *GSTREAMER_COMPOSITE.write() = Some(GStreamerComposite::new().map_err(|e| format!("Failed to create composite: {}", e))?);
+    if let Some(composite) = GSTREAMER_COMPOSITE.write().as_mut() {
+        composite.set_app_handle(app.clone());
+    }
+
+    camera_feed.set_callbacks(
+        gstreamer_app::AppSinkCallbacks::builder()
+            .new_sample(move |appsink| {
+                let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
+                let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                let jpeg_data = map.as_slice();
+
+                // Emit to frontend
+                if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
+                    if let Some(app_handle) = composite.get_app_handle() {
+                        let _ = app_handle.emit("camera-frame", jpeg_data.to_vec());
+                    }
+                }
+
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+
+    pipeline.set_state(gst::State::Playing)
+        .map_err(|e| format!("Failed to start pipeline: {}", e))?;
+
+    // Store the pipeline
+    if let Some(composite) = GSTREAMER_COMPOSITE.write().as_mut() {
+        composite.set_pipeline(Some(pipeline));
+    }
+
+    println!("[Camera] ✅ Camera feed started successfully!");
     Ok(())
 }
 
@@ -1527,7 +1589,7 @@ fn main() {
             start_camera_preview,
             start_camera_preview_with_quality,
             stop_camera_preview,
-            start_composite_pipeline,
+            start_camera_feed,
             stop_composite_pipeline,
             update_composite_layers,
             start_composite_output,
