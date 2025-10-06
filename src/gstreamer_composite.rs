@@ -491,15 +491,13 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // Use queue with max-size-time to enforce real-time 30fps playback
-        // This throttles based on buffer durations regardless of pipeline clock
-        let queue_throttle = ElementFactory::make("queue")
-            .name("fxthrottle")
-            .property("max-size-buffers", 3u32)          // Hold max 3 frames (100ms at 30fps)
-            .property("max-size-time", 100_000_000u64)   // 100ms time limit
-            .property_from_str("leaky", "downstream")    // Drop old frames if full
+        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
+        // This blocks and waits for each frame's timestamp to arrive in real-time
+        let identity_sync = ElementFactory::make("identity")
+            .name("fxsync")
+            .property("sync", true)  // Block until buffer timestamp arrives in real-time
             .build()
-            .map_err(|_| "Failed to create throttle queue")?;
+            .map_err(|_| "Failed to create identity sync")?;
 
         // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
@@ -520,7 +518,7 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
         
-        println!("[Composite FX] 🕐 queue throttle added - enforces real-time timing via buffer duration");
+        println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -551,12 +549,12 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> queue_throttle -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &queue_throttle, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements: videorate enforces 30fps, queue throttles based on buffer duration
-        gst::Element::link_many(&[&videorate, &rate_filter, &queue_throttle, &videoconvert, &videoscale, &capsfilter])
+        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -786,9 +784,16 @@ impl GStreamerComposite {
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
         
-        // Queue throttle enforces timing based on buffer durations (33ms per frame at 30fps)
-        // This works in async pipelines without needing a clock
-        println!("[Composite FX] ⏱️ Using queue throttle for duration-based timing (30fps enforcement)");
+        // CRITICAL: Provide pipeline clock to FX bin so identity sync=true can work
+        // But set base_time to current pipeline time (not ZERO) so identity doesn't try to catch up
+        if let Some(clock) = pipeline.clock() {
+            fx_bin.set_clock(Some(&clock)).ok();
+            // Use current pipeline clock time as base, so identity syncs from NOW, not from pipeline start
+            if let Some(now) = clock.time() {
+                fx_bin.set_base_time(now);
+                println!("[Composite FX] ⏱️ Set FX bin clock to pipeline clock, base_time={:?} (identity will sync from now)", now);
+            }
+        }
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
