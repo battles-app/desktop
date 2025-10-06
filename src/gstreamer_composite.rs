@@ -466,72 +466,16 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // CRITICAL: Queue to decouple decode thread from FX chain (prevents blocking)
-        let decode_queue = ElementFactory::make("queue")
-            .name("fxqueue")
-            .property_from_str("leaky", "downstream")   // Drop old frames if chain falls behind
-            .property("max-size-buffers", 2u32)         // Keep only 2 frames max
-            .property("max-size-bytes", 0u32)           // No byte limit
-            .property("max-size-time", 0u64)            // No time limit
+        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
+        // This blocks and waits for each frame's timestamp to arrive in real-time
+        let identity_sync = ElementFactory::make("identity")
+            .name("fxsync")
+            .property("sync", true)              // Block until buffer timestamp arrives in real-time
+            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
             .build()
-            .map_err(|_| "Failed to create decode queue")?;
-        
-        println!("[Composite FX] 🔄 Decode queue added - decouples threads for real-time performance");
+            .map_err(|_| "Failed to create identity sync")?;
 
-        // Videoconvert for colorspace conversion
-        let videoconvert = ElementFactory::make("videoconvert")
-            .name("fxconvert")
-            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
-            .build()
-            .map_err(|_| "Failed to create videoconvert")?;
-
-        // Force RGBA format before alpha to prevent hidden color conversions
-        let rgba_caps = gst::Caps::builder("video/x-raw")
-            .field("format", "RGBA")
-            .build();
-        
-        let rgba_filter = ElementFactory::make("capsfilter")
-            .name("fxrgbafilter")
-            .property("caps", &rgba_caps)
-            .build()
-            .map_err(|_| "Failed to create RGBA capsfilter")?;
-        
-        println!("[Composite FX] 🎨 RGBA capsfilter added - prevents format negotiation jitter");
-
-        // Create alpha element for chroma keying (with guaranteed RGBA input)
-        let alpha_element = if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key enabled - color: {}, tolerance: {}, similarity: {}", 
-                     keycolor, tolerance, similarity);
-            
-            // Convert hex color to RGB
-            let (target_r, target_g, target_b) = Self::hex_to_rgb(&keycolor)?;
-            
-            println!("[Composite FX] 🎨 Target RGB: ({}, {}, {})", target_r, target_g, target_b);
-            
-            // Gentle, real-time noise-level mapping (0-10 range instead of 0-64)
-            let noise_level = similarity.clamp(0.0, 100.0) as f32 / 10.0;
-            
-            let alpha = ElementFactory::make("alpha")
-                .name("fxalpha")
-                .property_from_str("method", "custom")  // Use custom chroma key method
-                .property("target-r", target_r as u32)  // Unsigned int required
-                .property("target-g", target_g as u32)  // Unsigned int required
-                .property("target-b", target_b as u32)  // Unsigned int required
-                .property("angle", (tolerance * 180.0) as f32)  // Tolerance angle in degrees (0-180)
-                .property("noise-level", noise_level)   // Gentle smoothing (0-10 range for real-time)
-                .build()
-                .map_err(|e| format!("Failed to create alpha element: {}", e))?;
-            
-            println!("[Composite FX] ✅ Chroma key configured - angle: {:.1}°, noise: {:.2} (real-time optimized)", 
-                     tolerance * 180.0, noise_level);
-            
-            Some(alpha)
-        } else {
-            println!("[Composite FX] ⏭️ Chroma key disabled - playing video as-is");
-            None
-        };
-
-        // Force consistent 30fps output with videorate (after chroma key)
+        // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
             .property("skip-to-first", true)   // Start fresh, ignore previous state
@@ -550,16 +494,13 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
         
-        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
-        // This blocks and waits for each frame's timestamp to arrive in real-time
-        let identity_sync = ElementFactory::make("identity")
-            .name("fxsync")
-            .property("sync", true)              // Block until buffer timestamp arrives in real-time
-            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
-            .build()
-            .map_err(|_| "Failed to create identity sync")?;
-        
         println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
+
+        let videoconvert = ElementFactory::make("videoconvert")
+            .name("fxconvert")
+            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
+            .build()
+            .map_err(|_| "Failed to create videoconvert")?;
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
@@ -586,28 +527,13 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Add elements to bin (conditionally include alpha element with RGBA capsfilter)
-        if let Some(ref alpha) = alpha_element {
-            // Pipeline with chroma key: uridecodebin -> queue -> videoconvert -> rgba_filter -> alpha -> videorate -> rate_filter -> identity_sync -> videoscale -> capsfilter
-            fx_bin.add_many(&[&uridecode, &decode_queue, &videoconvert, &rgba_filter, alpha, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to add elements to FX bin")?;
 
-            // Link elements: queue decouples threads, RGBA capsfilter prevents format negotiation
-            gst::Element::link_many(&[&decode_queue, &videoconvert, &rgba_filter, alpha, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to link FX elements with alpha")?;
-            
-            println!("[Composite FX] 🔗 Optimized pipeline: uridecodebin → queue (decouple) → videoconvert → RGBA → alpha → videorate → identity_sync → videoscale → capsfilter");
-        } else {
-            // Pipeline without chroma key: uridecodebin -> queue -> videoconvert -> videorate -> rate_filter -> identity_sync -> videoscale -> capsfilter
-            fx_bin.add_many(&[&uridecode, &decode_queue, &videoconvert, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
-
-            // Link elements: queue decouples threads for smooth playback
-            gst::Element::link_many(&[&decode_queue, &videoconvert, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to link FX elements")?;
-            
-            println!("[Composite FX] 🔗 Pipeline: uridecodebin → queue (decouple) → videoconvert → videorate → identity_sync → videoscale → capsfilter");
-        }
+        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
         
@@ -688,8 +614,8 @@ impl GStreamerComposite {
         pipeline.add(&fx_bin)
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
-        // Connect uridecodebin's dynamic pads - link to QUEUE to decouple decode thread
-        let queue_clone = decode_queue.clone();
+        // Connect uridecodebin's dynamic pads (video AND audio for proper clock sync)
+        let videorate_clone = videorate.clone();
 
         uridecode.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 Pad added: {}", src_pad.name());
@@ -714,8 +640,8 @@ impl GStreamerComposite {
             println!("[Composite FX] 📹 Pad caps: {}", name);
 
             if name.starts_with("video/") {
-                // CRITICAL: Link to queue (not videoconvert) to decouple decode thread from FX chain
-                let sink_pad = queue_clone.static_pad("sink").expect("No queue sink pad");
+                // Handle video pads - connect to videorate for rate control
+                let sink_pad = videorate_clone.static_pad("sink").expect("No videorate sink pad");
 
                 if sink_pad.is_linked() {
                     println!("[Composite FX] ⚠️ Video sink already linked");
@@ -725,8 +651,8 @@ impl GStreamerComposite {
                 if let Err(e) = src_pad.link(&sink_pad) {
                     println!("[Composite FX] ❌ Failed to link video pad: {:?}", e);
                 } else {
-                    println!("[Composite FX] ✅ Video pad linked to queue - decode thread decoupled!");
-                    println!("[Composite FX] 🎬 Video stream connected - real-time playback starting...");
+                    println!("[Composite FX] ✅ Video pad linked successfully!");
+                    println!("[Composite FX] 🎬 Video stream connected - playback starting...");
                     println!("[Composite FX] ⏰ Link time: {:?}", std::time::Instant::now());
                 }
             } else if name.starts_with("audio/") {
@@ -821,15 +747,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        
-        if use_chroma_key {
-            println!("[Composite FX] 🚀 SURGICAL FIX - Real-time pipeline:");
-            println!("[Composite FX]    uridecodebin → queue (decouple) → videoconvert → RGBA filter → alpha → videorate → identity_sync → videoscale → BGRA → compositor.sink_1");
-            println!("[Composite FX] ⚡ Decode thread decoupled, RGBA format locked, gentle noise-level for zero lag");
-        } else {
-            println!("[Composite FX] 🚀 Optimized pipeline:");
-            println!("[Composite FX]    uridecodebin → queue (decouple) → videoconvert → videorate → identity_sync → videoscale → BGRA → compositor.sink_1");
-        }
+        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
         
         Ok(())
     }
