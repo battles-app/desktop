@@ -785,8 +785,7 @@ impl GStreamerComposite {
                 if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
                     if let Some(pipeline) = pipeline_weak_ts.upgrade() {
                         if let Some(clock) = pipeline.clock() {
-                            if let (Some(now), Some(pts)) = (clock.time(), buf.pts()) {
-                                let base = pipeline.base_time();
+                            if let (Some(now), Some(pts), Some(base)) = (clock.time(), buf.pts(), pipeline.base_time()) {
                                 // running-time = clock-time - base-time
                                 let running = now.saturating_sub(base);
                                 
