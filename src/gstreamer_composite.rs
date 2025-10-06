@@ -598,6 +598,14 @@ impl GStreamerComposite {
                             // Unlink and release pad (only if still owned by compositor)
                             if let Some(ghost_pad) = fx_bin.static_pad("src") {
                                 if let Some(peer_pad) = ghost_pad.peer() {
+                                    // FLUSH the media pad after EOS to reset timing state
+                                    if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                                        peer_pad.send_event(gst::event::FlushStart::new());
+                                        std::thread::sleep(std::time::Duration::from_millis(10));
+                                        peer_pad.send_event(gst::event::FlushStop::new(true));
+                                        println!("[Composite FX] 🔄 Flushed sink_1 after EOS");
+                                    }
+                                    
                                     ghost_pad.unlink(&peer_pad).ok();
                                     // Only release if pad still belongs to compositor
                                     if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
@@ -683,6 +691,13 @@ impl GStreamerComposite {
         let comp_sink_pad = compositor
             .request_pad_simple("sink_1")
             .ok_or("Failed to request compositor sink_1 pad")?;
+
+        // CRITICAL: Flush the newly created/reused sink_1 pad to reset timing state
+        // This prevents accumulated timing from previous plays from causing speed-up
+        comp_sink_pad.send_event(gst::event::FlushStart::new());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        comp_sink_pad.send_event(gst::event::FlushStop::new(true));  // true = reset running time
+        println!("[Composite FX] 🔄 Flushed compositor sink_1 to reset timing before use");
 
         // Store the sink pad for proper cleanup
         if let Some(ref mut fx_state) = *self.fx_state.write() {
