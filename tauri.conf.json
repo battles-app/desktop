@@ -11,7 +11,7 @@
         "useHttpsScheme": true,
         "label": "main",
         "acceptFirstMouse": true,
-        "additionalBrowserArgs": null,
+        "additionalBrowserArgs": "--disable-accelerate-3d",
         "alwaysOnTop": true,
         "contentProtected": false,
         "decorations": true,

@@ -159,7 +159,7 @@ impl GStreamerCamera {
              videoscale ! \
              video/x-raw,width={},height={} ! \
              jpegenc quality={} ! \
-             appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
+             appsink name=sink emit-signals=true sync=true max-buffers=2 drop=true",
             device_index, width, height, jpeg_quality
         );
         
@@ -169,7 +169,7 @@ impl GStreamerCamera {
              videoconvert ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
              jpegenc quality=80 ! \
-             appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
+             appsink name=sink emit-signals=true sync=true max-buffers=2 drop=true",
             device_index
         );
         
@@ -179,7 +179,7 @@ impl GStreamerCamera {
              videoconvert ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
              jpegenc quality=80 ! \
-             appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
+             appsink name=sink emit-signals=true sync=true max-buffers=2 drop=true",
             device_index
         );
         

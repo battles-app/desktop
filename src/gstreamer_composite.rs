@@ -123,12 +123,12 @@ impl GStreamerComposite {
         let pipeline_str = if videoflip_method != "none" {
             format!(
                 "compositor name=comp background=black \
-                   sink_0::zorder=0 sink_0::alpha={} sink_0::sync=false \
-                   sink_1::zorder=1 sink_1::alpha={} sink_1::sync=false ! \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
                  t. ! queue ! {} \
                  mfvideosrc device-index={} ! \
                  videoflip method={} ! \
@@ -149,12 +149,12 @@ impl GStreamerComposite {
         } else {
             format!(
                 "compositor name=comp background=black \
-                   sink_0::zorder=0 sink_0::alpha={} sink_0::sync=false \
-                   sink_1::zorder=1 sink_1::alpha={} sink_1::sync=false ! \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=true max-buffers=2 drop=true \
                  t. ! queue ! {} \
                  mfvideosrc device-index={} ! \
                  videoconvert ! \
@@ -463,7 +463,7 @@ impl GStreamerComposite {
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 30fps H.264 MP4 playback - proper timing control");
+        println!("[Composite FX] 🎬 30fps H.264 MP4 playback - proper timing control with audio clock sync");
 
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
@@ -499,12 +499,13 @@ impl GStreamerComposite {
         pipeline.add(&fx_bin)
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
-        // Connect uridecodebin's dynamic pad (for video only)
+        // Connect uridecodebin's dynamic pads (video AND audio for proper clock sync)
         let videorate_clone = videorate.clone();
+        let fx_bin_clone = fx_bin.clone();
+
         uridecode.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 Pad added: {}", src_pad.name());
 
-            // Only link video pads (ignore audio, text, etc.)
             let caps = match src_pad.current_caps() {
                 Some(caps) => caps,
                 None => {
@@ -524,26 +525,53 @@ impl GStreamerComposite {
             let name = structure.name();
             println!("[Composite FX] 📹 Pad caps: {}", name);
 
-            if !name.starts_with("video/") {
-                // Skip non-video pads (audio, subtitles, etc.)
-                println!("[Composite FX] ⏭️ Skipping non-video pad");
-                return;
-            }
+            if name.starts_with("video/") {
+                // Handle video pads
+                let sink_pad = videorate_clone.static_pad("sink").expect("No video sink pad");
+                if sink_pad.is_linked() {
+                    println!("[Composite FX] ⚠️ Video sink already linked");
+                    return;
+                }
 
-            // Check if sink is already linked (only link once)
-            let sink_pad = videorate_clone.static_pad("sink").expect("No sink pad");
-            if sink_pad.is_linked() {
-                println!("[Composite FX] ⚠️ Sink already linked");
-                return;
-            }
+                if let Err(e) = src_pad.link(&sink_pad) {
+                    println!("[Composite FX] ❌ Failed to link video pad: {:?}", e);
+                } else {
+                    println!("[Composite FX] ✅ Video pad linked successfully!");
+                    println!("[Composite FX] 🎬 Video stream connected - playback starting...");
+                    println!("[Composite FX] ⏰ Link time: {:?}", std::time::Instant::now());
+                }
+            } else if name.starts_with("audio/") {
+                // Handle audio pads for proper clock synchronization
+                println!("[Composite FX] 🔊 Audio stream detected - connecting to fakesink for clock sync");
 
-            // Link video pad
-            if let Err(e) = src_pad.link(&sink_pad) {
-                println!("[Composite FX] ❌ Failed to link video pad: {:?}", e);
+                // Create a simple audio pipeline that goes to fakesink (provides clock sync)
+                if let Ok(audio_convert) = gst::ElementFactory::make("audioconvert").name("fx_audio_convert").build() {
+                    if let Ok(audio_sink) = gst::ElementFactory::make("fakesink").name("fx_audio_sink").property("sync", true).build() {
+                        // Add audio elements to the bin
+                        let _ = fx_bin_clone.add(&audio_convert);
+                        let _ = fx_bin_clone.add(&audio_sink);
+
+                        // Set audio sink to sync=true for master clock
+                        let _ = audio_sink.set_property("sync", true);
+
+                        // Link audio chain
+                        if gst::Element::link_many(&[&audio_convert, &audio_sink]).is_ok() {
+                            if let Some(audio_sink_pad) = audio_convert.static_pad("sink") {
+                                if let Err(e) = src_pad.link(&audio_sink_pad) {
+                                    println!("[Composite FX] ❌ Failed to link audio pad: {:?}", e);
+                                } else {
+                                    println!("[Composite FX] ✅ Audio pad linked - clock sync enabled");
+                                    // Set elements to playing state
+                                    let _ = audio_convert.sync_state_with_parent();
+                                    let _ = audio_sink.sync_state_with_parent();
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
-                println!("[Composite FX] ✅ Video pad linked successfully!");
-                println!("[Composite FX] 🎬 Video stream connected - playback starting...");
-                println!("[Composite FX] ⏰ Link time: {:?}", std::time::Instant::now());
+                // Skip other pads (subtitles, etc.)
+                println!("[Composite FX] ⏭️ Skipping non-media pad: {}", name);
             }
         });
         
@@ -582,11 +610,49 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("width", fx_width);
         comp_sink_pad.set_property("height", fx_height);
         
+        // Add FPS monitoring probe to FX ghost pad
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        let fx_frame_count = Arc::new(AtomicUsize::new(0));
+        let fx_start_time = Arc::new(Instant::now());
+        let fx_last_log_time = Arc::new(std::sync::Mutex::new(Instant::now()));
+        let fx_last_frame_count = Arc::new(std::sync::Mutex::new(0usize));
+
+        let fx_frame_count_clone = fx_frame_count.clone();
+        let fx_start_time_clone = fx_start_time.clone();
+        let fx_last_log_time_clone = fx_last_log_time.clone();
+        let fx_last_frame_count_clone = fx_last_frame_count.clone();
+
+        ghost_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+            if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
+                let count = fx_frame_count_clone.fetch_add(1, Ordering::Relaxed);
+                let now = Instant::now();
+                let mut last_log = fx_last_log_time_clone.lock().unwrap();
+
+                if now.duration_since(*last_log).as_secs() >= 2 {
+                    let elapsed = fx_start_time_clone.elapsed();
+                    let fps = count as f64 / elapsed.as_secs_f64();
+                    let prev_count = fx_last_frame_count_clone.lock().unwrap().clone();
+                    let recent_frames = count.saturating_sub(prev_count);
+                    let recent_fps = recent_frames as f64 / 2.0; // 2 second window
+
+                    println!("[Composite FX] 🎬 Performance - Total: {} frames ({:.1} fps), Recent: {:.1} fps",
+                        count, fps, recent_fps);
+
+                    *fx_last_frame_count_clone.lock().unwrap() = count;
+                    *last_log = now;
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+
         // Link FX bin to compositor
         ghost_pad
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
-        
+
         // Don't set base time - let FX play with its own timing
         // This prevents timing conflicts between multiple FX playbacks
         println!("[Composite FX] ⏱️ Using independent FX timing (no base time sync)");
