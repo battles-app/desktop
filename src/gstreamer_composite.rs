@@ -130,11 +130,11 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
-                 mfvideosrc device-index={} ! \
+                 mfvideosrc device-index={} framerate={}/1 ! \
                  videoflip method={} ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA,framerate={}/1 ! \
+                 video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
@@ -142,10 +142,10 @@ impl GStreamerComposite {
                 height,
                 self.get_output_branch(),
                 device_index,
+                fps,
                 videoflip_method,
                 width,
-                height,
-                fps
+                height
             )
         } else {
             format!(
@@ -157,10 +157,10 @@ impl GStreamerComposite {
                  tee name=t \
                  t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
-                 mfvideosrc device-index={} ! \
+                 mfvideosrc device-index={} framerate={}/1 ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={},format=BGRA,framerate={}/1 ! \
+                 video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
@@ -168,9 +168,9 @@ impl GStreamerComposite {
                 height,
                 self.get_output_branch(),
                 device_index,
+                fps,
                 width,
-                height,
-                fps
+                height
             )
         };
         
@@ -184,10 +184,10 @@ impl GStreamerComposite {
              tee name=t \
              t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              t. ! queue ! {} \
-             v4l2src device=/dev/video{} ! \
+             v4l2src device=/dev/video{} framerate={}/1 ! \
              videoconvert ! \
              videoscale ! \
-             video/x-raw,width={},height={},format=BGRA,framerate={}/1 ! \
+             video/x-raw,width={},height={},format=BGRA ! \
              comp.sink_0",
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
@@ -195,9 +195,9 @@ impl GStreamerComposite {
             height,
             self.get_output_branch(),
             device_index,
+            fps,
             width,
-            height,
-            fps
+            height
         );
         
         println!("[Composite] Pipeline: {}", pipeline_str);
