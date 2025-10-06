@@ -299,21 +299,9 @@ var texture_sampler: sampler;
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Sample texture (single texture for now)
+    // DEBUG: Sample texture and output it directly to test if texture sampling works
     let tex_color = textureSample(texture, texture_sampler, input.tex_coords);
-
-    // Apply chroma keying if chroma key is set (non-zero)
-    if (length(input.chroma_key) > 0.0) {
-        let diff = abs(tex_color.rgb - input.chroma_key);
-        let key_mask = 1.0 - smoothstep(0.0, input.chroma_tolerance, max(max(diff.r, diff.g), diff.b));
-        let keyed_color = mix(tex_color, vec4<f32>(0.0, 0.0, 0.0, 0.0), key_mask);
-
-        // Apply opacity
-        return vec4<f32>(keyed_color.rgb, keyed_color.a * input.opacity);
-    } else {
-        // No chroma keying, just apply opacity
-        return vec4<f32>(tex_color.rgb, tex_color.a * input.opacity);
-    }
+    return tex_color; // Return texture color directly without any processing
 }
 "#;
 
