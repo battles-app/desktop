@@ -66,9 +66,9 @@ impl GStreamerInput {
                 let source_element = format!("avfvideosrc device-index={} is-live=true", device_index);
 
                 format!(
-                    "{} ! videoconvert ! videoscale ! video/x-raw,format=RGBA ! \
+                    "{} ! videoconvert ! videoscale ! video/x-raw,format=RGBA,width={},height={} ! \
                      appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
-                    source_element
+                    source_element, self.config.width, self.config.height
                 )
             }
             InputType::File { uri } => {

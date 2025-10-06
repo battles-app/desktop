@@ -299,9 +299,21 @@ var texture_sampler: sampler;
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // DEBUG: Sample texture and output it directly to test if texture sampling works
+    // Sample texture (single texture for now)
     let tex_color = textureSample(texture, texture_sampler, input.tex_coords);
-    return tex_color; // Return texture color directly without any processing
+
+    // Apply chroma keying if chroma key is set (non-zero)
+    if (length(input.chroma_key) > 0.0) {
+        let diff = abs(tex_color.rgb - input.chroma_key);
+        let key_mask = 1.0 - smoothstep(0.0, input.chroma_tolerance, max(max(diff.r, diff.g), diff.b));
+        let keyed_color = mix(tex_color, vec4<f32>(0.0, 0.0, 0.0, 0.0), key_mask);
+
+        // Apply opacity
+        return vec4<f32>(keyed_color.rgb, keyed_color.a * input.opacity);
+    } else {
+        // No chroma keying, just apply opacity
+        return vec4<f32>(tex_color.rgb, tex_color.a * input.opacity);
+    }
 }
 "#;
 
@@ -531,29 +543,26 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         // Create render pass
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Compositor Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &output_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+
         // Only render if we have a texture and layers
         if let Some(bind_group) = &self.texture_bind_group {
             if !instances.is_empty() {
                 println!("[WGPU] Starting render pass: {} instances", instances.len());
-
-                // Clear with red background to test if rendering works
-                let clear_color = wgpu::Color { r: 0.5, g: 0.0, b: 0.0, a: 1.0 }; // Red background
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Compositor Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &output_view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(clear_color),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    occlusion_query_set: None,
-                    timestamp_writes: None,
-                });
-
                 // Set pipeline and bind groups
                 render_pass.set_pipeline(&self.render_pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
@@ -566,14 +575,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 // Draw instances
                 render_pass.draw_indexed(0..6, 0, 0..instances.len() as u32);
                 println!("[WGPU] Render pass completed: draw_indexed(0..6, 0, 0..{})", instances.len());
-
-                drop(render_pass);
             } else {
                 println!("[WGPU] No instances to render");
             }
         } else {
             println!("[WGPU] No texture bind group available for rendering");
         }
+
+        drop(render_pass);
 
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));
