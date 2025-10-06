@@ -5,6 +5,8 @@ use gstreamer_app::AppSink;
 use tokio::sync::broadcast;
 use std::sync::Arc;
 use parking_lot::RwLock;
+use tauri::Emitter;
+use base64::Engine;
 
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
@@ -18,6 +20,7 @@ pub struct GStreamerComposite {
     pipeline_fps: Arc<RwLock<u32>>,
     pipeline_width: Arc<RwLock<u32>>,
     pipeline_height: Arc<RwLock<u32>>,
+    app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -74,6 +77,7 @@ impl GStreamerComposite {
             pipeline_fps: Arc::new(RwLock::new(30)),
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
+            app_handle: Arc::new(RwLock::new(None)),
         })
     }
     
@@ -88,6 +92,10 @@ impl GStreamerComposite {
     pub fn set_overlay_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.overlay_frame_sender.write() = Some(sender);
     }
+
+    pub fn set_app_handle(&self, app_handle: tauri::AppHandle) {
+        *self.app_handle.write() = Some(app_handle);
+    }
     
     pub fn update_layers(&self, camera: (bool, f64), overlay: (bool, f64)) {
         let mut layers = self.layers.write();
@@ -100,7 +108,7 @@ impl GStreamerComposite {
                  camera.0, camera.1, overlay.0, overlay.1);
     }
     
-    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
+    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, app_handle: tauri::AppHandle) -> Result<(), String> {
         println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
 
         // Check if pipeline is already running with the same parameters
@@ -129,6 +137,9 @@ impl GStreamerComposite {
         *self.pipeline_fps.write() = fps;
         *self.pipeline_width.write() = width;
         *self.pipeline_height.write() = height;
+
+        // Store app handle for event emission
+        *self.app_handle.write() = Some(app_handle);
         
         let device_index: u32 = camera_device_id.parse()
             .map_err(|_| "Invalid camera device ID")?;
@@ -266,6 +277,7 @@ impl GStreamerComposite {
         // Set up callbacks for preview frames
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
+        let app_handle_clone = self.app_handle.clone();
 
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -280,8 +292,15 @@ impl GStreamerComposite {
 
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
+                        // Send to WebSocket clients
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
+                        }
+
+                        // Emit Tauri event for frontend canvas display
+                        if let Some(app_handle) = app_handle_clone.read().as_ref() {
+                            let base64_data = base64::engine::general_purpose::STANDARD.encode(jpeg_data);
+                            let _ = app_handle.emit("composite-frame", base64_data);
                         }
                     }
 
@@ -293,6 +312,7 @@ impl GStreamerComposite {
         // Set up callbacks for camera layer frames
         let camera_frame_sender = self.camera_frame_sender.clone();
         let is_running_camera = self.is_running.clone();
+        let app_handle_camera = self.app_handle.clone();
 
         camera_appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -307,8 +327,15 @@ impl GStreamerComposite {
 
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
+                        // Send to WebSocket clients
                         if let Some(sender) = camera_frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
+                        }
+
+                        // Emit Tauri event for frontend camera layer canvas
+                        if let Some(app_handle) = app_handle_camera.read().as_ref() {
+                            let base64_data = base64::engine::general_purpose::STANDARD.encode(jpeg_data);
+                            let _ = app_handle.emit("camera-layer-frame", base64_data);
                         }
                     }
 
@@ -577,7 +604,7 @@ impl GStreamerComposite {
 
         // Create capsfilter for overlay videorate to set output framerate
         let overlay_videorate_caps = gst::Caps::builder("video/x-raw")
-            .field("framerate", gst::Fraction::new(0, 1)) // Let videorate decide based on max-rate
+            .field("framerate", gst::Fraction::new(1, 2147483647)) // Allow any framerate >= 1 fps
             .build();
         let overlay_videorate_capsfilter = ElementFactory::make("capsfilter")
             .name("overlay_videorate_caps")
