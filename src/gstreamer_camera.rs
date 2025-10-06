@@ -46,22 +46,51 @@ impl GStreamerCamera {
             let caps = gst::Caps::builder("video/x-raw").build();
             monitor.add_filter(Some("Video/Source"), Some(&caps));
             
-            let devices = monitor.devices();
-            
-            for (i, device) in devices.iter().enumerate() {
-                let display_name = device.display_name();
-                let device_class = device.device_class();
-                
-                cameras.push(CameraInfo {
-                    id: i.to_string(),
-                    name: display_name.to_string(),
-                    description: device_class.to_string(),
-                });
+            // Start monitoring to get active devices
+            if monitor.start().is_err() {
+                println!("[GStreamer] Failed to start device monitor");
+                return Ok(cameras);
             }
             
-            // If no cameras found, return empty list (not dummy entries)
+            let devices = monitor.devices();
+            
+            let mut device_index = 0;
+            // Filter only devices that have valid capabilities (working cameras)
+            for device in devices.iter() {
+                // Check if device has valid caps (indicates it's actually working)
+                if let Some(device_caps) = device.caps() {
+                    if device_caps.is_empty() {
+                        continue; // Skip devices with no capabilities
+                    }
+                    
+                    let display_name = device.display_name();
+                    
+                    // Get the device path to verify it's a real device
+                    let has_valid_path = device.properties()
+                        .and_then(|props| props.get::<String>("device.path").ok())
+                        .is_some();
+                    
+                    // Only add cameras with valid device paths (skip virtual/unknown devices)
+                    if has_valid_path {
+                        println!("[GStreamer] Found: {} (device-index: {})", display_name, device_index);
+                        
+                        cameras.push(CameraInfo {
+                            id: device_index.to_string(),
+                            name: display_name.to_string(),
+                            description: "Active Camera".to_string(),
+                        });
+                        device_index += 1;
+                    } else {
+                        println!("[GStreamer] Skipping {} (no valid device path)", display_name);
+                    }
+                }
+            }
+            
+            monitor.stop();
+            
+            // If no cameras found, return empty list
             if cameras.is_empty() {
-                println!("[GStreamer] No cameras detected");
+                println!("[GStreamer] No active cameras detected");
             }
         }
         
@@ -92,8 +121,13 @@ impl GStreamerCamera {
         Ok(cameras)
     }
     
-    pub fn start(&mut self, device_index: u32) -> Result<(), String> {
-        println!("[GStreamer] Starting camera {}", device_index);
+    pub fn start(&mut self, device_id: &str) -> Result<(), String> {
+        self.start_with_quality(device_id, "high")
+    }
+    
+    pub fn start_with_quality(&mut self, device_id: &str, quality: &str) -> Result<(), String> {
+        let device_index: u32 = device_id.parse().map_err(|_| "Invalid device ID")?;
+        println!("[GStreamer] Starting camera {} with {} quality", device_index, quality);
         
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -101,6 +135,17 @@ impl GStreamerCamera {
         }
         
         *self.is_running.write() = true;
+        
+        // Quality presets (width, height, jpeg_quality, description)
+        let (width, height, jpeg_quality) = match quality {
+            "low" => (640, 360, 60),      // Low - 360p, lower quality
+            "medium" => (1280, 720, 75),  // Medium - 720p, balanced
+            "high" => (1280, 720, 90),    // High - 720p, high quality (default)
+            "ultra" => (1920, 1080, 95),  // Ultra - 1080p, maximum quality
+            _ => (1280, 720, 90),         // Default to high
+        };
+        
+        println!("[GStreamer] Resolution: {}x{}, JPEG quality: {}", width, height, jpeg_quality);
         
         // Build GStreamer pipeline
         // Windows: mfvideosrc (Media Foundation - modern, replaces deprecated ksvideosrc)
@@ -112,10 +157,10 @@ impl GStreamerCamera {
             "mfvideosrc device-index={} ! \
              videoconvert ! \
              videoscale ! \
-             video/x-raw,width=1280,height=720 ! \
-             jpegenc ! \
+             video/x-raw,width={},height={} ! \
+             jpegenc quality={} ! \
              appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
-            device_index
+            device_index, width, height, jpeg_quality
         );
         
         #[cfg(target_os = "linux")]
