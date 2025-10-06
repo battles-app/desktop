@@ -154,36 +154,36 @@ impl GStreamerCamera {
         
         #[cfg(target_os = "windows")]
         let pipeline_str = format!(
-            "mfvideosrc device-index={} sync=false ! \
-             videoconvert sync=false ! \
-             videoscale sync=false ! \
+            "mfvideosrc device-index={} ! \
+             videoconvert ! \
+             videoscale ! \
              video/x-raw,width={},height={} ! \
-             jpegenc quality={} sync=false ! \
+             jpegenc quality={} ! \
              appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index, width, height, jpeg_quality
         );
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "v4l2src device=/dev/video{} sync=false ! \
-             videoconvert sync=false ! \
+            "v4l2src device=/dev/video{} ! \
+             videoconvert ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
-             jpegenc quality=80 sync=false ! \
+             jpegenc quality=80 ! \
              appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index
         );
         
         #[cfg(target_os = "macos")]
         let pipeline_str = format!(
-            "avfvideosrc device-index={} sync=false ! \
-             videoconvert sync=false ! \
+            "avfvideosrc device-index={} ! \
+             videoconvert ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
-             jpegenc quality=80 sync=false ! \
+             jpegenc quality=80 ! \
              appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index
         );
         
-        println!("[GStreamer] Pipeline: {}", pipeline_str);
+        println!("[GStreamer] ⚡ Raw camera pipeline (sink sync disabled): {}", pipeline_str);
         
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?

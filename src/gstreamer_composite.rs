@@ -125,15 +125,15 @@ impl GStreamerComposite {
                 "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} sink_0::sync=false \
                    sink_1::zorder=1 sink_1::alpha={} sink_1::sync=false ! \
-                 videoconvert sync=false ! \
+                 videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 sync=false ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
-                 mfvideosrc device-index={} sync=false ! \
-                 videoflip method={} sync=false ! \
-                 videoconvert sync=false ! \
-                 videoscale sync=false ! \
+                 mfvideosrc device-index={} ! \
+                 videoflip method={} ! \
+                 videoconvert ! \
+                 videoscale ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
@@ -151,14 +151,14 @@ impl GStreamerComposite {
                 "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} sink_0::sync=false \
                    sink_1::zorder=1 sink_1::alpha={} sink_1::sync=false ! \
-                 videoconvert sync=false ! \
+                 videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 sync=false ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
-                 mfvideosrc device-index={} sync=false ! \
-                 videoconvert sync=false ! \
-                 videoscale sync=false ! \
+                 mfvideosrc device-index={} ! \
+                 videoconvert ! \
+                 videoscale ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
@@ -197,7 +197,7 @@ impl GStreamerComposite {
             height
         );
         
-        println!("[Composite] Pipeline: {}", pipeline_str);
+        println!("[Composite] ⚡ Raw composite pipeline (sink sync disabled): {}", pipeline_str);
         
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
@@ -422,13 +422,11 @@ impl GStreamerComposite {
         // Raw FX pipeline - no sync constraints, play as fast as possible
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
-            .property("sync", false)
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
-            .property("sync", false)
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
@@ -442,13 +440,11 @@ impl GStreamerComposite {
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
             .property("caps", &caps)
-            .property("sync", false)
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
 
-        // Set uridecodebin to async and sync=false for raw playback
+        // Set uridecodebin to async for raw playback
         uridecode.set_property("async-handling", true);
-        uridecode.set_property("sync", false);
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
@@ -570,7 +566,7 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
-        println!("[Composite FX] 🔍 Pipeline elements: uridecodebin → videorate → videoconvert → videoscale → capsfilter");
+        println!("[Composite FX] 🔍 Raw pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
         
         Ok(())
     }
