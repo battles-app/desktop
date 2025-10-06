@@ -37,9 +37,10 @@ pub struct LayerSettings {
 pub struct FxPlaybackState {
     pub file_url: String,
     pub keycolor: String,      // Hex color like "#00ff00"
-    pub tolerance: f64,        // 0.0 - 1.0
-    pub similarity: f64,       // 0.0 - 1.0
-    pub use_chroma_key: bool,
+    pub fxchroma: bool,        // Enable/disable chroma-key
+    pub similarity: f64,       // 0-100 → alpha.angle (key tolerance)
+    pub smoothness: f64,       // 0-100 → alpha.noise-level / 10 (edge smoothing)
+    pub spill: f64,            // 0-100 → keyspillm0pup.amount-1 / 100 (despill strength)
     pub compositor_sink_pad: Option<gst::Pad>, // Store sink pad for proper cleanup
 }
 
@@ -349,7 +350,7 @@ impl GStreamerComposite {
     }
     
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
-    pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
+    pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, fxchroma: bool, similarity: f64, smoothness: f64, spill: f64) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
@@ -428,9 +429,10 @@ impl GStreamerComposite {
         *self.fx_state.write() = Some(FxPlaybackState {
             file_url: file_path.clone(),
             keycolor: keycolor.clone(),
-            tolerance,
+            fxchroma,
             similarity,
-            use_chroma_key,
+            smoothness,
+            spill,
             compositor_sink_pad: None, // Will be set when pad is requested
         });
         
@@ -502,22 +504,89 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
+        // Convert to RGBA for chroma-key processing
+        let rgba_caps = gst::Caps::builder("video/x-raw")
+            .field("format", "RGBA")
+            .build();
+
+        let rgba_filter = ElementFactory::make("capsfilter")
+            .name("fxrgba")
+            .property("caps", &rgba_caps)
+            .build()
+            .map_err(|_| "Failed to create RGBA capsfilter")?;
+
+        println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
+
+        // Chroma-key elements (only if enabled)
+        let mut chroma_elements: Vec<gst::Element> = Vec::new();
+        
+        if fxchroma {
+            println!("[Composite FX] 🎨 Chroma-key enabled: similarity={}, smoothness={}, spill={}", similarity, smoothness, spill);
+            
+            // Parse keycolor hex (e.g., "#00ff00") to RGB
+            let (r, g, b) = if keycolor.starts_with('#') && keycolor.len() == 7 {
+                let hex = &keycolor[1..];
+                (
+                    u8::from_str_radix(&hex[0..2], 16).unwrap_or(0),
+                    u8::from_str_radix(&hex[2..4], 16).unwrap_or(255),
+                    u8::from_str_radix(&hex[4..6], 16).unwrap_or(0)
+                )
+            } else {
+                (0, 255, 0)  // Default to green
+            };
+            
+            println!("[Composite FX] 🎨 Chroma key color: #{:02x}{:02x}{:02x} (R={}, G={}, B={})", r, g, b, r, g, b);
+            
+            // Try glalpha (GPU) first, fallback to alpha (CPU)
+            let keyer = ElementFactory::make("glalpha")
+                .name("fxkeyer")
+                .property("method", 1i32)  // 1 = green-screen mode
+                .property("angle", similarity as f32)  // 0-100 tolerance
+                .property("noise-level", (smoothness / 10.0) as f32)  // 0-10 edge smoothing
+                .property("target-r", (r as f32) / 255.0)  // 0.0-1.0 for GL
+                .property("target-g", (g as f32) / 255.0)
+                .property("target-b", (b as f32) / 255.0)
+                .build()
+                .or_else(|_| {
+                    println!("[Composite FX] ⚠️ glalpha not available, using CPU alpha");
+                    ElementFactory::make("alpha")
+                        .name("fxkeyer")
+                        .property("method", 1i32)  // 1 = green-screen mode
+                        .property("angle", similarity as f32)
+                        .property("noise-level", (smoothness / 10.0) as f32)
+                        .property("prefer-passthrough", false)
+                        .property("target-r", r as i32)    // 0-255 for CPU
+                        .property("target-g", g as i32)
+                        .property("target-b", b as i32)
+                        .build()
+                })
+                .map_err(|e| format!("Failed to create chroma keyer: {}", e))?;
+
+            // Despill to remove green color spill
+            let despill = ElementFactory::make("frei0r-filter-keyspillm0pup")
+                .name("fxdespill")
+                .property("amount-1", (spill / 100.0) as f64)  // 0-1 despill strength
+                .build()
+                .map_err(|e| format!("Failed to create despill filter: {}", e))?;
+
+            chroma_elements.push(keyer);
+            chroma_elements.push(despill);
+        }
+
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
             .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // BGRA caps for compositor
-        let caps = gst::Caps::builder("video/x-raw")
+        // Final BGRA caps for compositor
+        let bgra_caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
-
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
-            .property("caps", &caps)
+            .property("caps", &bgra_caps)
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
 
@@ -527,13 +596,31 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Add all elements to bin
+        let mut all_elements = vec![&uridecode, &videorate, &rate_filter, &videoconvert, &rgba_filter];
+        for elem in &chroma_elements {
+            all_elements.push(elem);
+        }
+        all_elements.extend_from_slice(&[&identity_sync, &videoscale, &capsfilter]);
+        
+        fx_bin.add_many(&all_elements)
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to link FX elements")?;
+        // Link elements in order
+        gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert, &rgba_filter])
+            .map_err(|_| "Failed to link initial FX elements")?;
+
+        // Link chroma elements if present
+        let mut last_element: &gst::Element = &rgba_filter;
+        for elem in &chroma_elements {
+            gst::Element::link_many(&[last_element, elem])
+                .map_err(|_| "Failed to link chroma elements")?;
+            last_element = elem;
+        }
+
+        // Link final elements
+        gst::Element::link_many(&[last_element, &identity_sync, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to link final FX elements")?;
 
         let final_element = capsfilter.clone();
         

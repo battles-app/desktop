@@ -964,11 +964,12 @@ async fn play_composite_fx(
     _file_data: Option<Vec<u8>>, // No longer used - kept for API compatibility
     filename: String,
     keycolor: String,
-    tolerance: f64,
+    fxchroma: bool,
     similarity: f64,
-    use_chroma_key: bool
+    smoothness: f64,
+    spill: f64
 ) -> Result<(), String> {
-    println!("[Composite] 🎬 Playing FX: {} (chroma: {})", filename, use_chroma_key);
+    println!("[Composite] 🎬 Playing FX: {} (chroma: {})", filename, fxchroma);
     
     // Clean filename for caching
     let clean_filename = filename
@@ -1033,7 +1034,7 @@ async fn play_composite_fx(
     // NOW lock and play (fast, no I/O while locked)
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
-        composite.play_fx_from_file(file_path_str, keycolor, tolerance, similarity, use_chroma_key)?;
+        composite.play_fx_from_file(file_path_str, keycolor, fxchroma, similarity, smoothness, spill)?;
         println!("[Composite] ✅ FX playback started");
     } else {
         return Err("Composite pipeline not initialized".to_string());
