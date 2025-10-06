@@ -66,8 +66,7 @@ impl GStreamerInput {
                 let source_element = format!("avfvideosrc device-index={} is-live=true", device_index);
 
                 format!(
-                    "{} ! videoconvert ! video/x-raw,format=RGBA ! \
-                     videoscale ! video/x-raw,width={},height={} ! \
+                    "{} ! videoconvert ! videoscale ! video/x-raw,format=RGBA,width={},height={} ! \
                      appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
                     source_element, self.config.width, self.config.height
                 )
@@ -100,6 +99,8 @@ impl GStreamerInput {
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
         let input_id = self.id.clone();
+        let expected_width = self.config.width;
+        let expected_height = self.config.height;
 
         sink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -120,7 +121,14 @@ impl GStreamerInput {
                     let width: i32 = structure.get("width").map_err(|_| gst::FlowError::Error)?;
                     let height: i32 = structure.get("height").map_err(|_| gst::FlowError::Error)?;
 
-                    println!("[GST Input {}] Frame buffer size: {} bytes, dimensions: {}x{}", input_id, map.size(), width, height);
+                    println!("[GST Input {}] Frame buffer size: {} bytes, dimensions: {}x{} (expected: {}x{})",
+                             input_id, map.size(), width, height, expected_width, expected_height);
+
+                    // Validate dimensions match expected
+                    if width as u32 != expected_width || height as u32 != expected_height {
+                        println!("[GST Input {}] WARNING: Frame dimensions {}x{} don't match expected {}x{}",
+                                 input_id, width, height, expected_width, expected_height);
+                    }
 
                     // Send frame data to WGPU compositor
                     if let Some(sender) = frame_sender.read().as_ref() {

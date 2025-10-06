@@ -115,8 +115,9 @@ impl WgpuGStreamerCompositor {
             while let Ok((frame_data, actual_width, actual_height)) = rx.recv().await {
                 // Send camera frames directly to frontend for immediate display
                 if input_id.starts_with("camera_") {
-                    println!("[Camera] Sending frame to frontend: {}x{} ({} bytes)", actual_width, actual_height, frame_data.len());
-                    Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame_data, actual_width, actual_height);
+                    println!("[Camera] Sending frame to frontend: {}x{} ({} bytes) -> canvas {}x{}", actual_width, actual_height, frame_data.len(), camera_width, camera_height);
+                    // Send at canvas dimensions for proper scaling
+                    Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame_data, camera_width, camera_height);
                 }
 
                 // Also store in frame buffer for compositing (optional for now)
@@ -301,11 +302,6 @@ impl WgpuGStreamerCompositor {
                             for layer_id in &layer_ids {
                                 if let Some(frame) = frame_buffer.get_latest_frame(layer_id) {
                                     println!("[WGPU-GST Compositor] Processing frame for layer {}: {} bytes", layer_id, frame.data.len());
-
-                                    // Send raw frame to frontend for debugging (camera layers only)
-                                    if layer_id.starts_with("camera") {
-                                        Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame.data, output_size.0, output_size.1);
-                                    }
 
                                     // Use output dimensions for texture (camera frames should be scaled to match)
                                     let texture = wgpu.create_texture_from_rgba(output_size.0, output_size.1, &frame.data);
