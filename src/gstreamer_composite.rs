@@ -40,6 +40,7 @@ pub struct FxPlaybackState {
     pub tolerance: f64,        // 0.0 - 1.0
     pub similarity: f64,       // 0.0 - 1.0
     pub use_chroma_key: bool,
+    pub compositor_sink_pad: Option<gst::Pad>, // Store sink pad for proper cleanup
 }
 
 impl Default for LayerSettings {
@@ -123,8 +124,8 @@ impl GStreamerComposite {
         let pipeline_str = if videoflip_method != "none" {
             format!(
                 "compositor name=comp background=black \
-                   sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
-                   sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
@@ -155,8 +156,8 @@ impl GStreamerComposite {
         } else {
             format!(
                 "compositor name=comp background=black \
-                   sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
-                   sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
@@ -376,6 +377,7 @@ impl GStreamerComposite {
             tolerance,
             similarity,
             use_chroma_key,
+            compositor_sink_pad: None, // Will be set when pad is requested
         });
         
         // Get the pipeline
@@ -597,6 +599,11 @@ impl GStreamerComposite {
         let comp_sink_pad = compositor
             .request_pad_simple("sink_1")
             .ok_or("Failed to request compositor sink_1 pad")?;
+
+        // Store the sink pad for proper cleanup
+        if let Some(ref mut fx_state) = *self.fx_state.write() {
+            fx_state.compositor_sink_pad = Some(comp_sink_pad.clone());
+        }
         
         // Get pipeline dimensions
         let comp_width = *self.pipeline_width.read() as i32;
@@ -620,15 +627,13 @@ impl GStreamerComposite {
         println!("[Composite FX] 📐 Positioning: {}x{} at ({}, {}) in {}x{} compositor", 
                  fx_width, fx_height, fx_xpos, fx_ypos, comp_width, comp_height);
         
-        // Reset compositor sink properties for fresh state
+        // Set compositor sink properties
         comp_sink_pad.set_property("zorder", 1u32);
         comp_sink_pad.set_property("alpha", self.layers.read().overlay_opacity);
         comp_sink_pad.set_property("xpos", fx_xpos);
         comp_sink_pad.set_property("ypos", fx_ypos);
         comp_sink_pad.set_property("width", fx_width);
         comp_sink_pad.set_property("height", fx_height);
-        // Explicitly reset sync property for fresh timing
-        comp_sink_pad.set_property("sync", true);
         
         // Add FPS monitoring probe to FX ghost pad
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -722,7 +727,7 @@ impl GStreamerComposite {
         // Find and remove FX bin
         if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
             println!("[Composite FX] 🧹 Cleaning up FX bin...");
-            
+
             // Cast to Bin and set all child elements to NULL to release resources
             if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
                 let iterator = fx_bin.iterate_elements();
@@ -731,7 +736,7 @@ impl GStreamerComposite {
                         element.set_state(gst::State::Null).ok();
                     }
                 }
-                
+
                 // Unlink from compositor
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
@@ -739,9 +744,17 @@ impl GStreamerComposite {
                         compositor.release_request_pad(&peer_pad);
                     }
                 }
-                
+
                 // Set bin to NULL state
                 fx_bin.set_state(gst::State::Null).ok();
+
+                // Release the stored compositor sink pad
+                if let Some(ref fx_state) = *self.fx_state.read() {
+                    if let Some(ref sink_pad) = fx_state.compositor_sink_pad {
+                        println!("[Composite FX] 🧹 Releasing compositor sink pad");
+                        compositor.release_request_pad(sink_pad);
+                    }
+                }
                 
                 // Remove bin from pipeline
                 pipeline.remove(&fx_bin).ok();
