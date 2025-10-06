@@ -1028,7 +1028,7 @@ async fn start_camera_feed(app: tauri::AppHandle, camera_device_id: String, widt
             _ => "",
         };
 
-        format!("{} {} ! videoconvert ! video/x-raw,format=I420 ! avenc_mjpeg ! appsink name=camera_feed emit-signals=true sync=false max-buffers=1 drop=true",
+        format!("{} {} ! videoconvert ! jpegenc quality=90 ! appsink name=camera_feed emit-signals=true sync=false max-buffers=1 drop=true",
                 camera_source, rotation_filter)
     };
 
@@ -1061,10 +1061,19 @@ async fn start_camera_feed(app: tauri::AppHandle, camera_device_id: String, widt
                 let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
                 let jpeg_data = map.as_slice();
 
-                // Emit to frontend
-                if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
-                    if let Some(app_handle) = composite.get_app_handle() {
-                        let _ = app_handle.emit("camera-frame", jpeg_data.to_vec());
+                if jpeg_data.len() > 100 {
+                    println!("[Camera] 📸 Captured frame: {} bytes", jpeg_data.len());
+
+                    // Emit to frontend
+                    if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
+                        if let Some(app_handle) = composite.get_app_handle() {
+                            println!("[Camera] 📤 Emitting camera-frame event ({} bytes)", jpeg_data.len());
+                            let _ = app_handle.emit("camera-frame", jpeg_data.to_vec());
+                        } else {
+                            println!("[Camera] ⚠️ No app handle available for event emission");
+                        }
+                    } else {
+                        println!("[Camera] ⚠️ No composite instance for event emission");
                     }
                 }
 
