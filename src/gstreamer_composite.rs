@@ -369,16 +369,6 @@ impl GStreamerComposite {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
-
-        // Store FX state
-        *self.fx_state.write() = Some(FxPlaybackState {
-            file_url: file_path.clone(),
-            keycolor: keycolor.clone(),
-            tolerance,
-            similarity,
-            use_chroma_key,
-            compositor_sink_pad: None, // Will be set when pad is requested
-        });
         
         // Get the pipeline
         let pipeline = match &self.pipeline {
@@ -393,7 +383,7 @@ impl GStreamerComposite {
             .by_name("comp")
             .ok_or("Failed to get compositor element")?;
         
-        // Stop any existing FX first (with aggressive cleanup)
+        // Stop any existing FX first (with complete pad cleanup)
         if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
             println!("[Composite FX] 🧹 Aggressive cleanup of existing FX pipeline...");
 
@@ -403,8 +393,17 @@ impl GStreamerComposite {
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
                         ghost_pad.unlink(&peer_pad).ok();
+                        // Release the compositor sink pad (sink_1)
                         compositor.release_request_pad(&peer_pad);
-                        println!("[Composite FX] ✅ Unlinked from compositor");
+                        println!("[Composite FX] ✅ Unlinked and released sink_1 pad");
+                    }
+                }
+
+                // Also check stored pad in fx_state and release it
+                if let Some(ref fx_state) = *self.fx_state.read() {
+                    if let Some(ref sink_pad) = fx_state.compositor_sink_pad {
+                        println!("[Composite FX] 🧹 Releasing stored compositor sink pad");
+                        compositor.release_request_pad(sink_pad);
                     }
                 }
 
@@ -437,11 +436,24 @@ impl GStreamerComposite {
             }
         }
 
+        // Clear FX state to prevent double-release
+        *self.fx_state.write() = None;
+
         // Ensure pipeline is in playing state after cleanup
         pipeline.set_state(gst::State::Playing).ok();
         
         // Small delay to ensure pipeline is stable before adding new FX
         std::thread::sleep(std::time::Duration::from_millis(50));
+        
+        // Create NEW FX state for this playback (AFTER cleanup, BEFORE pad request)
+        *self.fx_state.write() = Some(FxPlaybackState {
+            file_url: file_path.clone(),
+            keycolor: keycolor.clone(),
+            tolerance,
+            similarity,
+            use_chroma_key,
+            compositor_sink_pad: None, // Will be set when pad is requested
+        });
         
         println!("[Composite FX] 🚀 Creating uridecodebin (no disk I/O!)...");
         
@@ -671,10 +683,6 @@ impl GStreamerComposite {
             gst::PadProbeReturn::Ok
         });
 
-        // Configure compositor sink to NOT sync timestamps (allow independent FX playback)
-        comp_sink_pad.set_property("sync", false);
-        println!("[Composite FX] ⏱️ Compositor sink set to async (no timestamp sync)");
-        
         // Link FX bin to compositor
         ghost_pad
             .link(&comp_sink_pad)
@@ -707,13 +715,12 @@ impl GStreamerComposite {
     pub fn stop_fx(&mut self) -> Result<(), String> {
         println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
         
-        *self.fx_state.write() = None;
-        
         // Get the pipeline
         let pipeline = match &self.pipeline {
             Some(p) => p,
             None => {
                 println!("[Composite FX] No pipeline running");
+                *self.fx_state.write() = None;
                 return Ok(());
             }
         };
@@ -723,6 +730,7 @@ impl GStreamerComposite {
             Some(c) => c,
             None => {
                 println!("[Composite FX] Compositor not found");
+                *self.fx_state.write() = None;
                 return Ok(());
             }
         };
@@ -738,13 +746,13 @@ impl GStreamerComposite {
                     if let Some(peer_pad) = ghost_pad.peer() {
                         ghost_pad.unlink(&peer_pad).ok();
                         compositor.release_request_pad(&peer_pad);
+                        println!("[Composite FX] 🧹 Released compositor sink_1 pad");
                     }
                 }
 
-                // Release the stored compositor sink pad
+                // Also release stored pad if different
                 if let Some(ref fx_state) = *self.fx_state.read() {
                     if let Some(ref sink_pad) = fx_state.compositor_sink_pad {
-                        println!("[Composite FX] 🧹 Releasing compositor sink pad");
                         compositor.release_request_pad(sink_pad);
                     }
                 }
@@ -776,6 +784,9 @@ impl GStreamerComposite {
         } else {
             println!("[Composite FX] No FX bin found to remove");
         }
+        
+        // Clear FX state after cleanup complete
+        *self.fx_state.write() = None;
         
         Ok(())
     }
