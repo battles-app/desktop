@@ -491,11 +491,21 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // Force consistent 30fps output with videorate in live mode
+        // Use queue with max-size-time to enforce real-time 30fps playback
+        // This throttles based on buffer durations regardless of pipeline clock
+        let queue_throttle = ElementFactory::make("queue")
+            .name("fxthrottle")
+            .property("max-size-buffers", 3u32)          // Hold max 3 frames (100ms at 30fps)
+            .property("max-size-time", 100_000_000u64)   // 100ms time limit
+            .property("leaky", 2i32)                     // Drop old frames if full
+            .build()
+            .map_err(|_| "Failed to create throttle queue")?;
+
+        // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
             .property("skip-to-first", true)   // Start fresh, ignore previous state
-            .property("max-rate", 30i32)       // Hard limit to 30fps
+            .property("drop-only", true)       // Only drop, never duplicate
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
@@ -509,16 +519,8 @@ impl GStreamerComposite {
             .property("caps", &rate_caps)
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
-
-        // Use identity with sync=true to enforce real-time playback
-        // This works even in async pipelines by throttling based on buffer timestamps
-        let identity_sync = ElementFactory::make("identity")
-            .name("fxsync")
-            .property("sync", true)  // Enforce timing based on timestamps
-            .build()
-            .map_err(|_| "Failed to create identity sync")?;
         
-        println!("[Composite FX] 🕐 identity sync element added - enforces real-time timestamp-based playback");
+        println!("[Composite FX] 🕐 queue throttle added - enforces real-time timing via buffer duration");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -549,12 +551,12 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> queue_throttle -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &queue_throttle, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements with forced 30fps rate control and timestamp-based sync
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Link elements: videorate enforces 30fps, queue throttles based on buffer duration
+        gst::Element::link_many(&[&videorate, &rate_filter, &queue_throttle, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -760,13 +762,13 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Sync FX bin state with pipeline - identity sync will handle timing
+        // Sync FX bin state with pipeline
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
         
-        // Identity with sync=true will throttle based on buffer timestamps
-        // Combined with the flush above, this ensures consistent 30fps on every play
-        println!("[Composite FX] ⏱️ Using identity sync for timestamp-based throttling (30fps enforcement)");
+        // Queue throttle enforces timing based on buffer durations (33ms per frame at 30fps)
+        // This works in async pipelines without needing a clock
+        println!("[Composite FX] ⏱️ Using queue throttle for duration-based timing (30fps enforcement)");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
