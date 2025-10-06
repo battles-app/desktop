@@ -136,7 +136,7 @@ impl GStreamerComposite {
         // Ultra-simple pipeline: capture → optional rotate → encode → sink
         // No scaling, no complex compositing, just direct camera feed
         let pipeline = format!(
-            "{} {} ! videoconvert ! video/x-raw,format=RGB ! avenc_mjpeg quality=85 ! appsink name=camera_sink emit-signals=true sync=false max-buffers=1 drop=true",
+            "{} {} ! videoconvert ! video/x-raw,format=I420 ! avenc_mjpeg ! appsink name=camera_sink emit-signals=true sync=false max-buffers=1 drop=true",
             camera_source, rotation_filter
         );
 

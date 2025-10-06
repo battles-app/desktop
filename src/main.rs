@@ -1028,7 +1028,7 @@ async fn start_camera_feed(app: tauri::AppHandle, camera_device_id: String, widt
             _ => "",
         };
 
-        format!("{} {} ! videoconvert ! video/x-raw,format=RGB ! avenc_mjpeg quality=85 ! appsink name=camera_feed emit-signals=true sync=false max-buffers=1 drop=true",
+        format!("{} {} ! videoconvert ! video/x-raw,format=I420 ! avenc_mjpeg ! appsink name=camera_feed emit-signals=true sync=false max-buffers=1 drop=true",
                 camera_source, rotation_filter)
     };
 
