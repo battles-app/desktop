@@ -172,20 +172,21 @@ impl GStreamerComposite {
             format!("mfvideosrc device-index={}", device_index)
         };
 
-        // Build camera processing chain: native format → BGRA → rotate → scale to user prefs
+        // Build camera processing chain: native format only → minimal processing for real-time
+        // For true real-time streaming, let camera output in native format with minimal conversion
+        // Skip videoconvert entirely to avoid any format negotiation issues
         let camera_processing = if videoflip_method != "none" {
-            format!("{} ! videoconvert ! video/x-raw,format=BGRA ! videoflip method={} ! videoscale ! video/x-raw,width={},height={} ! videorate ! video/x-raw,framerate={}/1",
-                    camera_source, videoflip_method, width, height, fps)
+            format!("{} ! videoflip method={}",
+                    camera_source, videoflip_method)
         } else {
-            format!("{} ! videoconvert ! video/x-raw,format=BGRA ! videoscale ! video/x-raw,width={},height={} ! videorate ! video/x-raw,framerate={}/1",
-                    camera_source, width, height, fps)
+            camera_source.clone()
         };
 
         let pipeline_str = format!(
             "compositor name=comp \
                sink_0::zorder=0 sink_0::alpha={} ! \
              videoconvert ! \
-             video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
+             video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
              t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              t. ! queue ! {} \
@@ -196,38 +197,42 @@ impl GStreamerComposite {
             self.layers.read().camera_opacity,
             width,
             height,
-            fps,
             self.get_output_branch(),
             camera_processing
         );
         
         #[cfg(target_os = "linux")]
+        let camera_source = if use_test_source {
+            "videotestsrc pattern=smpte".to_string()
+        } else {
+            format!("v4l2src device=/dev/video{}", device_index)
+        };
+
+        let camera_processing = if videoflip_method != "none" {
+            format!("{} ! videoconvert ! video/x-raw,format=BGRA ! videoflip method={} ! videoscale ! video/x-raw,width={},height={}",
+                    camera_source, videoflip_method, width, height)
+        } else {
+            format!("{} ! videoconvert ! video/x-raw,format=BGRA ! videoscale ! video/x-raw,width={},height={}",
+                    camera_source, width, height)
+        };
+
         let pipeline_str = format!(
             "compositor name=comp \
-               sink_0::zorder=0 sink_0::alpha={} \
-               sink_1::zorder=1 sink_1::alpha={} ! \
+               sink_0::zorder=0 sink_0::alpha={} ! \
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
              t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              t. ! queue ! {} \
-             v4l2src device=/dev/video{} ! \
-             videoconvert ! \
-             videoscale ! \
-             video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
+             {} ! \
              tee name=camera_tee \
              camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
              camera_tee. ! comp.sink_0",
             self.layers.read().camera_opacity,
-            self.layers.read().overlay_opacity,
             width,
             height,
-            fps,
             self.get_output_branch(),
-            device_index,
-            width,
-            height,
-            fps
+            camera_processing
         );
         
         println!("[Composite] Pipeline: {}", pipeline_str);
