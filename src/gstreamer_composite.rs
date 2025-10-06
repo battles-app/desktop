@@ -5,10 +5,9 @@ use gstreamer_app::AppSink;
 use tokio::sync::broadcast;
 use std::sync::Arc;
 use parking_lot::RwLock;
-use tauri::Emitter;
 
 pub struct GStreamerComposite {
-    pipeline: Arc<RwLock<Option<Pipeline>>>,
+    pipeline: Option<Pipeline>,
     frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     camera_frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     overlay_frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
@@ -19,7 +18,6 @@ pub struct GStreamerComposite {
     pipeline_fps: Arc<RwLock<u32>>,
     pipeline_width: Arc<RwLock<u32>>,
     pipeline_height: Arc<RwLock<u32>>,
-    app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -65,7 +63,7 @@ impl GStreamerComposite {
         println!("[Composite] Initialized successfully");
         
         Ok(Self {
-            pipeline: Arc::new(RwLock::new(None)),
+            pipeline: None,
             frame_sender: Arc::new(RwLock::new(None)),
             camera_frame_sender: Arc::new(RwLock::new(None)),
             overlay_frame_sender: Arc::new(RwLock::new(None)),
@@ -76,7 +74,6 @@ impl GStreamerComposite {
             pipeline_fps: Arc::new(RwLock::new(30)),
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
-            app_handle: Arc::new(RwLock::new(None)),
         })
     }
     
@@ -91,18 +88,6 @@ impl GStreamerComposite {
     pub fn set_overlay_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.overlay_frame_sender.write() = Some(sender);
     }
-
-    pub fn set_app_handle(&self, app_handle: tauri::AppHandle) {
-        *self.app_handle.write() = Some(app_handle);
-    }
-
-    pub fn get_app_handle(&self) -> Option<tauri::AppHandle> {
-        self.app_handle.read().clone()
-    }
-
-    pub fn set_pipeline(&self, pipeline: Option<Pipeline>) {
-        *self.pipeline.write() = pipeline;
-    }
     
     pub fn update_layers(&self, camera: (bool, f64), overlay: (bool, f64)) {
         let mut layers = self.layers.write();
@@ -115,70 +100,177 @@ impl GStreamerComposite {
                  camera.0, camera.1, overlay.0, overlay.1);
     }
     
-    // Simple camera pipeline builder - minimal processing for real-time
-    fn build_simple_camera_pipeline(&self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<String, String> {
-        // Determine camera source
-        let camera_source = if camera_device_id == "test" {
-            "videotestsrc pattern=smpte".to_string()
-        } else {
-            let device_index: u32 = camera_device_id.parse().map_err(|_| "Invalid camera device ID")?;
-            format!("mfvideosrc device-index={}", device_index)
-        };
+    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
+        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
 
-        // Apply rotation if needed
-        let rotation_filter = match rotation {
-            90 => " ! videoflip method=clockwise",
-            180 => " ! videoflip method=rotate-180",
-            270 => " ! videoflip method=counterclockwise",
-            _ => "",
-        };
+        // Check if pipeline is already running with the same parameters
+        let current_fps = *self.pipeline_fps.read();
+        let current_width = *self.pipeline_width.read();
+        let current_height = *self.pipeline_height.read();
 
-        // Ultra-simple pipeline: capture → optional rotate → encode → sink
-        // No scaling, no complex compositing, just direct camera feed
-        let pipeline = format!(
-            "{} {} ! videoconvert ! jpegenc quality=90 ! appsink name=camera_sink emit-signals=true sync=false max-buffers=1 drop=true",
-            camera_source, rotation_filter
-        );
+        if self.pipeline.is_some() && *self.is_running.read() &&
+           current_fps == fps && current_width == width && current_height == height {
+            println!("[Composite] ✅ Pipeline already running with same parameters, skipping restart");
+            return Ok(());
+        }
 
-        Ok(pipeline)
-    }
+        // Check if FX was playing before stopping the pipeline
+        let fx_was_playing = self.fx_state.read().is_some();
+        let fx_state_clone = self.fx_state.read().clone();
 
-    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, app_handle: tauri::AppHandle) -> Result<(), String> {
-        println!("[Composite] 🚀 Starting camera capture: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-
-        // Stop existing pipeline
-        if let Some(pipeline) = &*self.pipeline.read() {
+        // Stop existing pipeline if any
+        if let Some(pipeline) = &self.pipeline {
             let _ = pipeline.set_state(gst::State::Null);
         }
 
         *self.is_running.write() = true;
-        *self.app_handle.write() = Some(app_handle);
 
-        // Build simple camera pipeline
-        let pipeline_str = self.build_simple_camera_pipeline(camera_device_id, width, height, fps, rotation)?;
-        println!("[Composite] 📹 Camera pipeline: {}", pipeline_str);
+        // Store pipeline dimensions and FPS
+        *self.pipeline_fps.write() = fps;
+        *self.pipeline_width.write() = width;
+        *self.pipeline_height.write() = height;
+        
+        let device_index: u32 = camera_device_id.parse()
+            .map_err(|_| "Invalid camera device ID")?;
+        
+        // Map rotation degrees to videoflip method
+        // 0 = none, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
+        let videoflip_method = match rotation {
+            90 => "clockwise",
+            180 => "rotate-180",
+            270 => "counterclockwise",
+            _ => "none",
+        };
+        
+        // Build GStreamer composite pipeline with compositor element
+        // The compositor element combines multiple video streams with alpha blending
+        // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
 
-        // Create pipeline
+        #[cfg(target_os = "windows")]
+        let pipeline_str = if videoflip_method != "none" {
+            format!(
+                "compositor name=comp \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
+                 videoconvert ! \
+                 video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
+                 tee name=t \
+                 t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! {} \
+                 mfvideosrc device-index={} ! \
+                 videoflip method={} ! \
+                 videoconvert ! \
+                 videoscale ! \
+                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
+                 tee name=camera_tee \
+                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! comp.sink_0",
+                self.layers.read().camera_opacity,
+                self.layers.read().overlay_opacity,
+                width,
+                height,
+                fps,
+                self.get_output_branch(),
+                device_index,
+                videoflip_method,
+                width,
+                height,
+                fps
+            )
+        } else {
+            format!(
+                "compositor name=comp \
+                   sink_0::zorder=0 sink_0::alpha={} \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
+                 videoconvert ! \
+                 video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
+                 tee name=t \
+                 t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! {} \
+                 mfvideosrc device-index={} ! \
+                 videoconvert ! \
+                 videoscale ! \
+                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
+                 tee name=camera_tee \
+                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! comp.sink_0",
+                self.layers.read().camera_opacity,
+                self.layers.read().overlay_opacity,
+                width,
+                height,
+                fps,
+                self.get_output_branch(),
+                device_index,
+                width,
+                height,
+                fps
+            )
+        };
+        
+        #[cfg(target_os = "linux")]
+        let pipeline_str = format!(
+            "compositor name=comp \
+               sink_0::zorder=0 sink_0::alpha={} \
+               sink_1::zorder=1 sink_1::alpha={} ! \
+             videoconvert ! \
+             video/x-raw,format=BGRx,width={},height={} ! \
+             tee name=t \
+             t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+             t. ! queue ! {} \
+             v4l2src device=/dev/video{} ! \
+             videoconvert ! \
+             videoscale ! \
+             video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
+             tee name=camera_tee \
+             camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+             camera_tee. ! comp.sink_0",
+            self.layers.read().camera_opacity,
+            self.layers.read().overlay_opacity,
+            width,
+            height,
+            fps,
+            self.get_output_branch(),
+            device_index,
+            width,
+            height,
+            fps
+        );
+        
+        println!("[Composite] Pipeline: {}", pipeline_str);
+        
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
             .dynamic_cast::<Pipeline>()
             .map_err(|_| "Failed to cast to Pipeline".to_string())?;
-
-        // Get camera sink
-        let camera_sink = pipeline
-            .by_name("camera_sink")
-            .ok_or("Failed to get camera_sink")?
+        
+        // Get the appsink for preview
+        let appsink = pipeline
+            .by_name("preview")
+            .ok_or("Failed to get preview appsink")?
             .dynamic_cast::<AppSink>()
-            .map_err(|_| "Failed to cast camera_sink to AppSink")?;
+            .map_err(|_| "Failed to cast to AppSink")?;
 
-        // Set up frame callback
-        let app_handle_clone = self.app_handle.clone();
-        let is_running_clone = self.is_running.clone();
+        // Get the appsink for camera layer (always available in main pipeline)
+        let camera_appsink = pipeline
+            .by_name("camera_layer")
+            .ok_or("Failed to get camera layer appsink")?
+            .dynamic_cast::<AppSink>()
+            .map_err(|_| "Failed to cast camera layer to AppSink")?;
 
-        camera_sink.set_callbacks(
+
+        // Videorate elements temporarily removed from main pipeline to debug basic functionality
+
+        // Note: overlay_appsink is created dynamically in the FX bin when FX is played
+        // It will be set up in play_fx_from_file();
+
+        // Set up callbacks for preview frames
+        let frame_sender = self.frame_sender.clone();
+        let is_running = self.is_running.clone();
+
+        appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
-                    if !*is_running_clone.read() {
+                    if !*is_running.read() {
                         return Ok(gst::FlowSuccess::Ok);
                     }
 
@@ -188,9 +280,8 @@ impl GStreamerComposite {
 
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
-                        // Emit Tauri event with raw JPEG data
-                        if let Some(app_handle) = app_handle_clone.read().as_ref() {
-                            let _ = app_handle.emit("camera-frame", jpeg_data.to_vec());
+                        if let Some(sender) = frame_sender.read().as_ref() {
+                            let _ = sender.send(jpeg_data.to_vec());
                         }
                     }
 
@@ -199,12 +290,55 @@ impl GStreamerComposite {
                 .build(),
         );
 
-        // Start pipeline
-        pipeline.set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to start pipeline: {}", e))?;
+        // Set up callbacks for camera layer frames
+        let camera_frame_sender = self.camera_frame_sender.clone();
+        let is_running_camera = self.is_running.clone();
 
-        println!("[Composite] ✅ Camera pipeline started successfully!");
-        *self.pipeline.write() = Some(pipeline);
+        camera_appsink.set_callbacks(
+            gstreamer_app::AppSinkCallbacks::builder()
+                .new_sample(move |appsink| {
+                    if !*is_running_camera.read() {
+                        return Ok(gst::FlowSuccess::Ok);
+                    }
+
+                    let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+
+                    let jpeg_data = map.as_slice();
+                    if jpeg_data.len() > 100 {
+                        if let Some(sender) = camera_frame_sender.read().as_ref() {
+                            let _ = sender.send(jpeg_data.to_vec());
+                        }
+                    }
+
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+
+        // Note: overlay layer callbacks are set up in play_fx_from_file() when FX bin is created
+        
+        // Start pipeline
+        pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|e| format!("Failed to start pipeline: {}", e))?;
+        
+        println!("[Composite] ✅ Composite pipeline started successfully!");
+
+        self.pipeline = Some(pipeline);
+
+        // If FX was playing before the pipeline restart, restart it now
+        if fx_was_playing {
+            if let Some(fx_state) = fx_state_clone {
+                println!("[Composite] 🔄 Restarting FX after pipeline restart: {}", fx_state.file_url);
+                // Note: We don't call play_fx_from_file here because that would try to download again
+                // Instead, we should have the frontend restart the FX if needed
+                // For now, just clear the FX state since the bin was destroyed
+                *self.fx_state.write() = None;
+                println!("[Composite] ⚠️ FX state cleared - frontend should restart FX if needed");
+            }
+        }
 
         Ok(())
     }
@@ -255,13 +389,13 @@ impl GStreamerComposite {
         
         *self.is_running.write() = false;
         
-        if let Some(pipeline) = &*self.pipeline.read() {
+        if let Some(pipeline) = &self.pipeline {
             pipeline
                 .set_state(gst::State::Null)
                 .map_err(|e| format!("Failed to stop pipeline: {}", e))?;
         }
-
-        *self.pipeline.write() = None;
+        
+        self.pipeline = None;
         println!("[Composite] Composite pipeline stopped");
         
         Ok(())
@@ -295,8 +429,7 @@ impl GStreamerComposite {
                  rgb.0, rgb.1, rgb.2, tolerance, similarity);
         
         // Get the pipeline
-        let pipeline_binding = self.pipeline.read();
-        let pipeline = match &*pipeline_binding {
+        let pipeline = match &self.pipeline {
             Some(p) => {
                 println!("[Composite FX] ✅ Pipeline found - state: {:?}", p.current_state());
                 p
@@ -384,13 +517,13 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add avenc_mjpeg element with sync=false to allow natural FX playback speed
+        // Add identity element with sync=false to allow natural FX playback speed
         // Compositor handles timing - FX should play at native frame rate without clock interference
-        let avenc_mjpeg = ElementFactory::make("avenc_mjpeg")
-            .name("fxavenc_mjpeg")
+        let identity = ElementFactory::make("identity")
+            .name("fxidentity")
             .property("sync", false) // Don't sync to pipeline clock - natural playback speed
             .build()
-            .map_err(|_| "Failed to create avenc_mjpeg")?;
+            .map_err(|_| "Failed to create identity")?;
 
         // Add queue for buffering - minimal for low latency FX playback
         let queue = ElementFactory::make("queue")
@@ -444,7 +577,7 @@ impl GStreamerComposite {
 
         // Create capsfilter for overlay videorate to set output framerate
         let overlay_videorate_caps = gst::Caps::builder("video/x-raw")
-            .field("framerate", gst::Fraction::new(1, 2147483647)) // Allow any framerate >= 1 fps
+            .field("framerate", gst::Fraction::new(0, 1)) // Let videorate decide based on max-rate
             .build();
         let overlay_videorate_capsfilter = ElementFactory::make("capsfilter")
             .name("overlay_videorate_caps")
@@ -484,10 +617,10 @@ impl GStreamerComposite {
 
         // Add all elements to bin (filesrc + decodebin pipeline)
         if let Some(ref alpha) = chroma_element {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &avenc_mjpeg, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &avenc_mjpeg, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
@@ -505,13 +638,13 @@ impl GStreamerComposite {
         println!("[Composite FX] 🔗 Linking post-processing chain...");
         if has_alpha {
             let alpha_elem = chroma_element.as_ref().unwrap();
-            gst::Element::link_many(&[&videoscale, alpha_elem, &avenc_mjpeg, &queue, &capsfilter])
+            gst::Element::link_many(&[&videoscale, alpha_elem, &identity, &queue, &capsfilter])
                 .map_err(|_| "Failed to link FX elements with alpha")?;
-            println!("[Composite FX] ✅ Chain linked with alpha: videoscale → alpha → avenc_mjpeg → queue → capsfilter");
+            println!("[Composite FX] ✅ Chain linked with alpha: videoscale → alpha → identity → queue → capsfilter");
         } else {
-            gst::Element::link_many(&[&videoscale, &avenc_mjpeg, &queue, &capsfilter])
+            gst::Element::link_many(&[&videoscale, &identity, &queue, &capsfilter])
                 .map_err(|_| "Failed to link FX elements")?;
-            println!("[Composite FX] ✅ Chain linked: videoscale → avenc_mjpeg → queue → capsfilter");
+            println!("[Composite FX] ✅ Chain linked: videoscale → identity → queue → capsfilter");
         }
 
         // Link capsfilter to overlay tee
@@ -765,8 +898,7 @@ impl GStreamerComposite {
         *self.fx_state.write() = None;
         
         // Get the pipeline
-        let pipeline_binding = self.pipeline.read();
-        let pipeline = match &*pipeline_binding {
+        let pipeline = match &self.pipeline {
             Some(p) => p,
             None => {
                 println!("[Composite FX] No pipeline running");
