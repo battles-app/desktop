@@ -243,23 +243,7 @@ impl GStreamerCamera {
                     // Validate frame (check if it's not just zeros/black)
                     if jpeg_data.len() > 100 {
                         let count = frame_count_clone.fetch_add(1, Ordering::Relaxed);
-
-                        // Log performance metrics every 2 seconds
-                        let now = Instant::now();
-                        let mut last_log = last_log_time_clone.write();
-                        if now.duration_since(*last_log).as_secs() >= 2 {
-                            let elapsed = start_time_clone.elapsed();
-                            let fps = count as f64 / elapsed.as_secs_f64();
-                            let prev_count = last_frame_count_clone.swap(count, Ordering::Relaxed);
-                            let recent_frames = count.saturating_sub(prev_count);
-                            let recent_fps = recent_frames as f64 / 2.0; // 2 second window
-
-                            println!("[Camera] 📊 Performance - Total: {} frames ({:.1} fps), Recent: {:.1} fps, Buffer: {} bytes",
-                                count, fps, recent_fps, jpeg_data.len());
-
-                            *last_log = now;
-                        }
-
+                        
                         // Log first successful frame
                         if count == 0 {
                             println!("[GStreamer] ✅ Receiving frames ({} bytes per frame)", jpeg_data.len());

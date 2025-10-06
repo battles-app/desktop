@@ -259,23 +259,7 @@ impl GStreamerComposite {
                     let jpeg_data = map.as_slice();
 
                     if jpeg_data.len() > 100 {
-                        let count = frame_count_clone.fetch_add(1, Ordering::Relaxed);
-
-                        // Log performance metrics every 2 seconds
-                        let now = Instant::now();
-                        let mut last_log = last_log_time_clone.write();
-                        if now.duration_since(*last_log).as_secs() >= 2 {
-                            let elapsed = start_time_clone.elapsed();
-                            let fps = count as f64 / elapsed.as_secs_f64();
-                            let prev_count = last_frame_count_clone.swap(count, Ordering::Relaxed);
-                            let recent_frames = count.saturating_sub(prev_count);
-                            let recent_fps = recent_frames as f64 / 2.0;
-
-                            println!("[Composite] 📊 Performance - Total: {} frames ({:.1} fps), Recent: {:.1} fps, Buffer: {} bytes",
-                                count, fps, recent_fps, jpeg_data.len());
-
-                            *last_log = now;
-                        }
+                        let _count = frame_count_clone.fetch_add(1, Ordering::Relaxed);
 
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
@@ -392,21 +376,26 @@ impl GStreamerComposite {
                 // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
-                        // FLUSH the media pad BEFORE unlinking/releasing to reset timing
-                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                        // Check if pad belongs to compositor BEFORE unlinking
+                        let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
+                        
+                        if should_release {
+                            // FLUSH the media pad BEFORE unlinking/releasing to reset timing
                             peer_pad.send_event(gst::event::FlushStart::new());
                             std::thread::sleep(std::time::Duration::from_millis(10));
                             peer_pad.send_event(gst::event::FlushStop::new(true));
                             println!("[Composite FX] 🔄 Flushed media pad to reset timing");
                         }
                         
+                        // Unlink
                         ghost_pad.unlink(&peer_pad).ok();
-                        // Only release if pad still belongs to compositor
-                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                        
+                        // Release if it belonged to compositor (checked before unlink)
+                        if should_release {
                             compositor.release_request_pad(&peer_pad);
                             println!("[Composite FX] ✅ Unlinked and released sink_1 pad");
                         } else {
-                            println!("[Composite FX] ⚠️ Pad already released or orphaned, skipping release");
+                            println!("[Composite FX] ⚠️ Pad doesn't belong to compositor, skipping release");
                         }
                     }
                 }
@@ -599,17 +588,22 @@ impl GStreamerComposite {
                             // Unlink and release pad (only if still owned by compositor)
                             if let Some(ghost_pad) = fx_bin.static_pad("src") {
                                 if let Some(peer_pad) = ghost_pad.peer() {
-                                    // FLUSH the media pad after EOS to reset timing
-                                    if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                                    // Check if pad belongs to compositor BEFORE unlinking
+                                    let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
+                                    
+                                    if should_release {
+                                        // FLUSH the media pad after EOS to reset timing
                                         peer_pad.send_event(gst::event::FlushStart::new());
                                         std::thread::sleep(std::time::Duration::from_millis(10));
                                         peer_pad.send_event(gst::event::FlushStop::new(true));
                                         println!("[Composite FX] 🔄 Flushed sink_1 after EOS");
                                     }
                                     
+                                    // Unlink
                                     ghost_pad.unlink(&peer_pad).ok();
-                                    // Only release if pad still belongs to compositor
-                                    if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                                    
+                                    // Release if it belonged to compositor (checked before unlink)
+                                    if should_release {
                                         compositor.release_request_pad(&peer_pad);
                                         println!("[Composite FX] ✅ Released compositor pad via EOS cleanup");
                                     }
@@ -698,10 +692,6 @@ impl GStreamerComposite {
         std::thread::sleep(std::time::Duration::from_millis(10));
         comp_sink_pad.send_event(gst::event::FlushStop::new(true));  // true = reset running time
         println!("[Composite FX] 🔄 Flushed compositor sink_1 (media) to reset timing");
-        
-        // Enable sync on compositor media pad to respect timestamps
-        comp_sink_pad.set_property("sync", true);
-        println!("[Composite FX] ✅ Enabled sync on compositor sink_1 pad");
 
         // Store the sink pad for proper cleanup
         if let Some(ref mut fx_state) = *self.fx_state.write() {
@@ -738,43 +728,6 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("width", fx_width);
         comp_sink_pad.set_property("height", fx_height);
         
-        // Add FPS monitoring probe to FX ghost pad
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
-        use std::time::Instant;
-
-        let fx_frame_count = Arc::new(AtomicUsize::new(0));
-        let fx_start_time = Arc::new(Instant::now());
-        let fx_last_log_time = Arc::new(std::sync::Mutex::new(Instant::now()));
-        let fx_last_frame_count = Arc::new(std::sync::Mutex::new(0usize));
-
-        let fx_frame_count_clone = fx_frame_count.clone();
-        let fx_start_time_clone = fx_start_time.clone();
-        let fx_last_log_time_clone = fx_last_log_time.clone();
-        let fx_last_frame_count_clone = fx_last_frame_count.clone();
-
-        ghost_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
-            if let Some(gst::PadProbeData::Buffer(ref _buffer)) = info.data {
-                let count = fx_frame_count_clone.fetch_add(1, Ordering::Relaxed);
-                let now = Instant::now();
-                let mut last_log = fx_last_log_time_clone.lock().unwrap();
-
-                if now.duration_since(*last_log).as_secs() >= 2 {
-                    let elapsed = fx_start_time_clone.elapsed();
-                    let fps = count as f64 / elapsed.as_secs_f64();
-                    let prev_count = fx_last_frame_count_clone.lock().unwrap().clone();
-                    let recent_frames = count.saturating_sub(prev_count);
-                    let recent_fps = recent_frames as f64 / 2.0; // 2 second window
-
-                    println!("[Composite FX] 🎬 Performance - Total: {} frames ({:.1} fps), Recent: {:.1} fps",
-                        count, fps, recent_fps);
-
-                    *fx_last_frame_count_clone.lock().unwrap() = count;
-                    *last_log = now;
-                }
-            }
-            gst::PadProbeReturn::Ok
-        });
 
         // CRITICAL: Add timestamp offset probe to align media timestamps to pipeline running-time
         // This prevents "late frames" → "QoS catch-up sprint" on replays
