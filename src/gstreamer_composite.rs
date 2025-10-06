@@ -389,70 +389,65 @@ impl GStreamerComposite {
 
             // Cast to Bin and aggressively cleanup all resources
             if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
-                // STEP 1: Stop bin FIRST (stop data flow completely)
-                println!("[Composite FX] 🛑 Stopping FX bin...");
-                if let Ok(_) = bin.set_state(gst::State::Null) {
-                    // Wait for state change to complete (timeout 2 seconds)
-                    let _ = bin.state(Some(gst::ClockTime::from_seconds(2)));
-                    println!("[Composite FX] ✅ FX bin stopped completely");
-                }
-                
-                // STEP 2: Force stop all child elements
-                let iterator = bin.iterate_elements();
-                for item in iterator {
-                    if let Ok(element) = item {
-                        element.set_state(gst::State::Null).ok();
-                    }
-                }
-                
-                // Wait for all elements to fully stop
-                std::thread::sleep(std::time::Duration::from_millis(100));
-
-                // STEP 3: Now unlink and release pad (data flow is stopped)
+                // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
-                        // Unlink
                         ghost_pad.unlink(&peer_pad).ok();
-                        
-                        // Wait a moment for unlink to complete
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        
-                        // Release pad from compositor
+                        // Only release if pad still belongs to compositor
                         if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
                             compositor.release_request_pad(&peer_pad);
-                            println!("[Composite FX] ✅ Released sink_1 pad from compositor");
-                            
-                            // Wait for compositor to fully release the pad
-                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            println!("[Composite FX] ✅ Unlinked and released sink_1 pad");
+                        } else {
+                            println!("[Composite FX] ⚠️ Pad already released or orphaned, skipping release");
                         }
                     }
                 }
 
-                // STEP 4: Remove bin from pipeline
+                // THEN stop bin and wait for NULL state to complete
+                if let Ok(_) = bin.set_state(gst::State::Null) {
+                    // Wait for state change to complete (timeout 1 second)
+                    let _ = bin.state(Some(gst::ClockTime::from_seconds(1)));
+                    println!("[Composite FX] ✅ FX bin stopped completely");
+                }
+
+                // Force cleanup of all child elements (ensure videorate resets)
+                let iterator = bin.iterate_elements();
+                for item in iterator {
+                    if let Ok(element) = item {
+                        // Force NULL state and wait for completion
+                        if let Ok(_) = element.set_state(gst::State::Null) {
+                            let _ = element.state(Some(gst::ClockTime::from_mseconds(100)));
+                        }
+                    }
+                }
+
+                // Remove bin from pipeline
                 if pipeline.remove(&bin).is_ok() {
                     println!("[Composite FX] ✅ FX bin removed from pipeline");
                 }
 
-                // STEP 5: Give GStreamer time to cleanup completely
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                println!("[Composite FX] 🧹 Complete cleanup finished");
+                // Give GStreamer time to cleanup and reset element state
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                println!("[Composite FX] 🧹 Memory cleanup completed");
             }
         }
 
         // Clear FX state to prevent double-release
         *self.fx_state.write() = None;
 
-        // Verify compositor sink_1 is released (debugging)
-        if let Some(sink_1) = compositor.static_pad("sink_1") {
-            println!("[Composite FX] ⚠️ WARNING: sink_1 still exists after cleanup! Attempting force release...");
-            compositor.release_request_pad(&sink_1);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        } else {
-            println!("[Composite FX] ✅ Verified: sink_1 properly released");
-        }
-
         // Ensure pipeline is in playing state after cleanup
         pipeline.set_state(gst::State::Playing).ok();
+        
+        // CRITICAL FIX: Flush compositor sink_0 to reset timing state
+        // This prevents pipeline clock accumulation from affecting new FX playback
+        if let Some(comp_sink_0) = compositor.static_pad("sink_0") {
+            // Send FLUSH_START to clear buffers
+            comp_sink_0.send_event(gst::event::FlushStart::new());
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            // Send FLUSH_STOP to reset timing (set to true to reset time)
+            comp_sink_0.send_event(gst::event::FlushStop::new(true));
+            println!("[Composite FX] 🔄 Flushed compositor to reset timing state");
+        }
         
         // Small delay to ensure pipeline is stable before adding new FX
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -724,10 +719,6 @@ impl GStreamerComposite {
         comp_sink_pad.set_property("ypos", fx_ypos);
         comp_sink_pad.set_property("width", fx_width);
         comp_sink_pad.set_property("height", fx_height);
-        
-        // Note: GstCompositorPad doesn't have a 'sync' property
-        // The compositor always composites without timestamp sync by default
-        println!("[Composite FX] 📐 FX layer configured: zorder={}, alpha={:.2}", 1, self.layers.read().overlay_opacity);
         
         // Add FPS monitoring probe to FX ghost pad
         use std::sync::atomic::{AtomicUsize, Ordering};
