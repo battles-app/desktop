@@ -392,6 +392,14 @@ impl GStreamerComposite {
                 // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
+                        // FLUSH the media pad BEFORE unlinking/releasing to reset timing
+                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                            peer_pad.send_event(gst::event::FlushStart::new());
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                            peer_pad.send_event(gst::event::FlushStop::new(true));
+                            println!("[Composite FX] 🔄 Flushed media pad to reset timing");
+                        }
+                        
                         ghost_pad.unlink(&peer_pad).ok();
                         // Only release if pad still belongs to compositor
                         if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
@@ -437,17 +445,6 @@ impl GStreamerComposite {
 
         // Ensure pipeline is in playing state after cleanup
         pipeline.set_state(gst::State::Playing).ok();
-        
-        // CRITICAL FIX: Flush compositor sink_0 to reset timing state
-        // This prevents pipeline clock accumulation from affecting new FX playback
-        if let Some(comp_sink_0) = compositor.static_pad("sink_0") {
-            // Send FLUSH_START to clear buffers
-            comp_sink_0.send_event(gst::event::FlushStart::new());
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            // Send FLUSH_STOP to reset timing (set to true to reset time)
-            comp_sink_0.send_event(gst::event::FlushStop::new(true));
-            println!("[Composite FX] 🔄 Flushed compositor to reset timing state");
-        }
         
         // Small delay to ensure pipeline is stable before adding new FX
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -766,18 +763,9 @@ impl GStreamerComposite {
         // Sync FX bin state with pipeline - identity sync will handle timing
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
-
-        // Send fresh segment event to FX bin to reset its timing context
-        // This ensures consistent playback speed on every play
-        let segment = gst::FormattedSegment::<gst::ClockTime>::new();
-        let segment_event = gst::event::Segment::new(&segment);
-        if let Some(sink_pad) = fx_bin.static_pad("sink") {
-            // Note: FX bin might not have direct sink pad since uridecodebin is internal
-            sink_pad.send_event(segment_event);
-        }
         
         // Identity with sync=true will throttle based on buffer timestamps
-        // This enforces real-time playback even in async pipelines
+        // Combined with the flush above, this ensures consistent 30fps on every play
         println!("[Composite FX] ⏱️ Using identity sync for timestamp-based throttling (30fps enforcement)");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
