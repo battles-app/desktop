@@ -314,9 +314,8 @@ impl GStreamerComposite {
     
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
-        println!("[Composite FX] ⚡ Playing FX from pre-cached file (chroma: {}, color: {})", 
-                 use_chroma_key, keycolor);
-        
+        println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
+
         // Store FX state
         *self.fx_state.write() = Some(FxPlaybackState {
             file_url: file_path.clone(),
@@ -325,12 +324,6 @@ impl GStreamerComposite {
             similarity,
             use_chroma_key,
         });
-        
-        // Parse hex color to RGB (e.g., "#00ff00" -> R=0, G=255, B=0)
-        let rgb = Self::hex_to_rgb(&keycolor)?;
-        
-        println!("[Composite FX] Chroma key RGB: R={}, G={}, B={} (tolerance={}, similarity={})", 
-                 rgb.0, rgb.1, rgb.2, tolerance, similarity);
         
         // Get the pipeline
         let pipeline = match &self.pipeline {
@@ -390,13 +383,7 @@ impl GStreamerComposite {
             .build()
             .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
         
-        // Add videorate to ensure playback at original speed
-        let videorate = ElementFactory::make("videorate")
-            .name("fxvideorate")
-            .build()
-            .map_err(|_| "Failed to create videorate")?;
-
-        // Create post-decode elements
+        // Simple FX pipeline: just decode and convert to BGRA
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
             .build()
@@ -407,73 +394,29 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add identity element with sync=false to avoid blocking the camera pipeline
-        let identity = ElementFactory::make("identity")
-            .name("fxidentity")
-            .property("sync", false) // Don't synchronize to clock - let FX play freely
-            .build()
-            .map_err(|_| "Failed to create identity")?;
-
-        // Add larger queue for buffering to prevent blocking
-        let queue = ElementFactory::make("queue")
-            .name("fxqueue")
-            .property("max-size-buffers", 30u32) // Larger buffer
-            .property("max-size-time", 2000000000u64) // 2 second buffer
-            .property_from_str("leaky", "downstream") // Drop old frames if buffer full
-            .build()
-            .map_err(|_| "Failed to create queue")?;
-
-        // Create caps filter to match compositor format (BGRA with alpha channel)
-        // Set framerate to ensure playback at original speed
+        // Create caps filter for BGRA format
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 Original speed playback with videorate, format: BGRA");
-        
+        println!("[Composite FX] 🎬 Clean playback - no effects, format: BGRA");
+
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
             .property("caps", &caps)
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
-        
+
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
-        
-        // Add alpha element if chroma keying is enabled
-        let (chroma_element, has_alpha) = if use_chroma_key {
-            let alpha = ElementFactory::make("alpha")
-                .name("fxalpha")
-                .property_from_str("method", "custom") // Use string for enum
-                .property("target-r", rgb.0 as u32)
-                .property("target-g", rgb.1 as u32)
-                .property("target-b", rgb.2 as u32)
-                .property("angle", (tolerance * 180.0) as f32)
-                .build()
-                .map_err(|e| format!("Failed to create alpha element: {}", e))?;
-            (Some(alpha), true)
-        } else {
-            (None, false)
-        };
-        
-        // Add all elements to bin (identity for clock sync to play at natural speed)
-        if let Some(ref alpha) = chroma_element {
-            fx_bin.add_many(&[&uridecode, &videorate, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
-        } else {
-            fx_bin.add_many(&[&uridecode, &videorate, &videoconvert, &videoscale, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
-        }
 
-        // Link static elements (uridecodebin will link dynamically)
-        if has_alpha {
-            let alpha_elem = chroma_element.as_ref().unwrap();
-            gst::Element::link_many(&[&videorate, &videoconvert, &videoscale, alpha_elem, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to link FX elements with alpha")?;
-        } else {
-            gst::Element::link_many(&[&videorate, &videoconvert, &videoscale, &identity, &queue, &capsfilter])
-                .map_err(|_| "Failed to link FX elements")?;
-        }
+        // Simple pipeline: uridecodebin -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videoconvert, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to add elements to FX bin")?;
+
+        // Link elements
+        gst::Element::link_many(&[&videoconvert, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to link FX elements")?;
         
         let final_element = capsfilter.clone();
         
@@ -490,7 +433,7 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
         // Connect uridecodebin's dynamic pad (for video only)
-        let videorate_clone = videorate.clone();
+        let videoconvert_clone = videoconvert.clone();
         uridecode.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 Pad added: {}", src_pad.name());
 
@@ -521,7 +464,7 @@ impl GStreamerComposite {
             }
 
             // Check if sink is already linked (only link once)
-            let sink_pad = videorate_clone.static_pad("sink").expect("No sink pad");
+            let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
             if sink_pad.is_linked() {
                 println!("[Composite FX] ⚠️ Sink already linked");
                 return;
