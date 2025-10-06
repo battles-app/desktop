@@ -796,16 +796,30 @@ async fn start_composite_websocket_server() {
                 // Subscribe to composite frames
                 if let Some(tx) = tx_opt {
                     let mut rx = tx.subscribe();
-                    
+                    let mut frame_count = 0u64;
+                    let mut last_log = std::time::Instant::now();
+
                     while let Ok(frame_data) = rx.recv().await {
+                        frame_count += 1;
+
+                        // Log frame rate every 3 seconds
+                        if last_log.elapsed().as_secs() >= 3 {
+                            println!("[Composite WS] Sent {} frames to client ({:.1} fps)",
+                                frame_count, frame_count as f64 / last_log.elapsed().as_secs_f64());
+                            frame_count = 0;
+                            last_log = std::time::Instant::now();
+                        }
+
                         use futures_util::SinkExt;
                         use tokio_tungstenite::tungstenite::protocol::Message;
-                        
+
                         if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
                             println!("[Composite WS] Client disconnected");
                             break;
                         }
                     }
+                } else {
+                    println!("[Composite WS] No broadcast channel available for client");
                 }
             });
         }
