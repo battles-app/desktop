@@ -399,19 +399,7 @@ impl GStreamerComposite {
 
             // Cast to Bin and aggressively cleanup all resources
             if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
-                // Stop bin first
-                bin.set_state(gst::State::Null).ok();
-
-                // Force cleanup of all child elements
-                let iterator = bin.iterate_elements();
-                for item in iterator {
-                    if let Ok(element) = item {
-                        // Force NULL state
-                        element.set_state(gst::State::Null).ok();
-                    }
-                }
-
-                // Unlink from compositor with error handling
+                // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
                         ghost_pad.unlink(&peer_pad).ok();
@@ -420,19 +408,40 @@ impl GStreamerComposite {
                     }
                 }
 
+                // THEN stop bin and wait for NULL state to complete
+                if let Ok(_) = bin.set_state(gst::State::Null) {
+                    // Wait for state change to complete (timeout 1 second)
+                    let _ = bin.state(Some(gst::ClockTime::from_seconds(1)));
+                    println!("[Composite FX] ✅ FX bin stopped completely");
+                }
+
+                // Force cleanup of all child elements (ensure videorate resets)
+                let iterator = bin.iterate_elements();
+                for item in iterator {
+                    if let Ok(element) = item {
+                        // Force NULL state and wait for completion
+                        if let Ok(_) = element.set_state(gst::State::Null) {
+                            let _ = element.state(Some(gst::ClockTime::from_mseconds(100)));
+                        }
+                    }
+                }
+
                 // Remove bin from pipeline
                 if pipeline.remove(&bin).is_ok() {
                     println!("[Composite FX] ✅ FX bin removed from pipeline");
                 }
 
-                // Longer pause to ensure complete cleanup
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                // Give GStreamer time to cleanup and reset element state
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 println!("[Composite FX] 🧹 Memory cleanup completed");
             }
         }
 
         // Ensure pipeline is in playing state after cleanup
         pipeline.set_state(gst::State::Playing).ok();
+        
+        // Small delay to ensure pipeline is stable before adding new FX
+        std::thread::sleep(std::time::Duration::from_millis(50));
         
         println!("[Composite FX] 🚀 Creating uridecodebin (no disk I/O!)...");
         
@@ -465,6 +474,9 @@ impl GStreamerComposite {
         // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
+            .property("drop-only", true)  // Only drop frames, never duplicate
+            .property("skip-to-first", true)  // Start fresh, ignore previous state
+            .property("max-rate", 30i32)  // Hard limit to 30fps
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
@@ -532,7 +544,6 @@ impl GStreamerComposite {
         
         // Connect uridecodebin's dynamic pads (video AND audio for proper clock sync)
         let videorate_clone = videorate.clone();
-        let fx_bin_clone = fx_bin.clone();
 
         uridecode.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 Pad added: {}", src_pad.name());
@@ -637,7 +648,7 @@ impl GStreamerComposite {
         let fx_last_frame_count_clone = fx_last_frame_count.clone();
 
         ghost_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
-            if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
+            if let Some(gst::PadProbeData::Buffer(ref _buffer)) = info.data {
                 let count = fx_frame_count_clone.fetch_add(1, Ordering::Relaxed);
                 let now = Instant::now();
                 let mut last_log = fx_last_log_time_clone.lock().unwrap();
@@ -664,15 +675,23 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Let FX play with independent timing - don't sync to pipeline base time
-        // This allows natural 30fps playback without pipeline timing interference
-        fx_bin.set_base_time(gst::ClockTime::ZERO);
-        fx_bin.set_start_time(gst::ClockTime::NONE);
-        println!("[Composite FX] ⏱️ Independent timing - Base: 0, Start: NONE (natural 30fps playback)");
-
-        // Sync FX bin state with pipeline
+        // Sync FX bin state with pipeline BEFORE setting clock timing
+        // This ensures the bin gets the parent pipeline's clock
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
+
+        // Set proper clock timing to ensure consistent playback across multiple plays
+        // Get the current pipeline base time and use it for the FX bin
+        if let Some(pipeline_base_time) = pipeline.base_time() {
+            fx_bin.set_base_time(pipeline_base_time);
+            println!("[Composite FX] ⏱️ Synced to pipeline clock - Base time: {:?}", pipeline_base_time);
+        } else {
+            println!("[Composite FX] ⚠️ Warning: No pipeline base time available");
+        }
+        
+        // Set start time to ensure proper timestamp handling
+        fx_bin.set_start_time(gst::ClockTime::ZERO);
+        println!("[Composite FX] ⏱️ Clock synchronized with pipeline for consistent 30fps playback");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
@@ -711,23 +730,13 @@ impl GStreamerComposite {
 
             // Cast to Bin and set all child elements to NULL to release resources
             if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
-                let iterator = fx_bin.iterate_elements();
-                for item in iterator {
-                    if let Ok(element) = item {
-                        element.set_state(gst::State::Null).ok();
-                    }
-                }
-
-                // Unlink from compositor
+                // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
                         ghost_pad.unlink(&peer_pad).ok();
                         compositor.release_request_pad(&peer_pad);
                     }
                 }
-
-                // Set bin to NULL state
-                fx_bin.set_state(gst::State::Null).ok();
 
                 // Release the stored compositor sink pad
                 if let Some(ref fx_state) = *self.fx_state.read() {
@@ -736,12 +745,28 @@ impl GStreamerComposite {
                         compositor.release_request_pad(sink_pad);
                     }
                 }
+
+                // Set bin to NULL state and WAIT for completion
+                if let Ok(_) = fx_bin.set_state(gst::State::Null) {
+                    // Wait for state change to complete (timeout 1 second)
+                    let _ = fx_bin.state(Some(gst::ClockTime::from_seconds(1)));
+                }
+
+                // Set all child elements to NULL and wait
+                let iterator = fx_bin.iterate_elements();
+                for item in iterator {
+                    if let Ok(element) = item {
+                        if let Ok(_) = element.set_state(gst::State::Null) {
+                            let _ = element.state(Some(gst::ClockTime::from_mseconds(100)));
+                        }
+                    }
+                }
                 
                 // Remove bin from pipeline
                 pipeline.remove(&fx_bin).ok();
                 
-                // Give GStreamer time to cleanup
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                // Give GStreamer time to cleanup and reset element state
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 
                 println!("[Composite FX] ✅ FX branch removed and memory freed");
             }
