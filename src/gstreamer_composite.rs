@@ -6,7 +6,6 @@ use tokio::sync::broadcast;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use tauri::Emitter;
-use base64::Engine;
 
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
@@ -188,11 +187,11 @@ impl GStreamerComposite {
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
-             t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+             t. ! queue ! videoconvert ! video/x-raw,format=RGB ! avenc_mjpeg ! appsink name=preview emit-signals=true sync=false max-buffers=1 drop=true \
              t. ! queue ! {} \
              {} ! \
              tee name=camera_tee \
-             camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+             camera_tee. ! queue ! videoconvert ! video/x-raw,format=RGB ! avenc_mjpeg ! appsink name=camera_layer emit-signals=true sync=false max-buffers=1 drop=true \
              camera_tee. ! comp.sink_0",
             self.layers.read().camera_opacity,
             width,
@@ -222,11 +221,11 @@ impl GStreamerComposite {
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
-             t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+             t. ! queue ! videoconvert ! video/x-raw,format=RGB ! avenc_mjpeg ! appsink name=preview emit-signals=true sync=false max-buffers=1 drop=true \
              t. ! queue ! {} \
              {} ! \
              tee name=camera_tee \
-             camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+             camera_tee. ! queue ! videoconvert ! video/x-raw,format=RGB ! avenc_mjpeg ! appsink name=camera_layer emit-signals=true sync=false max-buffers=1 drop=true \
              camera_tee. ! comp.sink_0",
             self.layers.read().camera_opacity,
             width,
@@ -307,11 +306,10 @@ impl GStreamerComposite {
                             let _ = sender.send(jpeg_data.to_vec());
                         }
 
-                        // Emit Tauri event for frontend canvas display
+                        // Emit Tauri event for frontend canvas display with raw binary data
                         if let Some(app_handle) = app_handle_clone.read().as_ref() {
-                            let base64_data = base64::engine::general_purpose::STANDARD.encode(jpeg_data);
-                            println!("[Composite] 📤 Emitting composite-frame event ({} chars)", base64_data.len());
-                            let _ = app_handle.emit("composite-frame", base64_data);
+                            println!("[Composite] 📤 Emitting composite-frame event ({} bytes raw)", jpeg_data.len());
+                            let _ = app_handle.emit("composite-frame", jpeg_data.to_vec());
                         }
                     } else {
                         println!("[Composite] ⚠️ Preview frame too small: {} bytes ({}ms since last)",
@@ -359,11 +357,10 @@ impl GStreamerComposite {
                             let _ = sender.send(jpeg_data.to_vec());
                         }
 
-                        // Emit Tauri event for frontend camera layer canvas
+                        // Emit Tauri event for frontend camera layer canvas with raw binary data
                         if let Some(app_handle) = app_handle_camera.read().as_ref() {
-                            let base64_data = base64::engine::general_purpose::STANDARD.encode(jpeg_data);
-                            println!("[Composite] 📤 Emitting camera-layer-frame event ({} chars)", base64_data.len());
-                            let _ = app_handle.emit("camera-layer-frame", base64_data);
+                            println!("[Composite] 📤 Emitting camera-layer-frame event ({} bytes raw)", jpeg_data.len());
+                            let _ = app_handle.emit("camera-layer-frame", jpeg_data.to_vec());
                         }
                     } else {
                         println!("[Composite] ⚠️ Camera layer frame too small: {} bytes ({}ms since last)",
@@ -637,13 +634,13 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Add identity element with sync=false to allow natural FX playback speed
+        // Add avenc_mjpeg element with sync=false to allow natural FX playback speed
         // Compositor handles timing - FX should play at native frame rate without clock interference
-        let identity = ElementFactory::make("identity")
-            .name("fxidentity")
+        let avenc_mjpeg = ElementFactory::make("avenc_mjpeg")
+            .name("fxavenc_mjpeg")
             .property("sync", false) // Don't sync to pipeline clock - natural playback speed
             .build()
-            .map_err(|_| "Failed to create identity")?;
+            .map_err(|_| "Failed to create avenc_mjpeg")?;
 
         // Add queue for buffering - minimal for low latency FX playback
         let queue = ElementFactory::make("queue")
@@ -737,10 +734,10 @@ impl GStreamerComposite {
 
         // Add all elements to bin (filesrc + decodebin pipeline)
         if let Some(ref alpha) = chroma_element {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &identity, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, alpha, &avenc_mjpeg, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         } else {
-            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &identity, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
+            fx_bin.add_many(&[&filesrc, &decodebin, &videoconvert, &videoscale, &avenc_mjpeg, &queue, &capsfilter, &overlay_tee, &overlay_videorate, &overlay_videorate_capsfilter, &overlay_videoconvert, &overlay_jpegenc, &overlay_appsink, &overlay_queue])
                 .map_err(|_| "Failed to add elements to FX bin")?;
         }
 
@@ -758,13 +755,13 @@ impl GStreamerComposite {
         println!("[Composite FX] 🔗 Linking post-processing chain...");
         if has_alpha {
             let alpha_elem = chroma_element.as_ref().unwrap();
-            gst::Element::link_many(&[&videoscale, alpha_elem, &identity, &queue, &capsfilter])
+            gst::Element::link_many(&[&videoscale, alpha_elem, &avenc_mjpeg, &queue, &capsfilter])
                 .map_err(|_| "Failed to link FX elements with alpha")?;
-            println!("[Composite FX] ✅ Chain linked with alpha: videoscale → alpha → identity → queue → capsfilter");
+            println!("[Composite FX] ✅ Chain linked with alpha: videoscale → alpha → avenc_mjpeg → queue → capsfilter");
         } else {
-            gst::Element::link_many(&[&videoscale, &identity, &queue, &capsfilter])
+            gst::Element::link_many(&[&videoscale, &avenc_mjpeg, &queue, &capsfilter])
                 .map_err(|_| "Failed to link FX elements")?;
-            println!("[Composite FX] ✅ Chain linked: videoscale → identity → queue → capsfilter");
+            println!("[Composite FX] ✅ Chain linked: videoscale → avenc_mjpeg → queue → capsfilter");
         }
 
         // Link capsfilter to overlay tee
