@@ -125,15 +125,15 @@ impl GStreamerComposite {
                 "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} sink_0::sync=false \
                    sink_1::zorder=1 sink_1::alpha={} sink_1::sync=false ! \
-                 videoconvert ! \
+                 videoconvert sync=false ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! jpegenc quality=90 sync=false ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
-                 mfvideosrc device-index={} ! \
-                 videoflip method={} ! \
-                 videoconvert ! \
-                 videoscale ! \
+                 mfvideosrc device-index={} sync=false ! \
+                 videoflip method={} sync=false ! \
+                 videoconvert sync=false ! \
+                 videoscale sync=false ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
@@ -151,14 +151,14 @@ impl GStreamerComposite {
                 "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} sink_0::sync=false \
                    sink_1::zorder=1 sink_1::alpha={} sink_1::sync=false ! \
-                 videoconvert ! \
+                 videoconvert sync=false ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
-                 t. ! queue ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! jpegenc quality=90 sync=false ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
-                 mfvideosrc device-index={} ! \
-                 videoconvert ! \
-                 videoscale ! \
+                 mfvideosrc device-index={} sync=false ! \
+                 videoconvert sync=false ! \
+                 videoscale sync=false ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
                 self.layers.read().camera_opacity,
@@ -419,55 +419,46 @@ impl GStreamerComposite {
             .build()
             .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
         
-        // FX pipeline optimized for 30fps H.264 MP4 playback
-        let videorate = ElementFactory::make("videorate")
-            .name("fxvideorate")
-            .build()
-            .map_err(|_| "Failed to create videorate")?;
-
-        // Force 30fps playback for consistent timing
-        let rate_caps = gst::Caps::builder("video/x-raw")
-            .field("framerate", gst::Fraction::new(30, 1))
-            .build();
-
-        let rate_filter = ElementFactory::make("capsfilter")
-            .name("fxratefilter")
-            .property("caps", &rate_caps)
-            .build()
-            .map_err(|_| "Failed to create rate capsfilter")?;
-
+        // Raw FX pipeline - no sync constraints, play as fast as possible
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
+            .property("sync", false)
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
+            .property("sync", false)
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Create caps filter for BGRA format
+        // Raw BGRA caps - no framerate constraints
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 30fps H.264 MP4 playback - real timing, lightweight");
+        println!("[Composite FX] ⚡ Raw media playback - no sync, maximum speed");
 
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
             .property("caps", &caps)
+            .property("sync", false)
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
+
+        // Set uridecodebin to async and sync=false for raw playback
+        uridecode.set_property("async-handling", true);
+        uridecode.set_property("sync", false);
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
+        // Raw pipeline: uridecodebin -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
         // Link elements
-        gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
+        gst::Element::link_many(&[&videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -485,7 +476,7 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
         // Connect uridecodebin's dynamic pad (for video only)
-        let videorate_clone = videorate.clone();
+        let videoconvert_clone = videoconvert.clone();
         uridecode.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 Pad added: {}", src_pad.name());
 
@@ -516,7 +507,7 @@ impl GStreamerComposite {
             }
 
             // Check if sink is already linked (only link once)
-            let sink_pad = videorate_clone.static_pad("sink").expect("No sink pad");
+            let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
             if sink_pad.is_linked() {
                 println!("[Composite FX] ⚠️ Sink already linked");
                 return;

@@ -154,31 +154,31 @@ impl GStreamerCamera {
         
         #[cfg(target_os = "windows")]
         let pipeline_str = format!(
-            "mfvideosrc device-index={} ! \
-             videoconvert ! \
-             videoscale ! \
+            "mfvideosrc device-index={} sync=false ! \
+             videoconvert sync=false ! \
+             videoscale sync=false ! \
              video/x-raw,width={},height={} ! \
-             jpegenc quality={} ! \
+             jpegenc quality={} sync=false ! \
              appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index, width, height, jpeg_quality
         );
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "v4l2src device=/dev/video{} ! \
-             videoconvert ! \
+            "v4l2src device=/dev/video{} sync=false ! \
+             videoconvert sync=false ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
-             jpegenc quality=80 ! \
+             jpegenc quality=80 sync=false ! \
              appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index
         );
         
         #[cfg(target_os = "macos")]
         let pipeline_str = format!(
-            "avfvideosrc device-index={} ! \
-             videoconvert ! \
+            "avfvideosrc device-index={} sync=false ! \
+             videoconvert sync=false ! \
              video/x-raw,format=RGB,width=1280,height=720,framerate=30/1 ! \
-             jpegenc quality=80 ! \
+             jpegenc quality=80 sync=false ! \
              appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
             device_index
         );
