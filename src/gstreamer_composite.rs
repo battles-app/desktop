@@ -380,9 +380,8 @@ impl GStreamerComposite {
                         let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
                         
                         if should_release {
-                            // FLUSH the media pad BEFORE unlinking/releasing to reset timing
+                            // FLUSH the media pad BEFORE unlinking/releasing to reset timing (no wait = faster)
                             peer_pad.send_event(gst::event::FlushStart::new());
-                            std::thread::sleep(std::time::Duration::from_millis(10));
                             peer_pad.send_event(gst::event::FlushStop::new(true));
                             println!("[Composite FX] 🔄 Flushed media pad to reset timing");
                         }
@@ -400,32 +399,22 @@ impl GStreamerComposite {
                     }
                 }
 
-                // THEN stop bin and wait for NULL state to complete
-                if let Ok(_) = bin.set_state(gst::State::Null) {
-                    // Wait for state change to complete (timeout 1 second)
-                    let _ = bin.state(Some(gst::ClockTime::from_seconds(1)));
-                    println!("[Composite FX] ✅ FX bin stopped completely");
-                }
+                // THEN stop bin (non-blocking for instant cleanup)
+                let _ = bin.set_state(gst::State::Null);
+                println!("[Composite FX] ✅ FX bin stopped");
 
-                // Force cleanup of all child elements (ensure videorate resets)
+                // Force NULL state on all child elements (non-blocking for speed)
                 let iterator = bin.iterate_elements();
                 for item in iterator {
                     if let Ok(element) = item {
-                        // Force NULL state and wait for completion
-                        if let Ok(_) = element.set_state(gst::State::Null) {
-                            let _ = element.state(Some(gst::ClockTime::from_mseconds(100)));
-                        }
+                        let _ = element.set_state(gst::State::Null);
                     }
                 }
 
-                // Remove bin from pipeline
+                // Remove bin from pipeline (instant)
                 if pipeline.remove(&bin).is_ok() {
-                    println!("[Composite FX] ✅ FX bin removed from pipeline");
+                    println!("[Composite FX] 🧹 Memory cleanup completed");
                 }
-
-                // Give GStreamer time to cleanup and reset element state
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                println!("[Composite FX] 🧹 Memory cleanup completed");
             }
         }
 
@@ -434,9 +423,6 @@ impl GStreamerComposite {
 
         // Ensure pipeline is in playing state after cleanup
         pipeline.set_state(gst::State::Playing).ok();
-        
-        // Small delay to ensure pipeline is stable before adding new FX
-        std::thread::sleep(std::time::Duration::from_millis(50));
         
         // Create NEW FX state for this playback (AFTER cleanup, BEFORE pad request)
         *self.fx_state.write() = Some(FxPlaybackState {
@@ -754,21 +740,14 @@ impl GStreamerComposite {
             },
         );
 
-        // Link FX bin to compositor
+        // Sync FX bin state with pipeline FIRST (faster than syncing after link)
+        fx_bin.sync_state_with_parent()
+            .map_err(|_| "Failed to sync FX bin state".to_string())?;
+
+        // Link FX bin to compositor (happens instantly while bin is already playing)
         ghost_pad
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
-
-        // CRITICAL: Send RECONFIGURE event FROM ghost pad (upstream) to force caps renegotiation
-        // This clears cached framerate state from previous plays (prevents 30fps→60fps doubling)
-        ghost_pad.send_event(gst::event::Reconfigure::new());
-        println!("[Composite FX] 🔄 Forced caps renegotiation (upstream from FX bin)");
-
-        // Sync FX bin state with pipeline (inherits clock and base_time)
-        fx_bin.sync_state_with_parent()
-            .map_err(|_| "Failed to sync FX bin state".to_string())?;
-        
-        println!("[Composite FX] ✅ FX bin synced with pipeline clock");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
