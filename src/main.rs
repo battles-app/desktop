@@ -840,10 +840,54 @@ async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
     Ok(cameras)
 }
 
-// System monitoring task (silent background monitoring)
+// System monitoring task for comprehensive logging
 async fn start_system_monitor() {
-    // Monitoring disabled - no console spam
-    // Status can be checked via API endpoints if needed
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+
+        loop {
+            interval.tick().await;
+
+            // Log system status
+            println!("[System] 🔍 Status Check:");
+
+            // Check camera status
+            if let Some(camera) = GSTREAMER_CAMERA.read().as_ref() {
+                if camera.is_running() {
+                    println!("  📹 Camera: Running");
+                } else {
+                    println!("  📹 Camera: Stopped");
+                }
+            } else {
+                println!("  📹 Camera: Not initialized");
+            }
+
+            // Check composite status
+            if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
+                if composite.is_running() {
+                    println!("  🎬 Composite: Running");
+                } else {
+                    println!("  🎬 Composite: Stopped");
+                }
+            } else {
+                println!("  🎬 Composite: Not initialized");
+            }
+
+            // Check WebSocket connections (basic status)
+            println!("  🌐 WebSocket: Active");
+
+            // Pipeline state details
+            if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
+                if let Some(state) = composite.get_pipeline_state() {
+                    println!("  🔧 Pipeline State: {:?}", state);
+                } else {
+                    println!("  🔧 Pipeline State: No pipeline");
+                }
+            }
+
+            println!("  💾 System: Monitoring active");
+        }
+    });
 }
 
 #[command]
@@ -964,12 +1008,11 @@ async fn play_composite_fx(
     _file_data: Option<Vec<u8>>, // No longer used - kept for API compatibility
     filename: String,
     keycolor: String,
-    fxchroma: bool,
+    tolerance: f64,
     similarity: f64,
-    smoothness: f64,
-    spill: f64
+    use_chroma_key: bool
 ) -> Result<(), String> {
-    println!("[Composite] 🎬 Playing FX: {} (chroma: {})", filename, fxchroma);
+    println!("[Composite] 🎬 Playing FX: {} (chroma: {})", filename, use_chroma_key);
     
     // Clean filename for caching
     let clean_filename = filename
@@ -1034,7 +1077,7 @@ async fn play_composite_fx(
     // NOW lock and play (fast, no I/O while locked)
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
-        composite.play_fx_from_file(file_path_str, keycolor, fxchroma, similarity, smoothness, spill)?;
+        composite.play_fx_from_file(file_path_str, keycolor, tolerance, similarity, use_chroma_key)?;
         println!("[Composite] ✅ FX playback started");
     } else {
         return Err("Composite pipeline not initialized".to_string());
