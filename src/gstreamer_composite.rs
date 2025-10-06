@@ -438,16 +438,8 @@ impl GStreamerComposite {
         // Ensure pipeline is in playing state after cleanup
         pipeline.set_state(gst::State::Playing).ok();
         
-        // CRITICAL FIX: Flush compositor sink_0 to reset timing state
-        // This prevents pipeline clock accumulation from affecting new FX playback
-        if let Some(comp_sink_0) = compositor.static_pad("sink_0") {
-            // Send FLUSH_START to clear buffers
-            comp_sink_0.send_event(gst::event::FlushStart::new());
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            // Send FLUSH_STOP to reset timing (set to true to reset time)
-            comp_sink_0.send_event(gst::event::FlushStop::new(true));
-            println!("[Composite FX] 🔄 Flushed compositor to reset timing state");
-        }
+        // DON'T flush compositor - it would disrupt the camera branch!
+        // Instead, we'll handle timing reset within the FX bin itself
         
         // Small delay to ensure pipeline is stable before adding new FX
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -513,15 +505,24 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
 
+        // Add queue before identity for proper buffering
+        let queue_before_sync = ElementFactory::make("queue")
+            .name("fxqueue")
+            .property("max-size-buffers", 2u32)
+            .property("max-size-time", 0u64)  // No time limit
+            .property("leaky", 2i32)  // Leak downstream (drop old frames)
+            .build()
+            .map_err(|_| "Failed to create queue")?;
+
         // Use identity with sync=true to enforce real-time playback
-        // This works even in async pipelines by throttling based on buffer timestamps
+        // With base_time=0, this will hold buffers based on their PTS timestamps
         let identity_sync = ElementFactory::make("identity")
             .name("fxsync")
-            .property("sync", true)  // Enforce timing based on timestamps
+            .property("sync", true)  // Hold buffers until their timestamp time
             .build()
             .map_err(|_| "Failed to create identity sync")?;
         
-        println!("[Composite FX] 🕐 identity sync element added - enforces real-time timestamp-based playback");
+        println!("[Composite FX] 🕐 queue + identity sync added - enforces real-time PTS-based playback");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -552,12 +553,12 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> queue -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &queue_before_sync, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements with forced 30fps rate control and timestamp-based sync
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Link elements with forced 30fps rate control, buffering, and timestamp-based sync
+        gst::Element::link_many(&[&videorate, &rate_filter, &queue_before_sync, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -763,22 +764,18 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Sync FX bin state with pipeline - identity sync will handle timing
+        // Sync FX bin state with pipeline first (gets it to PLAYING state)
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
 
-        // Send fresh segment event to FX bin to reset its timing context
-        // This ensures consistent playback speed on every play
-        let segment = gst::FormattedSegment::<gst::ClockTime>::new();
-        let segment_event = gst::event::Segment::new(&segment);
-        if let Some(sink_pad) = fx_bin.static_pad("sink") {
-            // Note: FX bin might not have direct sink pad since uridecodebin is internal
-            sink_pad.send_event(segment_event);
-        }
+        // CRITICAL: Set FX bin base_time to ZERO for independent timing
+        // This makes the FX bin's timing context start fresh every play,
+        // preventing pipeline clock accumulation from causing speed-up
+        fx_bin.set_base_time(gst::ClockTime::ZERO);
+        fx_bin.set_start_time(gst::ClockTime::NONE);
         
-        // Identity with sync=true will throttle based on buffer timestamps
-        // This enforces real-time playback even in async pipelines
-        println!("[Composite FX] ⏱️ Using identity sync for timestamp-based throttling (30fps enforcement)");
+        println!("[Composite FX] ⏱️ FX bin timing reset - base=0, start=NONE (independent from pipeline clock)");
+        println!("[Composite FX] ⏱️ identity sync will throttle at real-time 30fps");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
