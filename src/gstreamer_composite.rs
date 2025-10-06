@@ -295,7 +295,8 @@ impl GStreamerComposite {
                  rgb.0, rgb.1, rgb.2, tolerance, similarity);
         
         // Get the pipeline
-        let pipeline = match &*self.pipeline.read() {
+        let pipeline_binding = self.pipeline.read();
+        let pipeline = match &*pipeline_binding {
             Some(p) => {
                 println!("[Composite FX] ✅ Pipeline found - state: {:?}", p.current_state());
                 p
@@ -764,7 +765,8 @@ impl GStreamerComposite {
         *self.fx_state.write() = None;
         
         // Get the pipeline
-        let pipeline = match &*self.pipeline.read() {
+        let pipeline_binding = self.pipeline.read();
+        let pipeline = match &*pipeline_binding {
             Some(p) => p,
             None => {
                 println!("[Composite FX] No pipeline running");

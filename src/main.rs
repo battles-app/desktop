@@ -8,7 +8,7 @@ use base64::Engine;
 use std::sync::{Arc, Mutex};
 use gstreamer as gst;
 use gstreamer::Pipeline;
-use gstreamer::prelude::Cast;
+use gstreamer::prelude::{Cast, ElementExt, GstBinExt};
 use gstreamer_app::AppSink;
 
 // GStreamer camera module (OBS-quality video pipeline)
