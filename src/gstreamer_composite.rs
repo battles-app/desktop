@@ -383,7 +383,23 @@ impl GStreamerComposite {
             .build()
             .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
         
-        // Simple FX pipeline: just decode and convert to BGRA
+        // FX pipeline optimized for 30fps H.264 MP4 playback
+        let videorate = ElementFactory::make("videorate")
+            .name("fxvideorate")
+            .build()
+            .map_err(|_| "Failed to create videorate")?;
+
+        // Force 30fps playback for consistent timing
+        let rate_caps = gst::Caps::builder("video/x-raw")
+            .field("framerate", gst::Fraction::new(30, 1))
+            .build();
+
+        let rate_filter = ElementFactory::make("capsfilter")
+            .name("fxratefilter")
+            .property("caps", &rate_caps)
+            .build()
+            .map_err(|_| "Failed to create rate capsfilter")?;
+
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
             .build()
@@ -399,7 +415,7 @@ impl GStreamerComposite {
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 Clean playback - no effects, format: BGRA");
+        println!("[Composite FX] 🎬 30fps H.264 MP4 playback - real timing, lightweight");
 
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
@@ -410,14 +426,14 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Simple pipeline: uridecodebin -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
         // Link elements
-        gst::Element::link_many(&[&videoconvert, &videoscale, &capsfilter])
+        gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
-        
+
         let final_element = capsfilter.clone();
         
         // Create ghost pad on the bin
@@ -433,7 +449,7 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
         // Connect uridecodebin's dynamic pad (for video only)
-        let videoconvert_clone = videoconvert.clone();
+        let videorate_clone = videorate.clone();
         uridecode.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 Pad added: {}", src_pad.name());
 
@@ -464,7 +480,7 @@ impl GStreamerComposite {
             }
 
             // Check if sink is already linked (only link once)
-            let sink_pad = videoconvert_clone.static_pad("sink").expect("No sink pad");
+            let sink_pad = videorate_clone.static_pad("sink").expect("No sink pad");
             if sink_pad.is_linked() {
                 println!("[Composite FX] ⚠️ Sink already linked");
                 return;
@@ -518,12 +534,10 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
         
-        // Set FX bin base time to match pipeline for proper sync
-        if let Some(base_time) = pipeline.base_time() {
-            fx_bin.set_base_time(base_time);
-            println!("[Composite FX] ⏱️ Set FX base time: {:?}", base_time);
-        }
-        
+        // Don't set base time - let FX play with its own timing
+        // This prevents timing conflicts between multiple FX playbacks
+        println!("[Composite FX] ⏱️ Using independent FX timing (no base time sync)");
+
         // Sync FX bin state with pipeline
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
