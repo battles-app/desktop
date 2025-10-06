@@ -598,7 +598,7 @@ impl GStreamerComposite {
                             // Unlink and release pad (only if still owned by compositor)
                             if let Some(ghost_pad) = fx_bin.static_pad("src") {
                                 if let Some(peer_pad) = ghost_pad.peer() {
-                                    // FLUSH the media pad after EOS to reset timing state
+                                    // FLUSH the media pad after EOS to reset timing
                                     if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
                                         peer_pad.send_event(gst::event::FlushStart::new());
                                         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -697,7 +697,7 @@ impl GStreamerComposite {
         comp_sink_pad.send_event(gst::event::FlushStart::new());
         std::thread::sleep(std::time::Duration::from_millis(10));
         comp_sink_pad.send_event(gst::event::FlushStop::new(true));  // true = reset running time
-        println!("[Composite FX] 🔄 Flushed compositor sink_1 to reset timing before use");
+        println!("[Composite FX] 🔄 Flushed compositor sink_1 to reset timing");
 
         // Store the sink pad for proper cleanup
         if let Some(ref mut fx_state) = *self.fx_state.write() {
@@ -777,6 +777,11 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
+        // CRITICAL: Send RECONFIGURE event FROM ghost pad (upstream) to force caps renegotiation
+        // This clears cached framerate state from previous plays (prevents 30fps→60fps doubling)
+        ghost_pad.send_event(gst::event::Reconfigure::new());
+        println!("[Composite FX] 🔄 Forced caps renegotiation (upstream from FX bin)");
+
         // Sync FX bin state with pipeline
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
@@ -825,7 +830,7 @@ impl GStreamerComposite {
                 // Unlink from compositor FIRST to stop data flow
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
-                        // FLUSH the media pad on manual stop to reset timing state
+                        // FLUSH the media pad on manual stop to reset timing
                         if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
                             peer_pad.send_event(gst::event::FlushStart::new());
                             std::thread::sleep(std::time::Duration::from_millis(10));
