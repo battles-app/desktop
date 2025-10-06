@@ -508,6 +508,29 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
+        // Add chroma key element if enabled
+        let alphacolor = if use_chroma_key {
+            println!("[Composite FX] 🎨 Adding chroma key: color={}, tolerance={:.2}, similarity={:.2}",
+                     keycolor, tolerance, similarity);
+
+            // Convert hex color to RGB tuple
+            let rgb_color = GStreamerComposite::hex_to_rgb(&keycolor)?;
+
+            // Create alphacolor element for real-time chroma keying
+            let chroma_element = ElementFactory::make("alphacolor")
+                .name("fxchromakey")
+                .property("color", format!("0x{:02x}{:02x}{:02x}ff", rgb_color.0, rgb_color.1, rgb_color.2))
+                .property("tolerance", tolerance as f32)
+                .property("slope", 0.0f32)  // Hard key for clean edges
+                .build()
+                .map_err(|_| "Failed to create alphacolor element")?;
+
+            Some(chroma_element)
+        } else {
+            println!("[Composite FX] 🎬 No chroma key - direct playback");
+            None
+        };
+
         // BGRA caps for compositor
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
@@ -527,13 +550,26 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Add elements to bin (conditionally include alphacolor)
+        let mut elements: Vec<&gst::Element> = vec![&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale];
+        if let Some(ref chroma) = alphacolor {
+            elements.push(chroma);
+        }
+        elements.push(&capsfilter);
+
+        fx_bin.add_many(&elements)
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to link FX elements")?;
+        // Link elements with conditional chroma key
+        if let Some(ref chroma) = alphacolor {
+            // Pipeline: videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> alphacolor -> capsfilter
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, chroma, &capsfilter])
+                .map_err(|_| "Failed to link FX elements with chroma key")?;
+        } else {
+            // Pipeline: videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to link FX elements")?;
+        }
 
         let final_element = capsfilter.clone();
         
