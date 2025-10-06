@@ -495,7 +495,8 @@ impl GStreamerComposite {
         // This blocks and waits for each frame's timestamp to arrive in real-time
         let identity_sync = ElementFactory::make("identity")
             .name("fxsync")
-            .property("sync", true)  // Block until buffer timestamp arrives in real-time
+            .property("sync", true)              // Block until buffer timestamp arrives in real-time
+            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
             .build()
             .map_err(|_| "Failed to create identity sync")?;
 
@@ -522,11 +523,13 @@ impl GStreamerComposite {
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
+            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
+            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
@@ -690,12 +693,15 @@ impl GStreamerComposite {
             .request_pad_simple("sink_1")
             .ok_or("Failed to request compositor sink_1 pad")?;
 
-        // CRITICAL: Flush the newly created/reused sink_1 pad to reset timing state
-        // This prevents accumulated timing from previous plays from causing speed-up
+        // CRITICAL: Flush the media pad (sink_1) to reset timing state, not the camera!
         comp_sink_pad.send_event(gst::event::FlushStart::new());
         std::thread::sleep(std::time::Duration::from_millis(10));
         comp_sink_pad.send_event(gst::event::FlushStop::new(true));  // true = reset running time
-        println!("[Composite FX] 🔄 Flushed compositor sink_1 to reset timing");
+        println!("[Composite FX] 🔄 Flushed compositor sink_1 (media) to reset timing");
+        
+        // Enable sync on compositor media pad to respect timestamps
+        comp_sink_pad.set_property("sync", true);
+        println!("[Composite FX] ✅ Enabled sync on compositor sink_1 pad");
 
         // Store the sink pad for proper cleanup
         if let Some(ref mut fx_state) = *self.fx_state.write() {
@@ -770,6 +776,38 @@ impl GStreamerComposite {
             gst::PadProbeReturn::Ok
         });
 
+        // CRITICAL: Add timestamp offset probe to align media timestamps to pipeline running-time
+        // This prevents "late frames" → "QoS catch-up sprint" on replays
+        let pipeline_weak_ts = pipeline.downgrade();
+        ghost_pad.add_probe(
+            gst::PadProbeType::BUFFER | gst::PadProbeType::BLOCK,
+            move |pad, info| {
+                if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
+                    if let Some(pipeline) = pipeline_weak_ts.upgrade() {
+                        if let Some(clock) = pipeline.clock() {
+                            if let (Some(now), Some(pts)) = (clock.time(), buf.pts()) {
+                                let base = pipeline.base_time();
+                                // running-time = clock-time - base-time
+                                let running = now.saturating_sub(base);
+                                
+                                if running > pts {
+                                    // Align media to "now" - prevents catch-up sprint
+                                    let delta = (running.nseconds() - pts.nseconds()) as i64;
+                                    pad.set_offset(delta);
+                                    println!("[Composite FX] ⏱️ Applied ts-offset {} ns to align FX to running-time", delta);
+                                } else {
+                                    println!("[Composite FX] ⏱️ No ts-offset needed (pts >= running-time)");
+                                }
+                            }
+                        }
+                    }
+                    // Remove this probe after first buffer (unblocks flow)
+                    return gst::PadProbeReturn::Remove;
+                }
+                gst::PadProbeReturn::Ok
+            },
+        );
+
         // Link FX bin to compositor
         ghost_pad
             .link(&comp_sink_pad)
@@ -780,20 +818,11 @@ impl GStreamerComposite {
         ghost_pad.send_event(gst::event::Reconfigure::new());
         println!("[Composite FX] 🔄 Forced caps renegotiation (upstream from FX bin)");
 
-        // Sync FX bin state with pipeline
+        // Sync FX bin state with pipeline (inherits clock and base_time)
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
         
-        // CRITICAL: Provide pipeline clock to FX bin so identity sync=true can work
-        // But set base_time to current pipeline time (not ZERO) so identity doesn't try to catch up
-        if let Some(clock) = pipeline.clock() {
-            fx_bin.set_clock(Some(&clock)).ok();
-            // Use current pipeline clock time as base, so identity syncs from NOW, not from pipeline start
-            if let Some(now) = clock.time() {
-                fx_bin.set_base_time(now);
-                println!("[Composite FX] ⏱️ Set FX bin clock to pipeline clock, base_time={:?} (identity will sync from now)", now);
-            }
-        }
+        println!("[Composite FX] ✅ FX bin synced with pipeline clock");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
