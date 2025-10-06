@@ -118,14 +118,30 @@ impl WgpuGStreamerCompositor {
         tokio::spawn(async move {
             let mut rx = rx;
             while let Ok((frame_data, actual_width, actual_height)) = rx.recv().await {
+                // Scale frame to match compositor resolution if needed
+                let scaled_data = if actual_width != camera_width || actual_height != camera_height {
+                    println!("[Camera] Scaling frame from {}x{} to {}x{}", actual_width, actual_height, camera_width, camera_height);
+                    if let Some(img) = image::RgbaImage::from_raw(actual_width, actual_height, frame_data.clone()) {
+                        println!("[Camera] Created RgbaImage, resizing...");
+                        let resized = image::imageops::resize(&img, camera_width, camera_height, image::imageops::FilterType::Triangle);
+                        let raw = resized.into_raw();
+                        println!("[Camera] Resized to {} bytes", raw.len());
+                        raw
+                    } else {
+                        println!("[Camera] Failed to create RgbaImage from {}x{} frame", actual_width, actual_height);
+                        frame_data.clone()
+                    }
+                } else {
+                    frame_data.clone()
+                };
+
                 // Send camera frames directly to frontend for immediate display
                 if input_id.starts_with("camera_") {
-                    println!("[Camera] Sending frame to frontend: {}x{} ({} bytes) -> canvas {}x{}", actual_width, actual_height, frame_data.len(), camera_width, camera_height);
-                    // Send at canvas dimensions for proper scaling
-                    Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &frame_data, camera_width, camera_height);
+                    println!("[Camera] Received frame: {}x{} -> scaled to {}x{} ({} bytes)", actual_width, actual_height, camera_width, camera_height, scaled_data.len());
+                    Self::send_frame_to_frontend(&app_handle, "camera-layer-frame", &scaled_data, camera_width, camera_height);
                 }
 
-                // Also store in frame buffer for compositing (optional for now)
+                // Also store in frame buffer for compositing
                 let pts = gst::ClockTime::from_nseconds(
                     (chrono::Utc::now().timestamp_nanos() % 1_000_000_000) as u64
                 );
@@ -138,7 +154,7 @@ impl WgpuGStreamerCompositor {
 
                 let frame = FrameData {
                     pts: adjusted_pts,
-                    data: frame_data,
+                    data: scaled_data, // Use scaled data for compositing
                     source_id: input_id.clone(),
                 };
 
@@ -306,11 +322,10 @@ impl WgpuGStreamerCompositor {
                             // Update textures for each layer
                             for layer_id in &layer_ids {
                                 if let Some(frame) = frame_buffer.get_latest_frame(layer_id) {
-                                    println!("[WGPU-GST Compositor] Processing frame for layer {}: {} bytes", layer_id, frame.data.len());
+                                    println!("[WGPU-GST Compositor] Processing frame for layer {}: {} bytes, PTS: {:?}", layer_id, frame.data.len(), frame.pts);
 
-                                    // Camera frames are 720x1280 (portrait due to rotation), but we need to render to 1280x720 (landscape)
-                                    // Create texture at actual frame dimensions
-                                    let texture = wgpu.create_texture_from_rgba(720, 1280, &frame.data);
+                                    // All frames are now scaled to compositor resolution (1280x720)
+                                    let texture = wgpu.create_texture_from_rgba(1280, 720, &frame.data);
                                     if let Some(layer) = wgpu.get_layer_mut(layer_id) {
                                         layer.update_texture(texture);
                                         // Update the texture array so bind group gets created
