@@ -520,12 +520,12 @@ impl GStreamerComposite {
             
             let alpha = ElementFactory::make("alpha")
                 .name("fxalpha")
-                .property("method", 2i32)  // 2 = custom (chroma key with custom color)
-                .property("target-r", target_r as i32)
-                .property("target-g", target_g as i32)
-                .property("target-b", target_b as i32)
+                .property_from_str("method", "custom")  // Use custom chroma key method
+                .property("target-r", target_r as u32)  // Unsigned int required
+                .property("target-g", target_g as u32)  // Unsigned int required
+                .property("target-b", target_b as u32)  // Unsigned int required
                 .property("angle", (tolerance * 180.0) as f32)  // Tolerance angle in degrees (0-180)
-                .property("noise-level", ((1.0 - similarity) * 64.0) as u32)  // Noise level (0-64)
+                .property("noise-level", ((1.0 - similarity) * 64.0) as f32)  // Noise level as float (0-64)
                 .build()
                 .map_err(|e| format!("Failed to create alpha element: {}", e))?;
             
