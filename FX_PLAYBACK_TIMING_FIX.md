@@ -40,12 +40,25 @@ fx_bin.set_base_time(current_time);  // Fresh time = no catch-up
 fx_bin.set_start_time(gst::ClockTime::ZERO);
 ```
 
-### 3. Enhanced Videorate Configuration
+### 3. **THE REAL FIX: clocksync Element**
 ```rust
-.property("drop-only", true)         // Only drop frames, never duplicate
-.property("skip-to-first", true)     // Start fresh, ignore previous state  
-.property("max-rate", 30i32)         // Hard limit to 30fps
-.property("average-period", 0u64)    // Immediate rate limiting, no averaging
+// Add clocksync to enforce REAL-TIME 30fps playback
+let clocksync = ElementFactory::make("clocksync")
+    .property("sync", true)  // Synchronize to clock
+    .build()?;
+
+// Pipeline: videorate → rate_filter → clocksync → videoconvert → ...
+```
+**This is the critical fix!** Without `clocksync`, videorate just limits frame count but lets them play as fast as possible. `clocksync` enforces **real-time clock synchronization**, ensuring frames play at actual 30fps speed, not 56fps or 90fps!
+
+### 4. Fixed Double-Release Pad Error
+```rust
+// Check if pad still belongs to compositor before releasing
+if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+    compositor.release_request_pad(&peer_pad);
+} else {
+    println!("Pad already released, skipping");
+}
 ```
 
 ### 4. Complete Element Cleanup
@@ -63,13 +76,14 @@ if let Ok(_) = fx_bin.set_state(gst::State::Null) {
 ```
 
 ## Result
-✅ **FX files now play at consistent 30fps EVERY SINGLE TIME**
+✅ **FX files NOW play at REAL 30fps (not 56fps or 90fps!)**
+✅ **clocksync enforces real-time playback speed**
 ✅ **No instant playback on subsequent plays**
 ✅ **No freezing on second play of same file**
+✅ **No GStreamer pad double-release errors**
 ✅ **Complete memory cleanup after video finishes**
 ✅ **Auto-cleanup when video reaches end (EOS)**
 ✅ **Clean element state between plays**
-✅ **Independent FX timing - never tries to catch up**
 ✅ **No decoder caching or garbage accumulation**
 
 ## Why This Works

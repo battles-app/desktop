@@ -502,14 +502,15 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
 
-        // Add clocksync to enforce real-time 30fps playback (prevents fast-forward)
-        let clocksync = ElementFactory::make("clocksync")
-            .name("fxclocksync")
-            .property("sync", true)  // Synchronize to clock
+        // Use identity with sync=true to enforce real-time playback
+        // This works even in async pipelines by throttling based on buffer timestamps
+        let identity_sync = ElementFactory::make("identity")
+            .name("fxsync")
+            .property("sync", true)  // Enforce timing based on timestamps
             .build()
-            .map_err(|_| "Failed to create clocksync")?;
+            .map_err(|_| "Failed to create identity sync")?;
         
-        println!("[Composite FX] 🕐 clocksync element added - enforces real-time 30fps playback");
+        println!("[Composite FX] 🕐 identity sync element added - enforces real-time timestamp-based playback");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -540,12 +541,12 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> clocksync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &clocksync, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements with forced 30fps rate control and clock sync
-        gst::Element::link_many(&[&videorate, &rate_filter, &clocksync, &videoconvert, &videoscale, &capsfilter])
+        // Link elements with forced 30fps rate control and timestamp-based sync
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -751,21 +752,13 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Sync FX bin state with pipeline
+        // Sync FX bin state with pipeline - identity sync will handle timing
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
 
-        // Set independent clock timing for FX bin to prevent "catch-up" behavior
-        // Each FX playback gets a fresh clock start, preventing speed-up on subsequent plays
-        let current_time = pipeline.clock()
-            .and_then(|clock| clock.time())
-            .unwrap_or(gst::ClockTime::ZERO);
-        
-        fx_bin.set_base_time(current_time);
-        fx_bin.set_start_time(gst::ClockTime::ZERO);
-        
-        println!("[Composite FX] ⏱️ Independent clock timing - Base: {:?} (prevents catch-up)", current_time);
-        println!("[Composite FX] ⏱️ FX will play at natural 30fps regardless of pipeline clock");
+        // Identity with sync=true will throttle based on buffer timestamps
+        // This enforces real-time playback even in async pipelines
+        println!("[Composite FX] ⏱️ Using identity sync for timestamp-based throttling (30fps enforcement)");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
@@ -808,15 +801,13 @@ impl GStreamerComposite {
                 if let Some(ghost_pad) = fx_bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
                         ghost_pad.unlink(&peer_pad).ok();
-                        compositor.release_request_pad(&peer_pad);
-                        println!("[Composite FX] 🧹 Released compositor sink_1 pad");
-                    }
-                }
-
-                // Also release stored pad if different
-                if let Some(ref fx_state) = *self.fx_state.read() {
-                    if let Some(ref sink_pad) = fx_state.compositor_sink_pad {
-                        compositor.release_request_pad(sink_pad);
+                        // Only release if pad still belongs to compositor
+                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                            compositor.release_request_pad(&peer_pad);
+                            println!("[Composite FX] 🧹 Released compositor sink_1 pad");
+                        } else {
+                            println!("[Composite FX] ⚠️ Pad already released, skipping");
+                        }
                     }
                 }
 
