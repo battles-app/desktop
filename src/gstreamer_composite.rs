@@ -502,6 +502,67 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
+        // Add chroma keying if enabled
+        let chroma_element = if use_chroma_key {
+            println!("[Composite FX] 🎨 Adding chroma key removal for green screen");
+            println!("[Composite FX] 🎨 Key color: '{}', tolerance: {}", keycolor, tolerance);
+
+            // Convert hex color to RGB for chromaizer
+            match Self::hex_to_rgb(&keycolor) {
+                Ok(rgb_color) => {
+                    println!("[Composite FX] 🎨 RGB color: ({}, {}, {})", rgb_color.0, rgb_color.1, rgb_color.2);
+
+                    // Try alpha element with chroma key method (most compatible)
+                    // GstAlphaMethod enum: 0=set, 1=green, 2=blue, 3=alpha, 4=custom
+                    let alpha_result = ElementFactory::make("alpha")
+                        .name("fxchroma")
+                        .property("method", 1i32)  // 1 = green chroma key method
+                        .property("target-r", rgb_color.0 as f64 / 255.0)
+                        .property("target-g", rgb_color.1 as f64 / 255.0)
+                        .property("target-b", rgb_color.2 as f64 / 255.0)
+                        .property("tolerance", tolerance)
+                        .build();
+
+                    match alpha_result {
+                        Ok(element) => {
+                            println!("[Composite FX] 🎨 Using alpha element for chroma keying");
+                            Some(element)
+                        },
+                        Err(_) => {
+                            println!("[Composite FX] ⚠️ alpha element not available, trying chromahold...");
+                            // Try chromahold with correct YUV chroma value
+                            // Convert RGB green (0,255,0) to YUV chroma
+                            // YUV chroma is approximately (U, V) = (43, 21) for green
+                            match ElementFactory::make("chromahold")
+                                .name("fxchroma")
+                                .property("chroma", 43u32)  // U component for green
+                                .property("target-r", 0.0f64)
+                                .property("target-g", 0.0f64)
+                                .property("target-b", 0.0f64)
+                                .property("tolerance", tolerance as f64)
+                                .build() {
+                                Ok(element) => {
+                                    println!("[Composite FX] 🎨 Using chromahold for chroma keying");
+                                    Some(element)
+                                },
+                                Err(_) => {
+                                    println!("[Composite FX] ⚠️ Neither alpha nor chromahold available - playing FX without chroma keying");
+                                    println!("[Composite FX] 💡 To enable chroma keying, install gst-plugins-good and gst-plugins-bad");
+                                    None
+                                }
+                            }
+                        }
+                    }
+                },
+                Err(e) => {
+                    println!("[Composite FX] ⚠️ Invalid key color '{}': {} - playing FX without chroma keying", keycolor, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
             .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
@@ -527,12 +588,20 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Build pipeline elements list (conditionally include chroma keying)
+        let mut elements = vec![&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert];
+        if let Some(ref chroma) = chroma_element {
+            elements.push(chroma);
+        }
+        elements.extend(&[&videoscale, &capsfilter]);
+
+        // Add elements to bin
+        fx_bin.add_many(elements.as_slice())
             .map_err(|_| "Failed to add elements to FX bin")?;
 
         // Link elements: videorate enforces 30fps, identity syncs to real-time clock
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        let link_elements: Vec<&gst::Element> = elements.iter().skip(1).cloned().collect(); // Skip uridecodebin
+        gst::Element::link_many(link_elements.as_slice())
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -745,9 +814,15 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        println!("[Composite FX] ✅ FX added to pipeline - playing from file");
+        let chroma_status = if chroma_element.is_some() { "with chroma keying" } else { "without chroma keying" };
+        println!("[Composite FX] ✅ FX added to pipeline - playing from file {}", chroma_status);
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
+        let pipeline_desc = if chroma_element.is_some() {
+            "uridecodebin → videorate → rate_filter → identity_sync → videoconvert → alpha → videoscale → capsfilter"
+        } else {
+            "uridecodebin → videorate → rate_filter → identity_sync → videoconvert → videoscale → capsfilter"
+        };
+        println!("[Composite FX] 🔍 Pipeline: {}", pipeline_desc);
         
         Ok(())
     }
