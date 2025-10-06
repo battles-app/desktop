@@ -393,17 +393,13 @@ impl GStreamerComposite {
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
                         ghost_pad.unlink(&peer_pad).ok();
-                        // Release the compositor sink pad (sink_1)
-                        compositor.release_request_pad(&peer_pad);
-                        println!("[Composite FX] ✅ Unlinked and released sink_1 pad");
-                    }
-                }
-
-                // Also check stored pad in fx_state and release it
-                if let Some(ref fx_state) = *self.fx_state.read() {
-                    if let Some(ref sink_pad) = fx_state.compositor_sink_pad {
-                        println!("[Composite FX] 🧹 Releasing stored compositor sink pad");
-                        compositor.release_request_pad(sink_pad);
+                        // Only release if pad still belongs to compositor
+                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                            compositor.release_request_pad(&peer_pad);
+                            println!("[Composite FX] ✅ Unlinked and released sink_1 pad");
+                        } else {
+                            println!("[Composite FX] ⚠️ Pad already released or orphaned, skipping release");
+                        }
                     }
                 }
 
@@ -476,20 +472,22 @@ impl GStreamerComposite {
             .name(&decode_name)
             .property("uri", &file_uri)
             .property("use-buffering", false)
+            .property("download", false)  // Don't cache to disk
+            .property("ring-buffer-max-size", 0u64)  // No ring buffer caching
             .build()
             .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
 
         // Try to reduce GPU usage by preferring software decoders
         // Note: This may not work on all systems, but worth trying
         let _ = uridecode.set_property("force-sw-decoders", &true);
+        
+        println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
         // Force consistent 30fps output with videorate in live mode
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
-            .property("drop-only", true)       // Only drop frames, never duplicate
             .property("skip-to-first", true)   // Start fresh, ignore previous state
             .property("max-rate", 30i32)       // Hard limit to 30fps
-            .property("average-period", 0u64)  // No averaging, immediate rate limiting
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
@@ -503,6 +501,15 @@ impl GStreamerComposite {
             .property("caps", &rate_caps)
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
+
+        // Add clocksync to enforce real-time 30fps playback (prevents fast-forward)
+        let clocksync = ElementFactory::make("clocksync")
+            .name("fxclocksync")
+            .property("sync", true)  // Synchronize to clock
+            .build()
+            .map_err(|_| "Failed to create clocksync")?;
+        
+        println!("[Composite FX] 🕐 clocksync element added - enforces real-time 30fps playback");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -533,12 +540,12 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> clocksync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &clocksync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements with forced 30fps rate control
-        gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
+        // Link elements with forced 30fps rate control and clock sync
+        gst::Element::link_many(&[&videorate, &rate_filter, &clocksync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -551,59 +558,65 @@ impl GStreamerComposite {
         ghost_pad.set_active(true).ok();
         fx_bin.add_pad(&ghost_pad).map_err(|_| "Failed to add ghost pad to bin")?;
         
-        // Add bin to pipeline
-        pipeline.add(&fx_bin)
-            .map_err(|_| "Failed to add FX bin to pipeline")?;
-        
-        // Monitor FX bin for End-of-Stream (EOS) to auto-cleanup when video finishes
+        // Add EOS (End-of-Stream) probe to detect when video finishes naturally
         let fx_bin_weak = fx_bin.downgrade();
         let pipeline_weak = pipeline.downgrade();
         let compositor_weak = compositor.downgrade();
+        let fx_state_weak = Arc::downgrade(&self.fx_state);
         
-        fx_bin.connect("element-added", false, move |args| {
-            // This won't work for EOS detection, need bus monitoring instead
-            None
-        });
-        
-        // Add bus watch for EOS message from FX bin
-        if let Some(bus) = fx_bin.bus() {
-            let fx_bin_name = fx_bin.name();
-            bus.add_watch(move |_bus, msg| {
-                use gst::MessageView;
-                
-                match msg.view() {
-                    MessageView::Eos(_) => {
-                        println!("[Composite FX] 🎬 Video finished (EOS) - auto-cleaning...");
+        ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+            if let Some(gst::PadProbeData::Event(ref event)) = info.data {
+                if event.type_() == gst::EventType::Eos {
+                    println!("[Composite FX] 🎬 Video finished (EOS) - auto-cleaning in 100ms...");
+                    
+                    // Spawn cleanup task (don't block probe callback)
+                    let fx_bin_weak_clone = fx_bin_weak.clone();
+                    let pipeline_weak_clone = pipeline_weak.clone();
+                    let compositor_weak_clone = compositor_weak.clone();
+                    let fx_state_weak_clone = fx_state_weak.clone();
+                    
+                    std::thread::spawn(move || {
+                        // Small delay to ensure EOS propagates
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                         
-                        // Auto-cleanup on video completion
                         if let (Some(fx_bin), Some(pipeline), Some(compositor)) = 
-                            (fx_bin_weak.upgrade(), pipeline_weak.upgrade(), compositor_weak.upgrade()) {
+                            (fx_bin_weak_clone.upgrade(), pipeline_weak_clone.upgrade(), compositor_weak_clone.upgrade()) {
                             
-                            // Unlink and release pad
+                            println!("[Composite FX] 🧹 Auto-cleanup: Unlinking from compositor...");
+                            
+                            // Unlink and release pad (only if still owned by compositor)
                             if let Some(ghost_pad) = fx_bin.static_pad("src") {
                                 if let Some(peer_pad) = ghost_pad.peer() {
                                     ghost_pad.unlink(&peer_pad).ok();
-                                    compositor.release_request_pad(&peer_pad);
+                                    // Only release if pad still belongs to compositor
+                                    if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                                        compositor.release_request_pad(&peer_pad);
+                                        println!("[Composite FX] ✅ Released compositor pad via EOS cleanup");
+                                    }
                                 }
                             }
                             
                             // Stop and remove bin
                             fx_bin.set_state(gst::State::Null).ok();
+                            let _ = fx_bin.state(Some(gst::ClockTime::from_seconds(1)));
                             pipeline.remove(&fx_bin).ok();
                             
-                            println!("[Composite FX] ✅ Auto-cleanup complete");
+                            // Clear FX state (garbage collection)
+                            if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
+                                *fx_state_arc.write() = None;
+                            }
+                            
+                            println!("[Composite FX] ✅ Auto-cleanup complete - memory freed, ready for next FX");
                         }
-                        
-                        gst::BusWatchReturn::Remove
-                    },
-                    MessageView::Error(err) => {
-                        println!("[Composite FX] ❌ Error: {}", err.error());
-                        gst::BusWatchReturn::Continue
-                    },
-                    _ => gst::BusWatchReturn::Continue,
+                    });
                 }
-            }).ok();
-        }
+            }
+            gst::PadProbeReturn::Ok
+        });
+        
+        // Add bin to pipeline
+        pipeline.add(&fx_bin)
+            .map_err(|_| "Failed to add FX bin to pipeline")?;
         
         // Connect uridecodebin's dynamic pads (video AND audio for proper clock sync)
         let videorate_clone = videorate.clone();

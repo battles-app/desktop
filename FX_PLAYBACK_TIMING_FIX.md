@@ -65,8 +65,12 @@ if let Ok(_) = fx_bin.set_state(gst::State::Null) {
 ## Result
 ✅ **FX files now play at consistent 30fps EVERY SINGLE TIME**
 ✅ **No instant playback on subsequent plays**
+✅ **No freezing on second play of same file**
+✅ **Complete memory cleanup after video finishes**
+✅ **Auto-cleanup when video reaches end (EOS)**
 ✅ **Clean element state between plays**
 ✅ **Independent FX timing - never tries to catch up**
+✅ **No decoder caching or garbage accumulation**
 
 ## Why This Works
 
@@ -83,5 +87,45 @@ GStreamer thinks: *"This FX is 72 hours behind! Skip/drop frames to catch up!"*
 3. **Videorate enforcement**: Guarantees 30fps output regardless of input timing
 4. **Thorough cleanup**: Ensures no state persists between plays
 
+### The Freeze on Second Play Problem
+When the first video finished naturally:
+1. It reached EOS (End-of-Stream)
+2. **No cleanup happened** - bin stayed in pipeline in stale state
+3. Second play tried to create NEW bin with same name
+4. GStreamer conflict: "sink_1 pad already exists!"
+5. Result: **Freeze/hang**
+
+### The Complete Solution
+**1. EOS Detection & Auto-Cleanup**
+```rust
+// Detect when video finishes naturally via pad probe
+ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+    if event.type_() == gst::EventType::Eos {
+        // Auto-cleanup in background thread
+        std::thread::spawn(move || {
+            // Unlink, release pads, stop bin, remove from pipeline
+            // Clear fx_state for garbage collection
+        });
+    }
+});
+```
+
+**2. No Decoder Caching**
+```rust
+.property("use-buffering", false)
+.property("download", false)
+.property("ring-buffer-max-size", 0u64)
+```
+
+**3. Complete State Reset**
+- Release compositor sink_1 pad properly
+- Wait for NULL state to complete
+- Clear fx_state (garbage collection)
+- Fresh decoder instance every play
+
 ### Log Evidence
-Now you'll see consistent FX Performance logs on **every play**, not just the first one!
+Now you'll see:
+- **Consistent FX Performance logs on every play**
+- **"Auto-cleanup complete" message when video finishes**
+- **No "sink_1 already exists" errors**
+- **No panics or freezes on subsequent plays**
