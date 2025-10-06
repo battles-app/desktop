@@ -466,34 +466,14 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // Colorspace conversion (right after decode)
-        let videoconvert = ElementFactory::make("videoconvert")
-            .name("fxconvert")
-            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
+        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
+        // This blocks and waits for each frame's timestamp to arrive in real-time
+        let identity_sync = ElementFactory::make("identity")
+            .name("fxsync")
+            .property("sync", true)              // Block until buffer timestamp arrives in real-time
+            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
             .build()
-            .map_err(|_| "Failed to create videoconvert")?;
-
-        // Chroma-key element (conditional - only if use_chroma_key is true)
-        let chromakey = if use_chroma_key {
-            let (r, g, b) = Self::hex_to_rgb(&keycolor)?;
-            println!("[Composite FX] 🎨 Chroma-key enabled: color=#{} (R={}, G={}, B={}), tolerance={:.2}, similarity={:.2}", 
-                     keycolor.trim_start_matches('#'), r, g, b, tolerance, similarity);
-            
-            let chromakey_elem = ElementFactory::make("chromakey")
-                .name("fxchroma")
-                .property("target-r", r as i32)
-                .property("target-g", g as i32)
-                .property("target-b", b as i32)
-                .property("tolerance", (tolerance * 180.0) as i32)  // Convert 0-1 to 0-180
-                .property("similarity", (similarity * 180.0) as i32)  // Convert 0-1 to 0-180
-                .build()
-                .map_err(|e| format!("Failed to create chromakey: {}", e))?;
-            
-            Some(chromakey_elem)
-        } else {
-            println!("[Composite FX] ⏭️ Chroma-key disabled - raw video playback");
-            None
-        };
+            .map_err(|_| "Failed to create identity sync")?;
 
         // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
@@ -513,17 +493,14 @@ impl GStreamerComposite {
             .property("caps", &rate_caps)
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
-
-        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
-        // This blocks and waits for each frame's timestamp to arrive in real-time
-        let identity_sync = ElementFactory::make("identity")
-            .name("fxsync")
-            .property("sync", true)              // Block until buffer timestamp arrives in real-time
-            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
-            .build()
-            .map_err(|_| "Failed to create identity sync")?;
         
         println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
+
+        let videoconvert = ElementFactory::make("videoconvert")
+            .name("fxconvert")
+            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
+            .build()
+            .map_err(|_| "Failed to create videoconvert")?;
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
@@ -550,28 +527,13 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Add elements to bin based on whether chroma-key is enabled
-        if let Some(ref chromakey_elem) = chromakey {
-            // Pipeline with chroma-key: uridecodebin → videoconvert → chromakey → videorate → rate_filter → identity_sync → videoscale → capsfilter
-            fx_bin.add_many(&[&uridecode, &videoconvert, chromakey_elem, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
-            
-            // Link: videoconvert → chromakey → videorate → rate_filter → identity_sync → videoscale → capsfilter
-            gst::Element::link_many(&[&videoconvert, chromakey_elem, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to link FX elements with chroma-key")?;
-            
-            println!("[Composite FX] 🔗 Pipeline: decode → colorspace → chromakey → 30fps → sync → scale → compositor");
-        } else {
-            // Pipeline without chroma-key: uridecodebin → videoconvert → videorate → rate_filter → identity_sync → videoscale → capsfilter
-            fx_bin.add_many(&[&uridecode, &videoconvert, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to add elements to FX bin")?;
-            
-            // Link: videoconvert → videorate → rate_filter → identity_sync → videoscale → capsfilter
-            gst::Element::link_many(&[&videoconvert, &videorate, &rate_filter, &identity_sync, &videoscale, &capsfilter])
-                .map_err(|_| "Failed to link FX elements")?;
-            
-            println!("[Composite FX] 🔗 Pipeline: decode → colorspace → 30fps → sync → scale → compositor");
-        }
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to add elements to FX bin")?;
+
+        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+            .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
         
@@ -652,8 +614,8 @@ impl GStreamerComposite {
         pipeline.add(&fx_bin)
             .map_err(|_| "Failed to add FX bin to pipeline")?;
         
-        // Connect uridecodebin's dynamic pads to videoconvert (first element after decode)
-        let videoconvert_clone = videoconvert.clone();
+        // Connect uridecodebin's dynamic pads (video AND audio for proper clock sync)
+        let videorate_clone = videorate.clone();
 
         uridecode.connect_pad_added(move |_dbin, src_pad| {
             println!("[Composite FX] 🔗 Pad added: {}", src_pad.name());
@@ -678,8 +640,8 @@ impl GStreamerComposite {
             println!("[Composite FX] 📹 Pad caps: {}", name);
 
             if name.starts_with("video/") {
-                // Handle video pads - connect to videoconvert (first in chain)
-                let sink_pad = videoconvert_clone.static_pad("sink").expect("No videoconvert sink pad");
+                // Handle video pads - connect to videorate for rate control
+                let sink_pad = videorate_clone.static_pad("sink").expect("No videorate sink pad");
 
                 if sink_pad.is_linked() {
                     println!("[Composite FX] ⚠️ Video sink already linked");
@@ -785,12 +747,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        
-        if use_chroma_key {
-            println!("[Composite FX] 🔍 Pipeline: decode → colorspace → chromakey → 30fps rate → sync → scale → compositor (isolated FX path)");
-        } else {
-            println!("[Composite FX] 🔍 Pipeline: decode → colorspace → 30fps rate → sync → scale → compositor (raw playback)");
-        }
+        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
         
         Ok(())
     }
