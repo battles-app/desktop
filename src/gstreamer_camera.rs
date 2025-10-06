@@ -113,9 +113,10 @@ impl GStreamerCamera {
             "mfvideosrc device-index={} ! \
              videoconvert ! \
              videoscale ! \
-             video/x-raw,format=BGRA,width={},height={} ! \
-             appsink name=sink emit-signals=true sync=false max-buffers=10 drop=true",
-            device_index, width, height
+             video/x-raw,width={},height={} ! \
+             jpegenc quality={} ! \
+             appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true",
+            device_index, width, height, jpeg_quality
         );
         
         let pipeline = gst::parse::launch(&pipeline_str)
@@ -138,36 +139,18 @@ impl GStreamerCamera {
                     if !*is_running.read() {
                         return Ok(gst::FlowSuccess::Ok);
                     }
-
+                    
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-
-                    let bgra_data = map.as_slice();
-                    let pixel_count = bgra_data.len() / 4; // BGRA = 4 bytes per pixel
-
-                    if pixel_count > 0 {
-                        // Convert BGRA to RGBA for browser compatibility
-                        let mut rgba_data = Vec::with_capacity(bgra_data.len());
-
-                        for chunk in bgra_data.chunks_exact(4) {
-                            // BGRA -> RGBA: swap B and R
-                            rgba_data.push(chunk[2]); // R
-                            rgba_data.push(chunk[1]); // G
-                            rgba_data.push(chunk[0]); // B
-                            rgba_data.push(chunk[3]); // A
-                        }
-
+                    
+                    let jpeg_data = map.as_slice();
+                    if jpeg_data.len() > 100 {
                         if let Some(sender) = frame_sender.read().as_ref() {
-                            let timestamp = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-                            println!("[Camera] Frame sent: {} bytes @ {}ms", rgba_data.len(), timestamp);
-                            let _ = sender.send(rgba_data);
+                            let _ = sender.send(jpeg_data.to_vec());
                         }
                     }
-
+                    
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
