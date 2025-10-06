@@ -471,12 +471,13 @@ impl GStreamerComposite {
         // Note: This may not work on all systems, but worth trying
         let _ = uridecode.set_property("force-sw-decoders", &true);
 
-        // Force consistent 30fps output with videorate
+        // Force consistent 30fps output with videorate in live mode
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
-            .property("drop-only", true)  // Only drop frames, never duplicate
-            .property("skip-to-first", true)  // Start fresh, ignore previous state
-            .property("max-rate", 30i32)  // Hard limit to 30fps
+            .property("drop-only", true)       // Only drop frames, never duplicate
+            .property("skip-to-first", true)   // Start fresh, ignore previous state
+            .property("max-rate", 30i32)       // Hard limit to 30fps
+            .property("average-period", 0u64)  // No averaging, immediate rate limiting
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
@@ -670,28 +671,30 @@ impl GStreamerComposite {
             gst::PadProbeReturn::Ok
         });
 
+        // Configure compositor sink to NOT sync timestamps (allow independent FX playback)
+        comp_sink_pad.set_property("sync", false);
+        println!("[Composite FX] ⏱️ Compositor sink set to async (no timestamp sync)");
+        
         // Link FX bin to compositor
         ghost_pad
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Sync FX bin state with pipeline BEFORE setting clock timing
-        // This ensures the bin gets the parent pipeline's clock
+        // Sync FX bin state with pipeline
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
 
-        // Set proper clock timing to ensure consistent playback across multiple plays
-        // Get the current pipeline base time and use it for the FX bin
-        if let Some(pipeline_base_time) = pipeline.base_time() {
-            fx_bin.set_base_time(pipeline_base_time);
-            println!("[Composite FX] ⏱️ Synced to pipeline clock - Base time: {:?}", pipeline_base_time);
-        } else {
-            println!("[Composite FX] ⚠️ Warning: No pipeline base time available");
-        }
+        // Set independent clock timing for FX bin to prevent "catch-up" behavior
+        // Each FX playback gets a fresh clock start, preventing speed-up on subsequent plays
+        let current_time = pipeline.clock()
+            .and_then(|clock| clock.time())
+            .unwrap_or(gst::ClockTime::ZERO);
         
-        // Set start time to ensure proper timestamp handling
+        fx_bin.set_base_time(current_time);
         fx_bin.set_start_time(gst::ClockTime::ZERO);
-        println!("[Composite FX] ⏱️ Clock synchronized with pipeline for consistent 30fps playback");
+        
+        println!("[Composite FX] ⏱️ Independent clock timing - Base: {:?} (prevents catch-up)", current_time);
+        println!("[Composite FX] ⏱️ FX will play at natural 30fps regardless of pipeline clock");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
