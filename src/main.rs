@@ -1004,7 +1004,16 @@ async fn start_composite_pipeline(app: tauri::AppHandle, camera_device_id: Strin
     if let Some(composite) = composite_lock.as_mut() {
         // Set app handle for event emission
         composite.set_app_handle(app.clone());
-        composite.start(&camera_device_id, width, height, fps, rotation, app)?;
+
+        // Use test source for debugging if camera_device_id is "test"
+        let actual_device_id = if camera_device_id == "test" {
+            println!("[Composite] 🧪 Using video test source for debugging");
+            "test".to_string()
+        } else {
+            camera_device_id
+        };
+
+        composite.start(&actual_device_id, width, height, fps, rotation, app)?;
         println!("[Composite] ✅ Composite pipeline started");
     } else {
         return Err("Composite pipeline not initialized".to_string());

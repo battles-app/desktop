@@ -141,16 +141,23 @@ impl GStreamerComposite {
         // Store app handle for event emission
         *self.app_handle.write() = Some(app_handle);
         
-        let device_index: u32 = camera_device_id.parse()
-            .map_err(|_| "Invalid camera device ID")?;
-        
-        // Map rotation degrees to videoflip method
-        // 0 = none, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
-        let videoflip_method = match rotation {
-            90 => "clockwise",
-            180 => "rotate-180",
-            270 => "counterclockwise",
-            _ => "none",
+        // Handle test source vs real camera
+        let (use_test_source, device_index, videoflip_method) = if camera_device_id == "test" {
+            (true, 0, "none".to_string())
+        } else {
+            let device_index: u32 = camera_device_id.parse()
+                .map_err(|_| "Invalid camera device ID")?;
+
+            // Map rotation degrees to videoflip method
+            // 0 = none, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
+            let videoflip_method = match rotation {
+                90 => "clockwise",
+                180 => "rotate-180",
+                270 => "counterclockwise",
+                _ => "none",
+            };
+
+            (false, device_index, videoflip_method.to_string())
         };
         
         // Build GStreamer composite pipeline with compositor element
@@ -158,17 +165,48 @@ impl GStreamerComposite {
         // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
 
         #[cfg(target_os = "windows")]
-        let pipeline_str = if videoflip_method != "none" {
+        let video_source = if use_test_source {
+            format!("videotestsrc pattern=smpte ! video/x-raw,width={},height={},framerate={}/1,format=BGRA", width, height, fps)
+        } else {
+            format!("mfvideosrc device-index={}", device_index)
+        };
+
+        let pipeline_str = if use_test_source || videoflip_method == "none" {
             format!(
                 "compositor name=comp \
-                   sink_0::zorder=0 sink_0::alpha={} \
-                   sink_1::zorder=1 sink_1::alpha={} ! \
+                   sink_0::zorder=0 sink_0::alpha={} ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
                  tee name=t \
                  t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue ! {} \
-                 mfvideosrc device-index={} ! \
+                 {} ! \
+                 videoconvert ! \
+                 videoscale ! \
+                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
+                 tee name=camera_tee \
+                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+                 camera_tee. ! comp.sink_0",
+                self.layers.read().camera_opacity,
+                width,
+                height,
+                fps,
+                self.get_output_branch(),
+                video_source,
+                width,
+                height,
+                fps
+            )
+        } else {
+            format!(
+                "compositor name=comp \
+                   sink_0::zorder=0 sink_0::alpha={} ! \
+                 videoconvert ! \
+                 video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
+                 tee name=t \
+                 t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue ! {} \
+                 {} ! \
                  videoflip method={} ! \
                  videoconvert ! \
                  videoscale ! \
@@ -177,41 +215,12 @@ impl GStreamerComposite {
                  camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
                  camera_tee. ! comp.sink_0",
                 self.layers.read().camera_opacity,
-                self.layers.read().overlay_opacity,
                 width,
                 height,
                 fps,
                 self.get_output_branch(),
-                device_index,
+                video_source,
                 videoflip_method,
-                width,
-                height,
-                fps
-            )
-        } else {
-            format!(
-                "compositor name=comp \
-                   sink_0::zorder=0 sink_0::alpha={} \
-                   sink_1::zorder=1 sink_1::alpha={} ! \
-                 videoconvert ! \
-                 video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
-                 tee name=t \
-                 t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {} \
-                 mfvideosrc device-index={} ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
-                 tee name=camera_tee \
-                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
-                 camera_tee. ! comp.sink_0",
-                self.layers.read().camera_opacity,
-                self.layers.read().overlay_opacity,
-                width,
-                height,
-                fps,
-                self.get_output_branch(),
-                device_index,
                 width,
                 height,
                 fps
@@ -248,11 +257,20 @@ impl GStreamerComposite {
         );
         
         println!("[Composite] Pipeline: {}", pipeline_str);
-        
+
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
             .dynamic_cast::<Pipeline>()
             .map_err(|_| "Failed to cast to Pipeline".to_string())?;
+
+        // Debug: Check pipeline elements
+        println!("[Composite] 🔍 Pipeline elements:");
+        let iterator = pipeline.iterate_elements();
+        for item in iterator {
+            if let Ok(element) = item {
+                println!("[Composite]   - {}", element.name());
+            }
+        }
         
         // Get the appsink for preview
         let appsink = pipeline
@@ -279,6 +297,10 @@ impl GStreamerComposite {
         let is_running = self.is_running.clone();
         let app_handle_clone = self.app_handle.clone();
 
+        // Track frame timing for debugging
+        let last_frame_time = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+        let last_frame_time_clone = last_frame_time.clone();
+
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
@@ -286,12 +308,21 @@ impl GStreamerComposite {
                         return Ok(gst::FlowSuccess::Ok);
                     }
 
+                    // Update frame timing
+                    let now = std::time::Instant::now();
+                    let mut last_time = last_frame_time_clone.lock().unwrap();
+                    let time_since_last = now.duration_since(*last_time);
+                    *last_time = now;
+
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
 
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
+                        println!("[Composite] 📺 Preview frame: {} bytes ({}ms since last)",
+                                jpeg_data.len(), time_since_last.as_millis());
+
                         // Send to WebSocket clients
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
@@ -300,8 +331,12 @@ impl GStreamerComposite {
                         // Emit Tauri event for frontend canvas display
                         if let Some(app_handle) = app_handle_clone.read().as_ref() {
                             let base64_data = base64::engine::general_purpose::STANDARD.encode(jpeg_data);
+                            println!("[Composite] 📤 Emitting composite-frame event ({} chars)", base64_data.len());
                             let _ = app_handle.emit("composite-frame", base64_data);
                         }
+                    } else {
+                        println!("[Composite] ⚠️ Preview frame too small: {} bytes ({}ms since last)",
+                                jpeg_data.len(), time_since_last.as_millis());
                     }
 
                     Ok(gst::FlowSuccess::Ok)
@@ -314,6 +349,10 @@ impl GStreamerComposite {
         let is_running_camera = self.is_running.clone();
         let app_handle_camera = self.app_handle.clone();
 
+        // Track camera layer frame timing
+        let camera_last_frame_time = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+        let camera_last_frame_time_clone = camera_last_frame_time.clone();
+
         camera_appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
@@ -321,12 +360,21 @@ impl GStreamerComposite {
                         return Ok(gst::FlowSuccess::Ok);
                     }
 
+                    // Update camera frame timing
+                    let now = std::time::Instant::now();
+                    let mut last_time = camera_last_frame_time_clone.lock().unwrap();
+                    let time_since_last = now.duration_since(*last_time);
+                    *last_time = now;
+
                     let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
 
                     let jpeg_data = map.as_slice();
                     if jpeg_data.len() > 100 {
+                        println!("[Composite] 📷 Camera layer frame: {} bytes ({}ms since last)",
+                                jpeg_data.len(), time_since_last.as_millis());
+
                         // Send to WebSocket clients
                         if let Some(sender) = camera_frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
@@ -335,8 +383,12 @@ impl GStreamerComposite {
                         // Emit Tauri event for frontend camera layer canvas
                         if let Some(app_handle) = app_handle_camera.read().as_ref() {
                             let base64_data = base64::engine::general_purpose::STANDARD.encode(jpeg_data);
+                            println!("[Composite] 📤 Emitting camera-layer-frame event ({} chars)", base64_data.len());
                             let _ = app_handle.emit("camera-layer-frame", base64_data);
                         }
+                    } else {
+                        println!("[Composite] ⚠️ Camera layer frame too small: {} bytes ({}ms since last)",
+                                jpeg_data.len(), time_since_last.as_millis());
                     }
 
                     Ok(gst::FlowSuccess::Ok)
@@ -347,13 +399,75 @@ impl GStreamerComposite {
         // Note: overlay layer callbacks are set up in play_fx_from_file() when FX bin is created
         
         // Start pipeline
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to start pipeline: {}", e))?;
-        
+        let state_change_result = pipeline
+            .set_state(gst::State::Playing);
+
+        match state_change_result {
+            Ok(_) => println!("[Composite] ✅ Pipeline state change to Playing initiated"),
+            Err(e) => return Err(format!("Failed to start pipeline: {}", e)),
+        }
+
+        // Wait a bit for pipeline to stabilize
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Check pipeline state and bus messages
+        let (state_change_result, current_state, pending_state) = pipeline.state(Some(gst::ClockTime::from_seconds(1)));
+        match current_state {
+            gst::State::Playing => println!("[Composite] 🚀 Pipeline reached Playing state"),
+            state => println!("[Composite] ⚠️ Pipeline in state {:?} (expected Playing)", state),
+        }
+
+        // Check for bus messages (errors/warnings)
+        if let Some(bus) = pipeline.bus() {
+            while let Some(msg) = bus.pop() {
+                use gst::MessageView;
+                match msg.view() {
+                    MessageView::Error(err) => {
+                        println!("[Composite] ❌ Pipeline error: {}", err.error());
+                        println!("[Composite] ❌ Debug info: {:?}", err.debug());
+                    }
+                    MessageView::Warning(warn) => {
+                        println!("[Composite] ⚠️ Pipeline warning: {}", warn.error());
+                        println!("[Composite] ⚠️ Debug info: {:?}", warn.debug());
+                    }
+                    MessageView::Eos(_) => {
+                        println!("[Composite] ℹ️ Pipeline reached end of stream");
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         println!("[Composite] ✅ Composite pipeline started successfully!");
 
         self.pipeline = Some(pipeline);
+
+        // Start frame monitoring task
+        let is_running_monitor = self.is_running.clone();
+        let last_frame_time_monitor = last_frame_time.clone();
+        let camera_last_frame_time_monitor = camera_last_frame_time.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                if !*is_running_monitor.read() {
+                    break;
+                }
+
+                let time_since_last = last_frame_time_monitor.lock().unwrap().elapsed();
+                let camera_time_since_last = camera_last_frame_time_monitor.lock().unwrap().elapsed();
+
+                if time_since_last.as_secs() > 10 {
+                    println!("[Composite] ⚠️ No preview frames received for {} seconds - compositor may not be working",
+                            time_since_last.as_secs());
+                }
+
+                if camera_time_since_last.as_secs() > 10 {
+                    println!("[Composite] ⚠️ No camera frames received for {} seconds - camera device {} may not be producing video",
+                            camera_time_since_last.as_secs(), device_index);
+                }
+            }
+        });
 
         // If FX was playing before the pipeline restart, restart it now
         if fx_was_playing {
