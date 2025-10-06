@@ -1027,8 +1027,8 @@ async fn start_camera_feed(app: tauri::AppHandle, camera_device_id: String, widt
         _ => "",
     };
 
-    let pipeline_str = format!("{} {} ! videoconvert ! jpegenc quality=90 ! appsink name=camera_sink emit-signals=true sync=false max-buffers=1 drop=true",
-                              camera_source, rotation_filter);
+           let pipeline_str = format!("{} {} ! videoconvert ! video/x-raw,format=RGB ! appsink name=camera_sink emit-signals=true sync=false max-buffers=1 drop=true",
+                                     camera_source, rotation_filter);
 
     println!("[Camera] 📹 Pipeline: {}", pipeline_str);
 
