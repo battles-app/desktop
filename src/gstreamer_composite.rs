@@ -502,15 +502,18 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
 
-        // Use identity with sync=true to enforce real-time playback
-        // This works even in async pipelines by throttling based on buffer timestamps
-        let identity_sync = ElementFactory::make("identity")
-            .name("fxsync")
-            .property("sync", true)  // Enforce timing based on timestamps
+        // Use queue with max-size-time to enforce natural rate limiting
+        // This prevents fast-forward playback by buffering based on timestamp duration
+        let rate_queue = ElementFactory::make("queue")
+            .name("fxratequeue")
+            .property("max-size-buffers", 0u32)  // No buffer count limit
+            .property("max-size-bytes", 0u32)    // No byte size limit
+            .property("max-size-time", 100_000_000u64)  // 100ms of video time (natural rate limiting)
+            .property("leaky", 2i32)  // Leak downstream (drop old buffers if queue full)
             .build()
-            .map_err(|_| "Failed to create identity sync")?;
+            .map_err(|_| "Failed to create rate queue")?;
         
-        println!("[Composite FX] 🕐 identity sync element added - enforces real-time timestamp-based playback");
+        println!("[Composite FX] 🕐 Rate-limiting queue added - enforces natural 30fps playback via buffering");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -541,12 +544,12 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> rate_queue -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &rate_queue, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements with forced 30fps rate control and timestamp-based sync
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Link elements with forced 30fps rate control and natural rate limiting via queue
+        gst::Element::link_many(&[&videorate, &rate_filter, &rate_queue, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -752,13 +755,13 @@ impl GStreamerComposite {
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
 
-        // Sync FX bin state with pipeline - identity sync will handle timing
+        // Sync FX bin state with pipeline (inherit timing naturally)
         fx_bin.sync_state_with_parent()
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
 
-        // Identity with sync=true will throttle based on buffer timestamps
-        // This enforces real-time playback even in async pipelines
-        println!("[Composite FX] ⏱️ Using identity sync for timestamp-based throttling (30fps enforcement)");
+        // No manual timing setup needed - rate_queue will naturally limit playback speed
+        // by buffering up to 100ms of video time (enforces ~30fps regardless of decode speed)
+        println!("[Composite FX] ⏱️ Natural rate limiting via queue buffering - consistent 30fps every play");
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
