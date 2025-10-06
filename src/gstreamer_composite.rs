@@ -351,6 +351,7 @@ impl GStreamerComposite {
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
         println!("[Composite FX] 📁 File: {}", file_path);
+        println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
 
         // Store FX state
         *self.fx_state.write() = Some(FxPlaybackState {
@@ -374,35 +375,46 @@ impl GStreamerComposite {
             .by_name("comp")
             .ok_or("Failed to get compositor element")?;
         
-        // Stop any existing FX first (with proper cleanup)
+        // Stop any existing FX first (with aggressive cleanup)
         if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
-            println!("[Composite FX] 🧹 Removing existing FX bin and freeing memory...");
-            
-            // Cast to Bin and set all child elements to NULL to release resources
+            println!("[Composite FX] 🧹 Aggressive cleanup of existing FX pipeline...");
+
+            // Cast to Bin and aggressively cleanup all resources
             if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
+                // Stop bin first
+                bin.set_state(gst::State::Null).ok();
+
+                // Force cleanup of all child elements
                 let iterator = bin.iterate_elements();
                 for item in iterator {
                     if let Ok(element) = item {
+                        // Force NULL state
                         element.set_state(gst::State::Null).ok();
                     }
                 }
-                
-                // Unlink from compositor
+
+                // Unlink from compositor with error handling
                 if let Some(ghost_pad) = bin.static_pad("src") {
                     if let Some(peer_pad) = ghost_pad.peer() {
                         ghost_pad.unlink(&peer_pad).ok();
                         compositor.release_request_pad(&peer_pad);
+                        println!("[Composite FX] ✅ Unlinked from compositor");
                     }
                 }
-                
-                // Set bin to NULL and remove
-                bin.set_state(gst::State::Null).ok();
-                pipeline.remove(&bin).ok();
-                
-                // Brief pause to let GStreamer cleanup
-                std::thread::sleep(std::time::Duration::from_millis(10));
+
+                // Remove bin from pipeline
+                if pipeline.remove(&bin).is_ok() {
+                    println!("[Composite FX] ✅ FX bin removed from pipeline");
+                }
+
+                // Longer pause to ensure complete cleanup
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                println!("[Composite FX] 🧹 Memory cleanup completed");
             }
         }
+
+        // Ensure pipeline is in playing state after cleanup
+        pipeline.set_state(gst::State::Playing).ok();
         
         println!("[Composite FX] 🚀 Creating uridecodebin (no disk I/O!)...");
         
@@ -514,6 +526,8 @@ impl GStreamerComposite {
                 println!("[Composite FX] ❌ Failed to link video pad: {:?}", e);
             } else {
                 println!("[Composite FX] ✅ Video pad linked successfully!");
+                println!("[Composite FX] 🎬 Video stream connected - playback starting...");
+                println!("[Composite FX] ⏰ Link time: {:?}", std::time::Instant::now());
             }
         });
         
@@ -566,6 +580,7 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
+        println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
         println!("[Composite FX] 🔍 Raw pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
         
         Ok(())
