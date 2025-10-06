@@ -165,67 +165,41 @@ impl GStreamerComposite {
         // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
 
         #[cfg(target_os = "windows")]
-        let video_source = if use_test_source {
-            format!("videotestsrc pattern=smpte ! video/x-raw,width={},height={},framerate={}/1,format=BGRA", width, height, fps)
+        let camera_source = if use_test_source {
+            format!("videotestsrc pattern=smpte")
         } else {
+            // Camera outputs in its native format first
             format!("mfvideosrc device-index={}", device_index)
         };
 
-        let pipeline_str = if use_test_source || videoflip_method == "none" {
-            format!(
-                "compositor name=comp \
-                   sink_0::zorder=0 sink_0::alpha={} ! \
-                 videoconvert ! \
-                 video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
-                 tee name=t \
-                 t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {} \
-                 {} ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
-                 tee name=camera_tee \
-                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
-                 camera_tee. ! comp.sink_0",
-                self.layers.read().camera_opacity,
-                width,
-                height,
-                fps,
-                self.get_output_branch(),
-                video_source,
-                width,
-                height,
-                fps
-            )
+        // Build camera processing chain: native format → BGRA → rotate → scale to user prefs
+        let camera_processing = if videoflip_method != "none" {
+            format!("{} ! videoconvert ! video/x-raw,format=BGRA ! videoflip method={} ! videoscale ! video/x-raw,width={},height={} ! videorate ! video/x-raw,framerate={}/1",
+                    camera_source, videoflip_method, width, height, fps)
         } else {
-            format!(
-                "compositor name=comp \
-                   sink_0::zorder=0 sink_0::alpha={} ! \
-                 videoconvert ! \
-                 video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
-                 tee name=t \
-                 t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue ! {} \
-                 {} ! \
-                 videoflip method={} ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,width={},height={},framerate={}/1,format=BGRA ! \
-                 tee name=camera_tee \
-                 camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
-                 camera_tee. ! comp.sink_0",
-                self.layers.read().camera_opacity,
-                width,
-                height,
-                fps,
-                self.get_output_branch(),
-                video_source,
-                videoflip_method,
-                width,
-                height,
-                fps
-            )
+            format!("{} ! videoconvert ! video/x-raw,format=BGRA ! videoscale ! video/x-raw,width={},height={} ! videorate ! video/x-raw,framerate={}/1",
+                    camera_source, width, height, fps)
         };
+
+        let pipeline_str = format!(
+            "compositor name=comp \
+               sink_0::zorder=0 sink_0::alpha={} ! \
+             videoconvert ! \
+             video/x-raw,format=BGRx,width={},height={},framerate={}/1 ! \
+             tee name=t \
+             t. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+             t. ! queue ! {} \
+             {} ! \
+             tee name=camera_tee \
+             camera_tee. ! queue ! videoconvert ! video/x-raw,format=BGRx ! jpegenc quality=90 ! appsink name=camera_layer emit-signals=true sync=false max-buffers=2 drop=true \
+             camera_tee. ! comp.sink_0",
+            self.layers.read().camera_opacity,
+            width,
+            height,
+            fps,
+            self.get_output_branch(),
+            camera_processing
+        );
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
