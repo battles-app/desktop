@@ -940,17 +940,17 @@ async fn stop_camera_preview() -> Result<(), String> {
 #[command]
 async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
     println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-    
+
+    // Call the synchronous start method
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
         composite.start(&camera_device_id, width, height, fps, rotation)?;
         println!("[Composite] ✅ Composite pipeline started");
+        Ok(())
     } else {
-        return Err("Composite pipeline not initialized".to_string());
+        Err("Composite pipeline not initialized".to_string())
     }
     drop(composite_lock);
-    
-    Ok(())
 }
 
 #[command]
