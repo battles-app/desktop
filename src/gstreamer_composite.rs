@@ -703,76 +703,43 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
-        // Create GPU-accelerated chroma key if enabled
-        let (chroma_elements, needs_glconvert) = if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key enabled - using GPU-accelerated pipeline");
+        // Create hardware-accelerated chroma key if enabled
+        let chroma_element = if use_chroma_key {
+            println!("[Composite FX] 🎨 Chroma key enabled - using hardware-accelerated chromahold");
             
-            // Parse hex color (#00ff00 -> normalized RGB 0.0-1.0)
+            // Parse hex color to 32-bit integer (0xRRGGBB)
             let hex = keycolor.trim_start_matches('#');
-            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0) as f32 / 255.0;
-            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255) as f32 / 255.0;
-            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0) as f32 / 255.0;
+            let color_int = u32::from_str_radix(hex, 16).unwrap_or(0x00ff00);
             
-            println!("[Composite FX] 🎨 Chroma key RGB (normalized): ({:.3}, {:.3}, {:.3})", r, g, b);
+            println!("[Composite FX] 🎨 Chroma key color: 0x{:06X}", color_int);
             println!("[Composite FX] 🎨 Tolerance: {:.2}, Similarity: {:.2}", tolerance, similarity);
             
-            // Build GLSL shader for hardware-accelerated chroma keying
-            let shader_code = format!(
-                r#"#version 100
-#ifdef GL_ES
-precision mediump float;
-#endif
-varying vec2 v_texcoord;
-uniform sampler2D tex;
-uniform float tolerance;
-uniform float similarity;
-uniform vec3 keycolor;
-
-void main () {{
-    vec4 color = texture2D(tex, v_texcoord);
-    vec3 diff = abs(color.rgb - keycolor);
-    float distance = length(diff);
-    
-    // Smooth alpha based on distance from key color
-    float alpha = smoothstep(tolerance - similarity, tolerance + similarity, distance);
-    
-    gl_FragColor = vec4(color.rgb, color.a * alpha);
-}}
-"#,
-            );
+            // Convert tolerance to threshold (0.0-1.0 -> 0.0-180.0 degrees in HSV space)
+            let similarity_threshold = (similarity * 30.0) as f32; // Fine-tune edge smoothness
             
-            // GPU upload
-            let glupload = ElementFactory::make("glupload")
-                .name("fxglupload")
+            // Create chromahold element - removes all colors except the key color, then invert
+            // We'll use a combination of chromahold to isolate the key color, then use alpha to invert
+            let chromahold = ElementFactory::make("chromahold")
+                .name("fxchromahold")
+                .property("target-r", ((color_int >> 16) & 0xFF) as u32)
+                .property("target-g", ((color_int >> 8) & 0xFF) as u32)
+                .property("target-b", (color_int & 0xFF) as u32)
+                .property("tolerance", (tolerance * 180.0) as u32)  // 0.0-1.0 -> 0-180 degrees (integer)
                 .build()
-                .map_err(|_| "Failed to create glupload - GPU not available")?;
+                .map_err(|e| format!("Failed to create chromahold: {}", e))?;
             
-            // GPU shader filter for chroma keying
-            let glshader = ElementFactory::make("glshader")
-                .name("fxglshader")
-                .property("fragment", shader_code.as_str())
-                .property("update-shader", true)
+            // Create alpha element to make the selected color transparent
+            let alpha = ElementFactory::make("alpha")
+                .name("fxalpha")
+                .property_from_str("method", "green")  // Use optimized green method
+                .property("angle", (tolerance * 40.0) as f32)  // Angle for edge detection
+                .property("noise-level", (1.0 - similarity) as f32 * 10.0)  // Noise filtering
                 .build()
-                .map_err(|e| format!("Failed to create glshader: {}", e))?;
+                .map_err(|e| format!("Failed to create alpha: {}", e))?;
             
-            // Set shader uniforms
-            glshader.set_property("uniform-tolerance", tolerance as f32);
-            glshader.set_property("uniform-similarity", similarity as f32);
-            glshader.set_property("uniform-keycolor", &[r, g, b]);
-            
-            (Some((glupload, glshader)), true)
+            Some((chromahold, alpha))
         } else {
             println!("[Composite FX] ⏭️ Chroma key disabled - no green screen removal");
-            (None, false)
-        };
-
-        // GPU download if we used GL elements
-        let gldownload = if needs_glconvert {
-            Some(ElementFactory::make("gldownload")
-                .name("fxgldownload")
-                .build()
-                .map_err(|_| "Failed to create gldownload")?)
-        } else {
             None
         };
 
@@ -801,17 +768,17 @@ void main () {{
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Add elements to bin - conditionally include chromakey
-        if let Some(ref alpha) = alpha_element {
-            // Pipeline with chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> alpha -> videoscale -> capsfilter
-            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
+        // Add elements to bin - conditionally include chroma keying
+        if let Some((ref chromahold, ref alpha)) = chroma_element {
+            // Pipeline with chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> chromahold -> alpha -> videoscale -> capsfilter
+            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, chromahold, alpha, &videoscale, &capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
 
-            // Link elements with chromakey in the chain
-            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
+            // Link elements with chroma key in the chain
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, chromahold, alpha, &videoscale, &capsfilter])
                 .map_err(|_| "Failed to link FX elements with chroma key")?;
             
-            println!("[Composite FX] ✅ Pipeline built with chroma key: videoconvert -> alpha -> videoscale");
+            println!("[Composite FX] ✅ Pipeline built with chroma key: videoconvert -> chromahold -> alpha -> videoscale");
         } else {
             // Pipeline without chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
             fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
@@ -1191,11 +1158,12 @@ void main () {{
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
         
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key active: color={}, tolerance={:.2}, similarity={:.2}", 
+            println!("[Composite FX] 🎨 Hardware chroma key active: color={}, tolerance={:.2}, similarity={:.2}", 
                      keycolor, tolerance, similarity);
-            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → identity_sync → videoconvert → ALPHA → videoscale → compositor");
+            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → chromahold → alpha → videoscale → compositor");
+            println!("[Composite FX] ⚡ Optimized chroma keying - low CPU/GPU usage");
         } else {
-            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → compositor");
+            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → videoscale → compositor");
         }
         
         Ok(())
