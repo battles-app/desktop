@@ -807,20 +807,12 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
-        // This blocks and waits for each frame's timestamp to arrive in real-time
-        let identity_sync = ElementFactory::make("identity")
-            .name("fxsync")
-            .property("sync", true)              // Block until buffer timestamp arrives in real-time
-            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
-            .build()
-            .map_err(|_| "Failed to create identity sync")?;
-
         // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
             .property("skip-to-first", true)   // Start fresh, ignore previous state
-            .property("drop-only", true)       // Only drop, never duplicate
+            .property("drop-only", false)      // Allow duplication when input < target
+            .property("max-rate", 30i32)       // Cap to 30fps
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
@@ -834,8 +826,8 @@ impl GStreamerComposite {
             .property("caps", &rate_caps)
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
-        
-        println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
+
+        println!("[Composite FX] 🕐 videorate configured - drop-only=false, max-rate=30fps");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
