@@ -549,8 +549,8 @@ impl GStreamerComposite {
     }
 
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
-    /// Chroma key is disabled for optimal performance - no green screen removal
-    pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, _use_chroma_key: bool) -> Result<(), String> {
+    /// Optimized chroma key for 100% transparency and maximum performance
+    pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
@@ -630,7 +630,7 @@ impl GStreamerComposite {
             keycolor: keycolor.clone(),
             tolerance,
             similarity,
-            use_chroma_key: false, // Always disable chroma key for optimal performance
+            use_chroma_key,
             compositor_sink_pad: None, // Will be set when pad is requested
             cleanup_in_progress: Arc::new(parking_lot::Mutex::new(false)),
             playback_id,
@@ -701,11 +701,65 @@ impl GStreamerComposite {
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
             .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
+            .property_from_str("dither", "none") // Disable dithering for faster conversion
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
-        // Chroma key is disabled for optimal performance - no green screen removal
-        println!("[Composite FX] ⏭️ Chroma key disabled - no green screen removal (optimized for speed)");
+        // Create optimized chroma key for 100% transparency - using alpha element
+        let chroma_element = if use_chroma_key {
+            println!("[Composite FX] 🎨 Creating optimized chroma key for 100% transparency");
+
+            // Parse hex color to RGB components (0-255)
+            let hex = keycolor.trim_start_matches('#');
+            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
+            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+
+            println!("[Composite FX] 🎨 Chroma key RGB: ({}, {}, {})", r, g, b);
+            println!("[Composite FX] 🎨 Tolerance: {:.2}, Similarity: {:.2}", tolerance, similarity);
+
+            // Determine the best method based on the key color
+            let (method, angle, noise_level) = if g > r && g > b {
+                // Green is dominant - use optimized green method
+                ("green", (tolerance * 40.0) as f32, (1.0 - similarity) as f32 * 64.0)
+            } else if b > r && b > g {
+                // Blue is dominant - use optimized blue method
+                ("blue", (tolerance * 40.0) as f32, (1.0 - similarity) as f32 * 64.0)
+            } else {
+                // Use custom color method for other colors
+                ("custom", (tolerance * 40.0) as f32, (1.0 - similarity) as f32 * 64.0)
+            };
+
+            println!("[Composite FX] 🎨 Using method: {}, angle: {:.1}, noise: {:.1}", method, angle, noise_level);
+
+            // Create alpha element with optimized settings for 100% transparency
+            let mut alpha_builder = ElementFactory::make("alpha")
+                .name("fxalpha")
+                .property_from_str("method", method);
+
+            // Set color-specific properties for custom method
+            if method == "custom" {
+                alpha_builder = alpha_builder
+                    .property("target-r", r as i32)
+                    .property("target-g", g as i32)
+                    .property("target-b", b as i32);
+            }
+
+            // Optimized settings for 100% transparency and performance
+            let alpha = alpha_builder
+                .property("angle", angle)
+                .property("noise-level", noise_level as f32)  // Cast to f32 for gfloat type
+                .property("black-sensitivity", 50u32)       // Moderate black sensitivity for better keying
+                .property("white-sensitivity", 50u32)       // Moderate white sensitivity for better keying
+                .property_from_str("qos", "false")         // Disable QoS for consistent performance
+                .build()
+                .map_err(|e| format!("Failed to create alpha element: {}", e))?;
+
+            Some(alpha)
+        } else {
+            println!("[Composite FX] ⏭️ Chroma key disabled - no transparency");
+            None
+        };
 
         let videoscale = ElementFactory::make("videoscale")
             .name("fxscale")
@@ -732,16 +786,28 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Optimized pipeline for maximum speed - no chroma key processing
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to add elements to FX bin")?;
+        // Optimized pipeline for 100% transparency chroma key
+        if let Some(ref alpha) = chroma_element {
+            // Pipeline with chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> alpha -> videoscale -> capsfilter
+            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements - fast pipeline without chroma key
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to link FX elements")?;
+            // Link elements with chroma key for 100% transparency
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to link FX elements with chroma key")?;
 
-        println!("[Composite FX] ✅ Pipeline built for maximum speed: videoconvert -> videoscale (no chroma key)");
+            println!("[Composite FX] ✅ Pipeline built with chroma key: videoconvert -> alpha -> videoscale (100% transparency)");
+        } else {
+            // Pipeline without chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to add elements to FX bin")?;
+
+            // Link elements without chroma key
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to link FX elements")?;
+
+            println!("[Composite FX] ✅ Pipeline built without chroma key: videoconvert -> videoscale");
+        }
 
         let final_element = capsfilter.clone();
         
@@ -1109,9 +1175,14 @@ impl GStreamerComposite {
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
         
-        println!("[Composite FX] 🎨 Chroma key disabled for maximum speed and performance");
-        println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → videoscale → compositor");
-        println!("[Composite FX] ⚡ Maximum speed pipeline - no chroma key processing overhead");
+        if use_chroma_key {
+            println!("[Composite FX] 🎨 Optimized chroma key active: color={}, tolerance={:.2}, similarity={:.2}",
+                     keycolor, tolerance, similarity);
+            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → alpha → videoscale → compositor");
+            println!("[Composite FX] ⚡ 100% transparency chroma key - background layers visible through green screen");
+        } else {
+            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → videoscale → compositor");
+        }
         
         Ok(())
     }
