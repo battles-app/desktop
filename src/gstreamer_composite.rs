@@ -748,31 +748,45 @@ impl GStreamerComposite {
 
         // Add chroma key elements if enabled
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key enabled - adding alphacolor element");
+            println!("[Composite FX] 🎨 Chroma key enabled - adding alpha element for chroma keying");
 
-            // Parse hex color (remove # if present and convert to u32)
+            // Parse hex color (remove # if present and convert to RGB components)
             let color_str = keycolor.trim_start_matches('#');
             let color_u32 = u32::from_str_radix(color_str, 16)
                 .map_err(|_| format!("Invalid chroma key color format: {}", keycolor))?;
 
-            // Add alpha channel (fully opaque) - GStreamer expects ARGB format
-            let argb_color = (color_u32 << 8) | 0xFF;
+            // Extract RGB components (color_u32 is RRGGBB, so shift to get R, G, B)
+            let target_r = ((color_u32 >> 16) & 0xFF) as u32; // Red component
+            let target_g = ((color_u32 >> 8) & 0xFF) as u32;  // Green component
+            let target_b = (color_u32 & 0xFF) as u32;         // Blue component
 
-            println!("[Composite FX] 🎨 Chroma key color: {} -> ARGB: 0x{:08x}", keycolor, argb_color);
+            println!("[Composite FX] 🎨 Chroma key color: {} -> RGB({}, {}, {})", keycolor, target_r, target_g, target_b);
 
-            let alphacolor = ElementFactory::make("alphacolor")
-                .name("fxalphacolor")
-                .property("color", argb_color as u32)  // Key color in ARGB format
-                .property("similarity", similarity as f64)  // Similarity threshold (0.0-1.0)
-                .property("slope", (tolerance * 100.0) as f64)  // Slope based on tolerance (0-100 -> 0-100)
+            // Map similarity (0.0-1.0) to black/white sensitivity (0-128)
+            // Higher similarity means lower sensitivity (more restrictive keying)
+            let sensitivity = ((1.0 - similarity) * 128.0) as u32;
+
+            // Map tolerance to angle (controls the color cube size for keying)
+            let angle = (tolerance * 90.0) as f32;
+
+            let alpha_element = ElementFactory::make("alpha")
+                .name("fxchromakey")
+                .property("method", 3i32)  // Use custom RGB chroma keying (3 = custom)
+                .property("target-r", target_r) // Red component (0-255)
+                .property("target-g", target_g) // Green component (0-255)
+                .property("target-b", target_b) // Blue component (0-255)
+                .property("black-sensitivity", sensitivity) // Controls how close colors need to be
+                .property("white-sensitivity", sensitivity) // Controls how close colors need to be
+                .property("angle", angle) // Size of color cube to change (0-90)
+                .property("noise-level", 2.0f32) // Default noise level
                 .build()
-                .map_err(|_| "Failed to create alphacolor element")?;
+                .map_err(|_| "Failed to create alpha element for chroma keying")?;
 
-            println!("[Composite FX] 🎨 Chroma key configured: color=0x{:08x}, similarity={:.2}, slope={:.2}",
-                    argb_color, similarity, tolerance * 100.0);
+            println!("[Composite FX] 🎨 Chroma key configured: RGB({},{},{}), sensitivity={}, angle={:.1}, method=custom(3)",
+                    target_r, target_g, target_b, sensitivity, angle);
 
-            all_elements.push(alphacolor.clone());
-            link_chain.push(alphacolor);
+            all_elements.push(alpha_element.clone());
+            link_chain.push(alpha_element);
         } else {
             println!("[Composite FX] 🎨 Chroma key disabled");
         }
@@ -1158,7 +1172,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → [alphacolor] → capsfilter");
+        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → [alpha] → capsfilter");
         
         Ok(())
     }
