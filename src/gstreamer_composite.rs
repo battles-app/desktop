@@ -709,6 +709,38 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
+        // Create alpha element for chroma key removal (conditionally)
+        let alpha_element = if use_chroma_key {
+            println!("[Composite FX] 🎨 Creating alpha element for chroma key removal");
+            println!("[Composite FX] 🎨 Settings: keycolor={}, tolerance={}, similarity={}", keycolor, tolerance, similarity);
+            
+            // Parse hex color (e.g., "#00ff00" -> RGB values)
+            let color_hex = keycolor.trim_start_matches('#');
+            let r = u8::from_str_radix(&color_hex[0..2], 16).unwrap_or(0) as f64 / 255.0;
+            let g = u8::from_str_radix(&color_hex[2..4], 16).unwrap_or(255) as f64 / 255.0;
+            let b = u8::from_str_radix(&color_hex[4..6], 16).unwrap_or(0) as f64 / 255.0;
+            
+            println!("[Composite FX] 🎨 Parsed RGB: R={:.3}, G={:.3}, B={:.3}", r, g, b);
+            
+            // Create alpha element with chroma key method
+            let alpha = ElementFactory::make("alpha")
+                .name("fxalpha")
+                .property("method", "green")  // green method for chroma keying
+                .property("target-r", r as i32 * 255)  // Target red component (0-255)
+                .property("target-g", g as i32 * 255)  // Target green component (0-255)
+                .property("target-b", b as i32 * 255)  // Target blue component (0-255)
+                .property("angle", tolerance * 180.0)  // Angle tolerance in degrees (0-180)
+                .property("noise-level", (1.0 - similarity) * 100.0 as i32)  // Noise level (inverted from similarity)
+                .build()
+                .map_err(|e| format!("Failed to create alpha element: {}", e))?;
+            
+            println!("[Composite FX] ✅ Alpha element created with chroma key settings");
+            Some(alpha)
+        } else {
+            println!("[Composite FX] ⏭️ Chroma key disabled, skipping alpha element");
+            None
+        };
+
         // BGRA caps for compositor
         let caps = gst::Caps::builder("video/x-raw")
             .field("format", "BGRA")
@@ -728,84 +760,27 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Build pipeline with optional chroma key elements
-        let mut all_elements: Vec<gst::Element> = vec![];
-        let mut link_chain: Vec<gst::Element> = vec![];
-
-        // Base elements (always present)
-        all_elements.push(uridecode.clone());
-        all_elements.push(videorate.clone());
-        all_elements.push(rate_filter.clone());
-        all_elements.push(identity_sync.clone());
-        all_elements.push(videoconvert.clone());
-        all_elements.push(videoscale.clone());
-
-        link_chain.push(videorate.clone());
-        link_chain.push(rate_filter.clone());
-        link_chain.push(identity_sync.clone());
-        link_chain.push(videoconvert.clone());
-        link_chain.push(videoscale.clone());
-
-        // Add chroma key elements if enabled
-        if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key enabled - adding alpha element for chroma keying");
-
-            // Parse hex color (remove # if present and convert to RGB components)
-            let color_str = keycolor.trim_start_matches('#');
-            let color_u32 = u32::from_str_radix(color_str, 16)
-                .map_err(|_| format!("Invalid chroma key color format: {}", keycolor))?;
-
-            // Extract RGB components (color_u32 is RRGGBB, so shift to get R, G, B)
-            let target_r = ((color_u32 >> 16) & 0xFF) as u32; // Red component
-            let target_g = ((color_u32 >> 8) & 0xFF) as u32;  // Green component
-            let target_b = (color_u32 & 0xFF) as u32;         // Blue component
-
-            println!("[Composite FX] 🎨 Chroma key color: {} -> RGB({}, {}, {})", keycolor, target_r, target_g, target_b);
-
-            // Map similarity (0.0-1.0) to black/white sensitivity (0-128)
-            // Higher similarity means lower sensitivity (more restrictive keying)
-            let sensitivity = ((1.0 - similarity) * 128.0) as u32;
-
-            // Map tolerance to angle (controls the color cube size for keying)
-            let angle = (tolerance * 90.0) as f32;
-
-            let alpha_element = ElementFactory::make("alpha")
-                .name("fxchromakey")
-                .property("method", 3i32)  // Use custom RGB chroma keying (3 = custom)
-                .property("target-r", target_r) // Red component (0-255)
-                .property("target-g", target_g) // Green component (0-255)
-                .property("target-b", target_b) // Blue component (0-255)
-                .property("black-sensitivity", sensitivity) // Controls how close colors need to be
-                .property("white-sensitivity", sensitivity) // Controls how close colors need to be
-                .property("angle", angle) // Size of color cube to change (0-90)
-                .property("noise-level", 2.0f32) // Default noise level
-                .build()
-                .map_err(|_| "Failed to create alpha element for chroma keying")?;
-
-            println!("[Composite FX] 🎨 Chroma key configured: RGB({},{},{}), sensitivity={}, angle={:.1}, method=custom(3)",
-                    target_r, target_g, target_b, sensitivity, angle);
-
-            all_elements.push(alpha_element.clone());
-            link_chain.push(alpha_element);
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> [alpha] -> videoscale -> capsfilter
+        // Add elements based on whether chroma key is enabled
+        if let Some(ref alpha) = alpha_element {
+            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to add elements to FX bin (with alpha)")?;
+            
+            // Link elements WITH alpha: videorate enforces 30fps, alpha removes chroma key, identity syncs to real-time clock
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to link FX elements (with alpha)")?;
+            
+            println!("[Composite FX] 🔗 Pipeline linked WITH chroma key: uridecodebin → videorate → identity_sync → videoconvert → alpha → videoscale → capsfilter");
         } else {
-            println!("[Composite FX] 🎨 Chroma key disabled");
+            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to add elements to FX bin (no alpha)")?;
+            
+            // Link elements WITHOUT alpha: videorate enforces 30fps, identity syncs to real-time clock
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+                .map_err(|_| "Failed to link FX elements (no alpha)")?;
+            
+            println!("[Composite FX] 🔗 Pipeline linked WITHOUT chroma key: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
-
-        // Add final capsfilter
-        all_elements.push(capsfilter.clone());
-        link_chain.push(capsfilter.clone());
-
-        // Convert to references for add_many (which expects &[&Element])
-        let element_refs: Vec<&gst::Element> = all_elements.iter().collect();
-        let link_refs: Vec<&gst::Element> = link_chain.iter().collect();
-
-        // Add elements to bin
-        fx_bin.add_many(&element_refs)
-            .map_err(|_| "Failed to add elements to FX bin")?;
-
-        // Link elements in sequence
-        gst::Element::link_many(&link_refs)
-            .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
         
@@ -1172,7 +1147,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → [alpha] → capsfilter");
+        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
         
         Ok(())
     }
