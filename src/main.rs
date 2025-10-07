@@ -996,14 +996,43 @@ async fn start_composite_output(format: String, width: u32, height: u32) -> Resu
 #[command]
 async fn stop_composite_output() -> Result<(), String> {
     println!("[Composite] Stopping output");
-    
+
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
         composite.set_output_format("preview")?;
     }
     drop(composite_lock);
-    
+
     Ok(())
+}
+
+// Set compositor mode (CPU vs GPU)
+#[command]
+async fn set_compositor_mode(mode: String) -> Result<(), String> {
+    println!("[Composite] Setting compositor mode to: {}", mode);
+
+    let composite_lock = GSTREAMER_COMPOSITE.read();
+    if let Some(composite) = composite_lock.as_ref() {
+        composite.set_compositor_mode(&mode)?;
+        println!("[Composite] Compositor mode updated successfully");
+    } else {
+        println!("[Composite] No composite system initialized");
+    }
+
+    drop(composite_lock);
+    Ok(())
+}
+
+// Get current compositor mode
+#[command]
+async fn get_compositor_mode() -> Result<String, String> {
+    let composite_lock = GSTREAMER_COMPOSITE.read();
+    if let Some(composite) = composite_lock.as_ref() {
+        let mode = composite.get_compositor_mode();
+        Ok(mode)
+    } else {
+        Err("No composite system initialized".to_string())
+    }
 }
 
 #[command]
@@ -1446,6 +1475,8 @@ fn main() {
             update_composite_layers,
             start_composite_output,
             stop_composite_output,
+            set_compositor_mode,
+            get_compositor_mode,
             play_composite_fx,
             stop_composite_fx,
             initialize_virtual_camera,

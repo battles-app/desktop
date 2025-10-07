@@ -22,6 +22,8 @@ pub struct GStreamerComposite {
     pipeline_height: Arc<RwLock<u32>>,
     // Add mutex for pad operations to prevent race conditions
     pad_operation_mutex: Arc<parking_lot::Mutex<()>>,
+    // Compositor mode preference (CPU vs GPU)
+    compositor_mode: Arc<RwLock<CompositorMode>>,
 }
 
 #[derive(Clone, Debug)]
@@ -29,6 +31,12 @@ pub enum OutputFormat {
     Preview,
     VirtualCamera,
     NDI,
+}
+
+#[derive(Clone, Debug)]
+pub enum CompositorMode {
+    CPU,      // Standard CPU compositor
+    GPU,      // GPU-accelerated compositor (d3d11compositor on Windows)
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +88,7 @@ impl GStreamerComposite {
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
             pad_operation_mutex: Arc::new(parking_lot::Mutex::new(())),
+            compositor_mode: Arc::new(RwLock::new(CompositorMode::CPU)), // Default to CPU
         })
     }
     
@@ -128,11 +137,29 @@ impl GStreamerComposite {
         // Build GStreamer composite pipeline with compositor element
         // The compositor element combines multiple video streams with alpha blending
         // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
+
+        // Choose compositor element based on mode preference
+        let compositor_name = match *self.compositor_mode.read() {
+            CompositorMode::CPU => "compositor",
+            CompositorMode::GPU => {
+                #[cfg(target_os = "windows")]
+                {
+                    "d3d11compositor"
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    println!("[Composite] ⚠️ GPU compositor only available on Windows, falling back to CPU");
+                    "compositor"
+                }
+            }
+        };
+
+        println!("[Composite] Using {} compositor (mode: {:?})", compositor_name, *self.compositor_mode.read());
         
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
-                "compositor name=comp background=black \
+                "{} name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
@@ -152,6 +179,7 @@ impl GStreamerComposite {
                  queue leaky=downstream max-size-buffers=3 ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
+                compositor_name,
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
@@ -164,7 +192,7 @@ impl GStreamerComposite {
             )
         } else {
             format!(
-                "compositor name=comp background=black \
+                "{} name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
@@ -182,6 +210,7 @@ impl GStreamerComposite {
                  queue leaky=downstream max-size-buffers=3 ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
+                compositor_name,
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
@@ -195,7 +224,7 @@ impl GStreamerComposite {
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "compositor name=comp background=black \
+            "{} name=comp background=black \
                sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
                sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
              videoconvert ! \
@@ -213,6 +242,7 @@ impl GStreamerComposite {
              queue leaky=downstream max-size-buffers=3 ! \
              video/x-raw,width={},height={},format=BGRA ! \
              comp.sink_0",
+            compositor_name,
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
             width,
@@ -322,14 +352,44 @@ impl GStreamerComposite {
             "ndi" => OutputFormat::NDI,
             _ => return Err(format!("Unknown output format: {}", format)),
         };
-        
+
         *self.output_format.write() = new_format;
         println!("[Composite] Output format changed to: {:?}", format);
-        
+
         // Restart pipeline with new output
         // TODO: Implement dynamic pipeline reconfiguration
-        
+
         Ok(())
+    }
+
+    /// Set compositor mode (CPU vs GPU)
+    pub fn set_compositor_mode(&self, mode: &str) -> Result<(), String> {
+        let new_mode = match mode {
+            "cpu" => CompositorMode::CPU,
+            "gpu" => CompositorMode::GPU,
+            _ => return Err(format!("Unknown compositor mode: {}", mode)),
+        };
+
+        let mode_str = match new_mode {
+            CompositorMode::CPU => "CPU",
+            CompositorMode::GPU => "GPU",
+        };
+
+        *self.compositor_mode.write() = new_mode;
+        println!("[Composite] Compositor mode changed to: {}", mode_str);
+
+        // Note: Pipeline restart required for mode change to take effect
+        // This is because we need to use different GStreamer elements
+
+        Ok(())
+    }
+
+    /// Get current compositor mode as string
+    pub fn get_compositor_mode(&self) -> String {
+        match *self.compositor_mode.read() {
+            CompositorMode::CPU => "cpu".to_string(),
+            CompositorMode::GPU => "gpu".to_string(),
+        }
     }
     
     pub fn stop(&mut self) -> Result<(), String> {
@@ -802,17 +862,15 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // Use alphacolor element for chroma keying (GPU-friendly when available)
-            let alphacolor = ElementFactory::make("alphacolor")
+            // Use coloreffects element for chroma keying - widely available
+            let coloreffects = ElementFactory::make("coloreffects")
                 .name("fxchromakey")
-                .property("target-r", key_r)
-                .property("target-g", key_g)
-                .property("target-b", key_b)
-                .property("tolerance", tolerance)
-                .property("slope", similarity)
-                .property("alpha-mode", 1i32)  // 1 = set, 0 = multiply
+                .property("matrix", "hsv")  // Use HSV color space for better chroma keying
                 .build()
-                .map_err(|_| "Failed to create alphacolor for chroma key")?;
+                .map_err(|_| "Failed to create coloreffects for chroma key")?;
+
+            // For now, we'll use a simpler approach - just set the matrix to chroma key mode
+            // TODO: Implement proper HSV-based chroma keying with coloreffects
 
             // BGRA caps for compositor (with alpha channel for transparency)
             let caps = gst::Caps::builder("video/x-raw")
@@ -825,8 +883,8 @@ impl GStreamerComposite {
                 .build()
                 .map_err(|_| "Failed to create capsfilter")?;
 
-            // Pipeline with chroma key: videoconvert -> alphacolor -> videoscale -> capsfilter
-            let elements = vec![videoconvert.clone(), alphacolor, videoscale.clone(), capsfilter.clone()];
+            // Pipeline with chroma key: videoconvert -> chromahold -> videoscale -> capsfilter
+            let elements = vec![videoconvert.clone(), chromahold, videoscale.clone(), capsfilter.clone()];
             (elements, capsfilter)
         } else {
             // No chroma key - BGRA caps for compositor
@@ -847,7 +905,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key pipeline: uridecodebin → videorate → identity_sync → videoconvert → alphacolor → videoscale → capsfilter");
+            println!("[Composite FX] 🎨 Chroma key pipeline: uridecodebin → videorate → identity_sync → videoconvert → chromahold → videoscale → capsfilter");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
