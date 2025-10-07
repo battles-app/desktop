@@ -450,7 +450,7 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to start pipeline: {}", e))?;
         
         println!("[Composite] ✅ Composite pipeline started successfully!");
-
+        
         self.pipeline = Some(pipeline);
         Ok(())
     }
@@ -673,13 +673,13 @@ impl GStreamerComposite {
 
         Ok(())
     }
-
+    
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (CPU-based with timer fixes)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
-
+        
         // Get the pipeline
         let pipeline = match &self.pipeline {
             Some(p) => p,
@@ -687,12 +687,12 @@ impl GStreamerComposite {
                 return Err("[Composite FX] ❌ No pipeline running - please select a camera first!".to_string());
             }
         };
-
+        
         // Get compositor element
         let compositor = pipeline
             .by_name("comp")
             .ok_or("Failed to get compositor element")?;
-
+        
         // Stop any existing FX first (proper cleanup with safe pad operations)
         if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
             println!("[Composite FX] 🧹 Proper cleanup of existing FX pipeline (manual)...");
@@ -713,15 +713,15 @@ impl GStreamerComposite {
                         Ok(result) => {
                             if result.is_ok() {
                                 println!("[Composite FX] 🧹 Emergency: FX bin removed from pipeline");
-                            } else {
+                        } else {
                                 println!("[Composite FX] ⚠️ Emergency: FX bin removal failed");
-                            }
                         }
-                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked: {:?}", e),
                     }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked: {:?}", e),
+                }
                 } else {
                     // Safe cleanup succeeded, now remove the bin
-                    let _ = bin.set_state(gst::State::Null);
+                let _ = bin.set_state(gst::State::Null);
                     let remove_result = std::panic::catch_unwind(|| {
                         pipeline.remove(&bin)
                     });
@@ -745,7 +745,7 @@ impl GStreamerComposite {
 
         // Ensure pipeline is in playing state after cleanup
         pipeline.set_state(gst::State::Playing).ok();
-
+        
         // Create NEW FX state for this playback (AFTER cleanup, BEFORE pad request)
         // Generate unique playback ID for this FX
         let playback_id = FX_PLAYBACK_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -760,15 +760,15 @@ impl GStreamerComposite {
             cleanup_in_progress: Arc::new(parking_lot::Mutex::new(false)),
             playback_id,
         });
-
+        
         println!("[Composite FX] 🚀 Creating uridecodebin (no disk I/O!)...");
-
+        
         // Create filesrc with typefind for instant format detection
         use gstreamer::ElementFactory;
-
+        
         let file_uri = format!("file:///{}", file_path.replace("\\", "/"));
         println!("[Composite FX] 📁 File URI: {}", file_uri);
-
+        
         // Create unique uridecodebin name for each play to prevent state carryover
         use std::time::{SystemTime, UNIX_EPOCH};
         let timestamp = SystemTime::now()
@@ -947,7 +947,7 @@ impl GStreamerComposite {
         println!("[Composite FX] ✅ Pad linking successful!");
         println!("[Composite FX] 🔗 Link status: ghost_pad.is_linked()={}, comp_sink_pad.is_linked()={}",
                  ghost_pad.is_linked(), comp_sink_pad.is_linked());
-
+        
         // Add EOS (End-of-Stream) probe to detect when video finishes naturally
         println!("[Composite FX] 📡 Adding EOS probe for auto-cleanup (playback_id: {})...", playback_id);
         let fx_bin_weak = fx_bin.downgrade();
@@ -955,18 +955,18 @@ impl GStreamerComposite {
         let fx_state_weak = Arc::downgrade(&self.fx_state);
         let pad_mutex_weak = Arc::downgrade(&self.pad_operation_mutex);
         let eos_playback_id = playback_id; // Capture current playback ID
-
+        
         ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
             if let Some(gst::PadProbeData::Event(ref event)) = info.data {
                 if event.type_() == gst::EventType::Eos {
                     println!("[Composite FX] 🎬 Video finished (EOS) - auto-cleaning in 100ms...");
-
+                    
                     // Spawn cleanup task (don't block probe callback)
                     let fx_bin_weak_clone = fx_bin_weak.clone();
                     let pipeline_weak_clone = pipeline_weak.clone();
                     let fx_state_weak_clone = fx_state_weak.clone();
                     let pad_mutex_weak_clone = pad_mutex_weak.clone();
-
+                    
                     std::thread::spawn(move || {
                         // Check if this EOS event is for the current FX playback
                         let is_current_fx = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
@@ -1207,32 +1207,9 @@ impl GStreamerComposite {
         println!("[Composite FX] ✅ Emergency cleanup complete");
         Ok(())
     }
-
-    /// Stop the currently playing FX
-        println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
-
-        // Get the pipeline
-        let pipeline = match &self.pipeline {
-            Some(p) => p,
-            None => {
-                println!("[Composite FX] No pipeline running");
-                *self.fx_state.write() = None;
-                return Ok(());
-            }
-        };
-
-        // Get compositor element
-        let compositor = match pipeline.by_name("comp") {
-            Some(c) => c,
-            None => {
-                println!("[Composite FX] Compositor not found");
-                *self.fx_state.write() = None;
-                return Ok(());
-            }
-        };
-
-        Ok(())
-    }
+                            if let Some(state) = fx_state.as_ref() {
+                                let already_cleaning = *state.cleanup_in_progress.lock();
+                                if already_cleaning {
                                     println!("[Composite FX] ⚠️ EOS cleanup skipped - cleanup already in progress");
                                     return;
                                 }
@@ -1327,7 +1304,7 @@ impl GStreamerComposite {
                             }
 
                             // Check for timeout before finishing
-
+                            
                             // Clear FX state (garbage collection)
                             if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
                                 *fx_state_arc.write() = None;
@@ -1474,33 +1451,33 @@ impl GStreamerComposite {
         let pipeline_weak_ts = pipeline.downgrade();
 
         let probe_result = std::panic::catch_unwind(|| {
-            ghost_pad.add_probe(
-                gst::PadProbeType::BUFFER,  // No BLOCK flag = instant start, no delay!
-                move |pad, info| {
+        ghost_pad.add_probe(
+            gst::PadProbeType::BUFFER,  // No BLOCK flag = instant start, no delay!
+            move |pad, info| {
                     // Add panic protection inside the probe callback too
                     let result = std::panic::catch_unwind(|| {
-                        if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
-                            if let Some(pipeline) = pipeline_weak_ts.upgrade() {
-                                if let Some(clock) = pipeline.clock() {
-                                    if let (Some(now), Some(pts), Some(base)) = (clock.time(), buf.pts(), pipeline.base_time()) {
-                                        // running-time = clock-time - base-time
-                                        let running = now.saturating_sub(base);
-
-                                        if running > pts {
-                                            // Align media to "now" - prevents catch-up sprint
-                                            let delta = (running.nseconds() - pts.nseconds()) as i64;
-                                            pad.set_offset(delta);
-                                            println!("[Composite FX] ⏱️ Applied ts-offset {} ns to align FX to running-time", delta);
-                                        } else {
-                                            println!("[Composite FX] ⏱️ No ts-offset needed (pts >= running-time)");
-                                        }
-                                    }
+                if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
+                    if let Some(pipeline) = pipeline_weak_ts.upgrade() {
+                        if let Some(clock) = pipeline.clock() {
+                            if let (Some(now), Some(pts), Some(base)) = (clock.time(), buf.pts(), pipeline.base_time()) {
+                                // running-time = clock-time - base-time
+                                let running = now.saturating_sub(base);
+                                
+                                if running > pts {
+                                    // Align media to "now" - prevents catch-up sprint
+                                    let delta = (running.nseconds() - pts.nseconds()) as i64;
+                                    pad.set_offset(delta);
+                                    println!("[Composite FX] ⏱️ Applied ts-offset {} ns to align FX to running-time", delta);
+                                } else {
+                                    println!("[Composite FX] ⏱️ No ts-offset needed (pts >= running-time)");
                                 }
                             }
-                            // Remove this probe after first buffer (unblocks flow)
+                        }
+                    }
+                    // Remove this probe after first buffer (unblocks flow)
                             gst::PadProbeReturn::Remove
                         } else {
-                            gst::PadProbeReturn::Ok
+                gst::PadProbeReturn::Ok
                         }
                     });
 
@@ -1585,15 +1562,15 @@ impl GStreamerComposite {
                         Ok(result) => {
                             if result.is_ok() {
                                 println!("[Composite FX] 🧹 Emergency: FX bin removed during manual stop");
-                            } else {
+                        } else {
                                 println!("[Composite FX] ⚠️ Emergency: FX bin removal failed during manual stop");
-                            }
                         }
-                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked during manual stop: {:?}", e),
                     }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked during manual stop: {:?}", e),
+                }
                 } else {
                     // Safe cleanup succeeded, now remove the bin
-                    let _ = fx_bin.set_state(gst::State::Null);
+                let _ = fx_bin.set_state(gst::State::Null);
                     let remove_result = std::panic::catch_unwind(|| {
                         pipeline.remove(&fx_bin)
                     });
@@ -1609,7 +1586,7 @@ impl GStreamerComposite {
                         Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup (manual stop): {:?}", e),
                     }
                 }
-
+                
                 println!("[Composite FX] ✅ FX branch removed and memory freed");
             }
         } else {
