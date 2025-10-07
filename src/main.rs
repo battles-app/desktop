@@ -869,17 +869,6 @@ async fn start_system_monitor() {
                 } else {
                     println!("  🎬 Composite: Stopped");
                 }
-
-                // Check FX state
-                if composite.is_fx_active() {
-                    if let Some(filename) = composite.get_current_fx() {
-                        println!("  🎬 FX: Active ({})", filename);
-                    } else {
-                        println!("  🎬 FX: Active (unknown file)");
-                    }
-                } else {
-                    println!("  🎬 FX: None");
-                }
             } else {
                 println!("  🎬 Composite: Not initialized");
             }
@@ -901,8 +890,7 @@ async fn start_system_monitor() {
                 }
             }
 
-            // Memory usage monitoring (rough estimate)
-            println!("  💾 System: Monitoring active - check for memory leaks during FX playback");
+            println!("  💾 System: Monitoring active");
         }
     });
 }

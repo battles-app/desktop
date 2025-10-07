@@ -268,14 +268,7 @@ impl GStreamerComposite {
                     let jpeg_data = map.as_slice();
 
                     if jpeg_data.len() > 100 {
-                        let frame_num = frame_count_clone.fetch_add(1, Ordering::Relaxed);
-
-                        // Log memory usage every 30 frames (about 1 second at 30fps)
-                        if frame_num % 30 == 0 {
-                            // Get current memory usage (rough estimate)
-                            let mem_mb = jpeg_data.len() / (1024 * 1024);
-                            println!("[Composite] 📊 Frame {}: {}MB/frame, total processed: {}", frame_num, mem_mb, frame_num);
-                        }
+                        let _count = frame_count_clone.fetch_add(1, Ordering::Relaxed);
 
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
@@ -362,16 +355,6 @@ impl GStreamerComposite {
 
     pub fn get_pipeline_state(&self) -> Option<gst::State> {
         self.pipeline.as_ref().map(|p| p.current_state())
-    }
-
-    /// Check if FX is currently playing
-    pub fn is_fx_active(&self) -> bool {
-        self.fx_state.read().is_some()
-    }
-
-    /// Get current FX filename if active
-    pub fn get_current_fx(&self) -> Option<String> {
-        self.fx_state.read().as_ref().map(|fx| fx.file_url.clone())
     }
 
     /// Safely flush a media pad with proper synchronization
@@ -668,16 +651,13 @@ impl GStreamerComposite {
             .as_nanos();
         let decode_name = format!("fxdecode_{}", timestamp);
 
-        // Use uridecodebin for reliable decoding - AGGRESSIVELY disable all buffering
+        // Use uridecodebin for reliable decoding - disable buffering to prevent timing issues
         let uridecode = ElementFactory::make("uridecodebin")
             .name(&decode_name)
             .property("uri", &file_uri)
             .property("use-buffering", false)
             .property("download", false)  // Don't cache to disk
             .property("ring-buffer-max-size", 0u64)  // No ring buffer caching
-            .property("buffer-size", 0u32)  // No buffering
-            .property("max-size-bytes", 0u64)  // No size limit caching
-            .property("max-size-buffers", 0u32)  // No buffer count limit
             .build()
             .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
 
@@ -687,16 +667,20 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // FIXED: For file playback, we want FAST playback, not real-time sync
-        // Remove the identity sync element that was causing massive memory buffering
-        // File playback should play as fast as possible, not wait for timestamps
+        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
+        // This blocks and waits for each frame's timestamp to arrive in real-time
+        let identity_sync = ElementFactory::make("identity")
+            .name("fxsync")
+            .property("sync", true)              // Block until buffer timestamp arrives in real-time
+            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
+            .build()
+            .map_err(|_| "Failed to create identity sync")?;
 
-        // Force consistent 30fps output with videorate (no timing sync needed)
+        // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
             .property("skip-to-first", true)   // Start fresh, ignore previous state
-            .property("drop-only", true)       // Only drop, never duplicate (prevent accumulation)
-            .property("max-rate", 30)          // Cap at 30fps to prevent memory explosion
+            .property("drop-only", true)       // Only drop, never duplicate
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
@@ -710,8 +694,8 @@ impl GStreamerComposite {
             .property("caps", &rate_caps)
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
-
-        println!("[Composite FX] ⚡ FAST file playback - no sync buffering, 30fps cap");
+        
+        println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -730,7 +714,7 @@ impl GStreamerComposite {
             .field("format", "BGRA")
             .build();
 
-        println!("[Composite FX] 🎬 Fast 30fps H.264 MP4 playback - no memory buffering");
+        println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
 
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
@@ -738,19 +722,18 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
 
-        // Set uridecodebin to async for fast playback
+        // Set uridecodebin to async for raw playback
         uridecode.set_property("async-handling", true);
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // FIXED Pipeline: uridecodebin -> videorate -> rate_filter -> videoconvert -> videoscale -> capsfilter
-        // Removed identity sync element that was causing memory buffering
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements: videorate enforces 30fps, direct to converters (no sync delay)
-        gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert, &videoscale, &capsfilter])
+        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
@@ -879,45 +862,12 @@ impl GStreamerComposite {
                             println!("[Composite FX] 🛡️ EOS Safety checks: should_release={}, is_linked={}, compositor_owns={}",
                                      should_release, is_linked, compositor_owns_pad);
 
-                            // CRITICAL: Release stored compositor sink pad FIRST (before clearing state)
-                            // This prevents pad leaks that cause "sink_1 already exists" errors
-                            if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
-                                let fx_state = fx_state_arc.read();
-                                if let Some(state) = fx_state.as_ref() {
-                                    if let Some(stored_sink_pad) = &state.compositor_sink_pad {
-                                        let compositor_ref = compositor.upcast_ref();
-                                        let pad_parent = stored_sink_pad.parent();
+                            // MINIMAL EOS CLEANUP: Only set bin state and remove from pipeline
+                            // Avoid pad operations during EOS as they can cause crashes
+                            println!("[Composite FX] 🔄 EOS: Minimal cleanup - avoiding pad operations to prevent crashes");
 
-                                        // Release the pad if it still belongs to compositor
-                                        if pad_parent.as_ref() == Some(compositor_ref) {
-                                            println!("[Composite FX] 📤 EOS: Releasing stored compositor sink pad...");
-                                            
-                                            let release_result = std::panic::catch_unwind(|| {
-                                                compositor.release_request_pad(stored_sink_pad)
-                                            });
-
-                                            match release_result {
-                                                Ok(_) => {
-                                                    println!("[Composite FX] ✅ EOS: Released stored compositor sink pad");
-                                                    
-                                                    // Verify release
-                                                    let still_has_parent = stored_sink_pad.parent().is_some();
-                                                    if still_has_parent {
-                                                        println!("[Composite FX] ⚠️ EOS: Pad still has parent after release!");
-                                                    } else {
-                                                        println!("[Composite FX] ✅ EOS: Pad successfully released (no parent)");
-                                                    }
-                                                },
-                                                Err(e) => {
-                                                    println!("[Composite FX] ❌ EOS: Pad release panicked: {:?}", e);
-                                                },
-                                            }
-                                        } else {
-                                            println!("[Composite FX] ⚠️ EOS: Stored pad no longer belongs to compositor");
-                                        }
-                                    }
-                                }
-                            }
+                            // Just ensure the bin gets cleaned up later by the manual cleanup
+                            // Don't touch pads during EOS callback to avoid race conditions
 
                             // Stop and remove bin - with extra safety
                             let _ = fx_bin.set_state(gst::State::Null);
@@ -939,10 +889,12 @@ impl GStreamerComposite {
                                 Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked (but continuing): {:?}", e),
                             }
 
-                            // Clear FX state (garbage collection) - AFTER pad release
+                            // Check for timeout before finishing
+
+                            // Clear FX state (garbage collection)
                             if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
                                 *fx_state_arc.write() = None;
-                                println!("[Composite FX] ✅ FX state cleared after pad release");
+                                println!("[Composite FX] ✅ FX state cleared");
                             }
 
                             // Schedule a delayed cleanup for any remaining resources
