@@ -278,14 +278,31 @@ impl GStreamerComposite {
                     break;
                 }
 
-                // Render frame
+                // Check if there are any active subscribers before rendering
+                let has_subscribers = frame_sender.read().as_ref()
+                    .map(|sender| sender.receiver_count() > 0)
+                    .unwrap_or(false);
+
+                if !has_subscribers {
+                    // No subscribers, skip rendering to avoid memory accumulation
+                    continue;
+                }
+
+                // Render frame only when there are subscribers
                 if let Some(mut compositor_guard) = wgpu_compositor.try_lock() {
                     if let Ok(rgba_data) = compositor_guard.render_rgba() {
-                        // Send RGBA data over WebSocket broadcast (existing mechanism)
-                        // Use try_send to avoid blocking if channel is full
+                        // Send RGBA data over WebSocket broadcast
                         if let Some(sender) = frame_sender.read().as_ref() {
-                            // Only send if there's capacity to avoid accumulation
-                            let _ = sender.send(rgba_data);
+                            // Send frame (broadcast channel will drop if no receivers or channel full)
+                            match sender.send(rgba_data) {
+                                Ok(_) => {
+                                    // Frame sent successfully to at least one receiver
+                                }
+                                Err(_) => {
+                                    // No receivers or channel full - this is expected behavior
+                                    // The broadcast channel drops frames when full, preventing accumulation
+                                }
+                            }
                         }
                     }
                 }
@@ -346,6 +363,12 @@ impl GStreamerComposite {
 
     pub fn get_pipeline_state(&self) -> Option<gst::State> {
         self.pipeline.as_ref().map(|p| p.current_state())
+    }
+
+    pub fn get_subscriber_count(&self) -> usize {
+        self.frame_sender.read().as_ref()
+            .map(|sender| sender.receiver_count())
+            .unwrap_or(0)
     }
 
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)

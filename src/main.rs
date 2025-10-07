@@ -640,8 +640,8 @@ async fn initialize_camera_system() -> Result<String, String> {
     
     *GSTREAMER_CAMERA.write() = Some(camera);
     
-    // Create broadcast channel for camera frames (capacity: 2 frames, drops old frames if full)
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
+    // Create broadcast channel for camera frames (small capacity to prevent memory accumulation)
+    let (tx, _rx) = broadcast::channel::<Vec<u8>>(1);
     
     // Set frame sender in camera
     if let Some(cam) = GSTREAMER_CAMERA.read().as_ref() {
@@ -748,8 +748,8 @@ async fn initialize_composite_system() -> Result<String, String> {
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
     
-    // Create broadcast channel for composite frames
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
+    // Create broadcast channel for composite frames (small capacity to prevent memory accumulation)
+    let (tx, _rx) = broadcast::channel::<Vec<u8>>(1);
     
     // Set frame sender in composite
     if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
