@@ -570,7 +570,8 @@ impl GStreamerComposite {
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
         println!("[Composite] Starting WGPU-powered composite pipeline: {}x{} @ {}fps (rotation: {}°)",
                  width, height, fps, rotation);
-        println!("[Composite] Camera device ID: {}", camera_device_id);
+        println!("[Composite] Camera device ID: '{}', has_camera: {}", camera_device_id, has_camera);
+        println!("[Composite] Rotation type: {}, value: {}", std::any::type_name::<u32>(), rotation);
 
         // Parse camera device ID more robustly
         let device_index = camera_device_id.parse::<u32>().unwrap_or_else(|_| {
@@ -591,56 +592,68 @@ impl GStreamerComposite {
         println!("[Composite] ⚠️ WGPU renderer initialization skipped in sync context");
 
         // Create GStreamer pipeline for camera input + FX overlay
-        // Make rotation conditional to avoid videorotate element issues
-        let rotation_part = if rotation > 0 {
-            format!("videorotate rotation={} ! queue leaky=downstream max-size-buffers=3 ! ", rotation)
-        } else {
-            String::new()
-        };
+        println!("[Composite] Building pipeline with rotation: {}, has_camera: {}", rotation, has_camera);
 
-        // Create pipeline based on whether camera is available
-        // Try to use compositor, but fall back to simple pipeline if not available
+        // Force no rotation for debugging - temporarily disable videorotate completely
+        let use_rotation = false; // rotation > 0;
+        println!("[Composite] Using rotation: {}", use_rotation);
+
+        // Create pipeline based on whether camera is available and rotation
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
-            // Camera + FX pipeline - try compositor first, fallback to simple
-            let compositor_pipeline = format!(
-                "mfvideosrc device-index={} ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 videoconvert ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 {} \
-                 video/x-raw,width={},height={},framerate={}/1 ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 compositor name=mixer sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=0 sink_1::ypos=0 ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 videoconvert ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 jpegenc quality=90 ! \
-                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                device_index, rotation_part, width, height, fps
-            );
+            // Camera pipeline
+            if use_rotation {
+                // With rotation
+                format!(
+                    "mfvideosrc device-index={} ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
+                     videoconvert ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
+                     videorotate rotation={} ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
+                     video/x-raw,width={},height={},framerate={}/1 ! \
+                     queue leaky=downstream max-size-buffers=2 ! \
+                     compositor name=mixer sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=0 sink_1::ypos=0 ! \
+                     queue leaky=downstream max-size-buffers=2 ! \
+                     videoconvert ! \
+                     queue leaky=downstream max-size-buffers=2 ! \
+                     jpegenc quality=90 ! \
+                     appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                    device_index, rotation, width, height, fps
+                )
+            } else {
+                // Without rotation - try simple pipeline first (no compositor)
+                let simple_pipeline = format!(
+                    "mfvideosrc device-index={} ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
+                     videoconvert ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
+                     video/x-raw,width={},height={},framerate={}/1 ! \
+                     queue leaky=downstream max-size-buffers=2 ! \
+                     videoconvert ! \
+                     queue leaky=downstream max-size-buffers=2 ! \
+                     jpegenc quality=90 ! \
+                     appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                    device_index, width, height, fps
+                );
 
-            // Test if compositor pipeline can be parsed, otherwise use simple pipeline
-            match gst::parse::launch(&compositor_pipeline) {
-                Ok(_) => {
-                    println!("[Composite] Using compositor pipeline");
-                    compositor_pipeline
-                }
-                Err(_) => {
-                    println!("[Composite] Compositor not available, using simple camera pipeline");
-                    format!(
-                        "mfvideosrc device-index={} ! \
-                         queue leaky=downstream max-size-buffers=3 ! \
-                         videoconvert ! \
-                         queue leaky=downstream max-size-buffers=3 ! \
-                         {} \
-                         video/x-raw,width={},height={},framerate={}/1 ! \
-                         queue leaky=downstream max-size-buffers=2 ! \
-                         videoconvert ! \
-                         queue leaky=downstream max-size-buffers=2 ! \
-                         jpegenc quality=90 ! \
-                         appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                        device_index, rotation_part, width, height, fps
-                    )
+                // Test if simple pipeline can be parsed (no compositor, no videorotate)
+                match gst::parse::launch(&simple_pipeline) {
+                    Ok(_) => {
+                        println!("[Composite] Using simple camera pipeline (no rotation)");
+                        simple_pipeline
+                    }
+                    Err(e) => {
+                        println!("[Composite] Simple pipeline failed: {}, trying minimal pipeline", e);
+                        // Try minimal pipeline
+                        format!(
+                            "mfvideosrc device-index={} ! \
+                             videoconvert ! \
+                             video/x-raw,width={},height={},framerate={}/1 ! \
+                             jpegenc quality=90 ! \
+                             appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                            device_index, width, height, fps
+                        )
+                    }
                 }
             }
         } else {
@@ -751,6 +764,8 @@ impl GStreamerComposite {
             println!("[Composite] ❌ Pipeline not initialized - cannot play FX");
             return Err("Pipeline not initialized".to_string());
         }
+
+        println!("[Composite] Pipeline is running, attempting to play FX: {}", file_path);
 
         if let Some(pipeline) = &self.pipeline {
             // Stop any existing FX

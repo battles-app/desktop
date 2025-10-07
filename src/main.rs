@@ -940,6 +940,7 @@ async fn stop_camera_preview() -> Result<(), String> {
 #[command]
 async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
     println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+    println!("[Composite] Main.rs received - camera_device_id: '{}', has_camera: {}", camera_device_id, has_camera);
 
     // Call the synchronous start method
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
