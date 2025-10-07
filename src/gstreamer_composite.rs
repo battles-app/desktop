@@ -892,118 +892,154 @@ impl GStreamerComposite {
 
         Ok(())
     }
-            .map_err(|e| format!("Failed to create uridecodebin: {}", e))?;
 
-        // Try to reduce GPU usage by preferring software decoders
-        // Note: This may not work on all systems, but worth trying
-        let _ = uridecode.set_property("force-sw-decoders", &true);
-        
-        println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
+    /// Stop the currently playing FX
+        println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
 
-        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
-        // This blocks and waits for each frame's timestamp to arrive in real-time
-        let identity_sync = ElementFactory::make("identity")
-            .name("fxsync")
-            .property("sync", true)              // Block until buffer timestamp arrives in real-time
-            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
-            .build()
-            .map_err(|_| "Failed to create identity sync")?;
+        // Get the pipeline
+        let pipeline = match &self.pipeline {
+            Some(p) => p,
+            None => {
+                println!("[Composite FX] No pipeline running");
+                *self.fx_state.write() = None;
+                return Ok(());
+            }
+        };
 
-        // Force consistent 30fps output with videorate
-        let videorate = ElementFactory::make("videorate")
-            .name("fxvideorate")
-            .property("skip-to-first", true)   // Start fresh, ignore previous state
-            .property("drop-only", true)       // Only drop, never duplicate
-            .build()
-            .map_err(|_| "Failed to create videorate")?;
+        // Get compositor element
+        let compositor = match pipeline.by_name("comp") {
+            Some(c) => c,
+            None => {
+                println!("[Composite FX] No compositor found");
+                *self.fx_state.write() = None;
+                return Ok(());
+            }
+        };
 
-        // Force 30fps output regardless of input framerate
-        let rate_caps = gst::Caps::builder("video/x-raw")
-            .field("framerate", gst::Fraction::new(30, 1))
-            .build();
+        // Clear FX state first to prevent interference
+        *self.fx_state.write() = None;
 
-        let rate_filter = ElementFactory::make("capsfilter")
-            .name("fxratefilter")
-            .property("caps", &rate_caps)
-            .build()
-            .map_err(|_| "Failed to create rate capsfilter")?;
-        
-        println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
+        // If using FxKeyBin, just clear the state (the bin stays in pipeline for reuse)
+        if self.fx_bin.is_some() {
+            println!("[Composite FX] ✅ GPU FX state cleared - bin remains for reuse");
+            return Ok(());
+        }
 
-        let videoconvert = ElementFactory::make("videoconvert")
-            .name("fxconvert")
-            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
-            .build()
-            .map_err(|_| "Failed to create videoconvert")?;
+        // Legacy cleanup for old uridecodebin approach (if fx_bin is None)
+        if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
+            println!("[Composite FX] 🧹 Legacy cleanup of existing FX pipeline (manual)...");
 
-        let videoscale = ElementFactory::make("videoscale")
-            .name("fxscale")
-            .property_from_str("qos", "false")  // Disable QoS to prevent catch-up
-            .build()
-            .map_err(|_| "Failed to create videoscale")?;
+            if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
+                // First try safe cleanup with pad operations
+                if let Err(e) = self.safe_cleanup_fx(&bin, &compositor) {
+                    println!("[Composite FX] ❌ Safe cleanup failed: {}, trying emergency cleanup", e);
 
-        // BGRA caps for compositor
-        let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "BGRA")
-            .build();
+                    // Emergency cleanup: force removal without pad operations
+                    let _ = bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&bin)
+                    });
 
-        println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 Emergency: FX bin removed from pipeline");
+                            } else {
+                                println!("[Composite FX] ⚠️ Emergency: FX bin removal failed");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked: {:?}", e),
+                    }
+                } else {
+                    // Safe cleanup succeeded, now remove the bin
+                    let _ = bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&bin)
+                    });
 
-        let capsfilter = ElementFactory::make("capsfilter")
-            .name("fxcaps")
-            .property("caps", &caps)
-            .build()
-            .map_err(|_| "Failed to create capsfilter")?;
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 FX bin removed from pipeline after safe cleanup");
+                            } else {
+                                println!("[Composite FX] ⚠️ FX bin removal failed after safe cleanup");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup: {:?}", e),
+                    }
+                }
+            }
+        }
 
-        // Set uridecodebin to async for raw playback
-        uridecode.set_property("async-handling", true);
+        Ok(())
+    }
 
-        // Create bin to hold FX elements
-        let fx_bin = gst::Bin::builder().name("fxbin").build();
+    /// Perform emergency cleanup of any orphaned FX resources
+    /// This can be called periodically to ensure no resources leak
+    pub fn emergency_cleanup(&self) -> Result<(), String> {
+        println!("[Composite FX] 🚨 Emergency cleanup check...");
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to add elements to FX bin")?;
+        if let Some(pipeline) = &self.pipeline {
+            // Look for any orphaned FX bins
+            if let Some(found_bin) = pipeline.by_name("fxbin") {
+                // Check if this bin is the current active FX
+                // We can't directly compare bins, so we check if there's any current FX state
+                // If there's no current FX state, then any found bin is orphaned
+                let has_current_fx = self.fx_state.read().is_some();
 
-        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to link FX elements")?;
+                if has_current_fx {
+                    println!("[Composite FX] ✅ Current FX is active - bin might be legitimate, skipping emergency cleanup");
+                    return Ok(());
+                }
 
-        let final_element = capsfilter.clone();
-        
-        // Create ghost pad on the bin
-        let final_src_pad = final_element.static_pad("src")
-            .ok_or("Failed to get final element src pad")?;
-        let ghost_pad = gst::GhostPad::with_target(&final_src_pad)
-            .map_err(|_| "Failed to create ghost pad")?;
-        ghost_pad.set_active(true).ok();
-        fx_bin.add_pad(&ghost_pad).map_err(|_| "Failed to add ghost pad to bin")?;
-        
-        // Add EOS (End-of-Stream) probe to detect when video finishes naturally
-        println!("[Composite FX] 📡 Adding EOS probe for auto-cleanup (playback_id: {})...", playback_id);
-        let fx_bin_weak = fx_bin.downgrade();
-        let pipeline_weak = pipeline.downgrade();
-        let compositor_weak = compositor.downgrade();
-        let fx_state_weak = Arc::downgrade(&self.fx_state);
-        let pad_mutex_weak = Arc::downgrade(&self.pad_operation_mutex);
-        let eos_playback_id = playback_id; // Capture current playback ID
+                println!("[Composite FX] 🚨 Found orphaned FX bin during emergency cleanup");
 
-        ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
-            if let Some(gst::PadProbeData::Event(ref event)) = info.data {
-                if event.type_() == gst::EventType::Eos {
-                    println!("[Composite FX] 🎬 Video finished (EOS) - auto-cleaning in 100ms...");
+                if let Ok(bin) = found_bin.dynamic_cast::<gst::Bin>() {
+                    // Try safe cleanup first
+                    if let Some(compositor) = pipeline.by_name("comp") {
+                        let cleanup_result = self.safe_cleanup_fx(&bin, &compositor);
+                        if cleanup_result.is_err() {
+                            println!("[Composite FX] 🚨 Safe cleanup failed, forcing removal");
+                        }
+                    }
 
-                    // Spawn cleanup task (don't block probe callback)
-                    let fx_bin_weak_clone = fx_bin_weak.clone();
-                    let pipeline_weak_clone = pipeline_weak.clone();
-                    let compositor_weak_clone = compositor_weak.clone();
-                    let fx_state_weak_clone = fx_state_weak.clone();
-                    let pad_mutex_weak_clone = pad_mutex_weak.clone();
+                    // Force removal regardless
+                    let set_state_result = std::panic::catch_unwind(|| {
+                        bin.set_state(gst::State::Null)
+                    });
 
-                    std::thread::spawn(move || {
-                        // Check if this EOS event is for the current FX playback
-                        let is_current_fx = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
-                            let fx_state = fx_state_arc.read();
+                    match set_state_result {
+                        Ok(_) => println!("[Composite FX] ✅ Emergency: Bin set to NULL"),
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Set state panicked: {:?}", e),
+                    }
+
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&bin)
+                    });
+
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] ✅ Emergency: Orphaned bin removed");
+                            } else {
+                                println!("[Composite FX] ⚠️ Emergency: Bin removal failed");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Removal panicked: {:?}", e),
+                    }
+
+                    // Clear any stale FX state
+                    *self.fx_state.write() = None;
+                    println!("[Composite FX] ✅ Emergency: Stale FX state cleared");
+                }
+            } else {
+                println!("[Composite FX] ✅ Emergency: No orphaned bins found");
+            }
+        }
+
+        println!("[Composite FX] ✅ Emergency cleanup complete");
+        Ok(())
+    }
                             if let Some(state) = fx_state.as_ref() {
                                 if state.playback_id != eos_playback_id {
                                     println!("[Composite FX] ⚠️ EOS cleanup skipped - this is for old FX playback (got {}, current {})",
@@ -1487,9 +1523,6 @@ impl GStreamerComposite {
         println!("[Composite FX] ✅ Emergency cleanup complete");
         Ok(())
     }
-
-
-}
 
 
 
