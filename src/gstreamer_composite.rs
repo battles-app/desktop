@@ -1,7 +1,7 @@
 // GStreamer composite pipeline for OBS-like functionality
 use gstreamer::prelude::*;
-use gstreamer::{self as gst, Pipeline, Sample, FlowReturn};
-use gstreamer_app::{AppSink, AppSrc};
+use gstreamer::{self as gst, Pipeline};
+use gstreamer_app::AppSink;
 use gstreamer_video;
 
 // Import HSV plugin for proper chroma keying
@@ -989,10 +989,23 @@ impl GStreamerComposite {
             gst::Element::link_many(&chroma_elements)
                 .map_err(|_| "Failed to link standard elements")?;
         }
-        
+
+        // Add queue before compositor to prevent one stream from pacing others
+        let q_to_comp = ElementFactory::make("queue")
+            .name("q_to_comp")
+            .property_from_str("leaky", "downstream")  // downstream
+            .property("max-size-buffers", 0u32)
+            .property("max-size-bytes", 0u32)
+            .property("max-size-time", 200_000_000i64) // 200ms
+            .build()
+            .map_err(|_| "Failed to create queue to compositor")?;
+
+        fx_bin.add(&q_to_comp).map_err(|_| "Failed to add queue to FX bin")?;
+        final_element.link(&q_to_comp).map_err(|_| "Failed to link final element to queue")?;
+
         // Create ghost pad on the bin
-        let final_src_pad = final_element.static_pad("src")
-            .ok_or("Failed to get final element src pad")?;
+        let final_src_pad = q_to_comp.static_pad("src")
+            .ok_or("Failed to get queue src pad")?;
         let ghost_pad = gst::GhostPad::with_target(&final_src_pad)
             .map_err(|_| "Failed to create ghost pad")?;
         ghost_pad.set_active(true).ok();
@@ -1353,7 +1366,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → videoconvert → [chroma key] → videoscale → capsfilter");
+        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → videoconvert → [chroma key] → videoscale → capsfilter → queue → compositor");
         
         Ok(())
     }
@@ -1381,6 +1394,10 @@ impl GStreamerComposite {
                 return Ok(());
             }
         };
+
+        // Optional: Help the compositor with better timing behavior
+        let _ = compositor.set_property("start-time-selection", "zero");
+        let _ = compositor.set_property("ignore-inactive-pads", true);
 
         // Find FX bin and perform instant hide + safe cleanup
         if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
