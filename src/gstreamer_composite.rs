@@ -872,16 +872,16 @@ impl GStreamerComposite {
                     // Convert RGB to HSV for the detector
                     let (h, s, v) = Self::rgb_to_hsv(key_r, key_g, key_b);
 
-                    // Set the reference color in HSV space
-                    hsvdetector.set_property("hue-ref", h as f64);
-                    hsvdetector.set_property("saturation-ref", s as f64);
-                    hsvdetector.set_property("value-ref", v as f64);
+                    // Set the reference color in HSV space (use f32 for gfloat properties)
+                    hsvdetector.set_property("hue-ref", h as f32);
+                    hsvdetector.set_property("saturation-ref", s as f32);
+                    hsvdetector.set_property("value-ref", v as f32);
 
                     // Set allowed variations (tolerance and similarity map to variations)
                     // tolerance controls hue variation, similarity controls saturation/value variation
-                    hsvdetector.set_property("hue-var", (tolerance * 180.0) as f64);  // Convert 0-1 to 0-180 degrees
-                    hsvdetector.set_property("saturation-var", (similarity * 0.5) as f64);  // Convert 0-1 to 0-0.5 range
-                    hsvdetector.set_property("value-var", 1.0 as f64);  // Allow all brightness levels
+                    hsvdetector.set_property("hue-var", (tolerance * 180.0) as f32);  // Convert 0-1 to 0-180 degrees
+                    hsvdetector.set_property("saturation-var", (similarity * 0.5) as f32);  // Convert 0-1 to 0-0.5 range
+                    hsvdetector.set_property("value-var", 1.0 as f32);  // Allow all brightness levels
 
                     println!("[Chroma Key] 🎨 Configured HSV detector for chroma keying:");
                     println!("  Reference HSV: H={:.1}°, S={:.3}, V={:.3}", h, s, v);
