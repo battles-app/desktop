@@ -95,22 +95,28 @@ impl GStreamerComposite {
     
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
         println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-        
+
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
             let _ = pipeline.set_state(gst::State::Null);
         }
-        
+
         *self.is_running.write() = true;
-        
+
         // Store pipeline dimensions and FPS
         *self.pipeline_fps.write() = fps;
         *self.pipeline_width.write() = width;
         *self.pipeline_height.write() = height;
-        
-        let device_index: u32 = camera_device_id.parse()
-            .map_err(|_| "Invalid camera device ID")?;
-        
+
+        // Check if effects-only mode (no camera)
+        let is_effects_only = camera_device_id.is_empty();
+
+        let device_index: u32 = if is_effects_only {
+            0 // Dummy value, won't be used
+        } else {
+            camera_device_id.parse().map_err(|_| "Invalid camera device ID")?
+        };
+
         // Map rotation degrees to videoflip method
         // 0 = none, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
         let videoflip_method = match rotation {
@@ -125,7 +131,24 @@ impl GStreamerComposite {
         // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
         
         #[cfg(target_os = "windows")]
-        let pipeline_str = if videoflip_method != "none" {
+        let pipeline_str = if is_effects_only {
+            // Effects-only mode: no camera input, just compositor with black background
+            format!(
+                "compositor name=comp background=black \
+                   sink_1::zorder=1 sink_1::alpha={} ! \
+                 videoconvert ! \
+                 video/x-raw,format=BGRx,width={},height={} ! \
+                 tee name=t \
+                 t. ! queue leaky=downstream max-size-buffers=2 ! \
+                   jpegenc quality=90 ! \
+                   appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
+                 t. ! queue leaky=downstream max-size-buffers=2 ! {}",
+                self.layers.read().overlay_opacity,
+                width,
+                height,
+                self.get_output_branch()
+            )
+        } else if videoflip_method != "none" {
             format!(
                 "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
