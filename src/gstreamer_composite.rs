@@ -865,50 +865,50 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // Implement proper chroma keying using HSV detector (Rust plugin)
-            let chroma_element = if let Ok(mut hsvdetector) = ElementFactory::make("hsvdetector").name("fxchromakey").build() {
-                // Configure hsvdetector for green screen removal
+            // Try chromahold element with correct property types
+            let chroma_element = if let Ok(mut chromahold) = ElementFactory::make("chromahold").name("fxchromakey").build() {
+                // Configure chromahold for green screen removal
                 let config_result = std::panic::catch_unwind(|| {
-                    // Convert RGB to HSV for the detector
-                    let (h, s, v) = Self::rgb_to_hsv(key_r, key_g, key_b);
+                    // Convert normalized colors (0.0-1.0) to 0-255 range for chromahold
+                    let target_r_u32 = (key_r * 255.0) as u32;
+                    let target_g_u32 = (key_g * 255.0) as u32;
+                    let target_b_u32 = (key_b * 255.0) as u32;
 
-                    // Set the reference color in HSV space (use f32 for gfloat properties)
-                    hsvdetector.set_property("hue-ref", h as f32);
-                    hsvdetector.set_property("saturation-ref", s as f32);
-                    hsvdetector.set_property("value-ref", v as f32);
+                    // Set the target color to key out (green screen)
+                    chromahold.set_property("target-r", target_r_u32);
+                    chromahold.set_property("target-g", target_g_u32);
+                    chromahold.set_property("target-b", target_b_u32);
 
-                    // Set allowed variations (tolerance and similarity map to variations)
-                    // tolerance controls hue variation, similarity controls saturation/value variation
-                    hsvdetector.set_property("hue-var", (tolerance * 180.0) as f32);  // Convert 0-1 to 0-180 degrees
-                    hsvdetector.set_property("saturation-var", (similarity * 0.5) as f32);  // Convert 0-1 to 0-0.5 range
-                    hsvdetector.set_property("value-var", 1.0 as f32);  // Allow all brightness levels
+                    // Set tolerance (convert from 0.0-1.0 to 0-180 range for chromahold)
+                    let tolerance_u32 = (tolerance * 180.0) as u32;
+                    chromahold.set_property("tolerance", tolerance_u32);
 
-                    println!("[Chroma Key] 🎨 Configured HSV detector for chroma keying:");
-                    println!("  Reference HSV: H={:.1}°, S={:.3}, V={:.3}", h, s, v);
-                    println!("  Hue variation: ±{:.1}°", tolerance * 180.0);
-                    println!("  Saturation variation: ±{:.3}", similarity * 0.5);
-                    println!("  Value variation: ±1.0 (all brightness levels)");
+                    println!("[Chroma Key] 🎨 Configured chromahold element:");
+                    println!("  Target color: RGB({}, {}, {}) [0-255]", target_r_u32, target_g_u32, target_b_u32);
+                    println!("  Tolerance: {} [0-180]", tolerance_u32);
+                    println!("  Note: Using chromahold (C-based element from gst-plugins-bad)");
                 });
 
                 match config_result {
                     Ok(_) => {
-                        println!("[Composite FX] ✅ Chroma keying enabled with HSV detector element");
-                        Some(hsvdetector.upcast::<gst::Element>())
+                        println!("[Composite FX] ✅ Chroma keying enabled with chromahold element");
+                        Some(chromahold.upcast::<gst::Element>())
                     }
                     Err(e) => {
-                        println!("[Composite FX] ❌ Failed to configure HSV detector: {:?}", e);
+                        println!("[Composite FX] ❌ Failed to configure chromahold: {:?}", e);
                         None
                     }
                 }
             } else {
-                println!("[Composite FX] ❌ HSV detector element not available");
+                println!("[Composite FX] ❌ chromahold element not available");
                 println!("[Composite FX] 💡 Video will play without chroma keying");
                 None
             };
 
             // Build pipeline based on chroma key availability
             let (elements, final_capsfilter) = if let Some(chroma_elem) = chroma_element {
-                // Pipeline with chroma key: videoconvert -> hsvdetector -> videoscale -> capsfilter
+                // Pipeline with chroma key: videoconvert -> chromahold -> videoscale -> capsfilter
+                // chromahold works with BGRA input/output
                 let caps = gst::Caps::builder("video/x-raw")
                     .field("format", "BGRA")
                     .build();
@@ -954,7 +954,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested - using HSV detector element for green screen removal");
+            println!("[Composite FX] 🎨 Chroma key requested - using chromahold element for green screen removal");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
