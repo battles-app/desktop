@@ -238,7 +238,7 @@ impl FxKeyBin {
             .build()
             .map_err(|e| format!("Failed to create queue: {}", e))?;
         
-        q.set_property("leaky", 2i32);              // downstream
+        q.set_property_from_str("leaky", "downstream");  // Use string instead of enum
         q.set_property("max-size-buffers", 2u32);
         q.set_property("max-size-bytes", 0u32);
         q.set_property("max-size-time", 0u64);
