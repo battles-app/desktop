@@ -410,20 +410,58 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🧹 Performing safe cleanup...");
 
+        // ALWAYS check for and release any stored compositor sink pad first
+        // This handles cases where the ghost pad is not linked but the sink pad still exists
+        if let Some(fx_state) = self.fx_state.read().as_ref() {
+            if let Some(stored_sink_pad) = &fx_state.compositor_sink_pad {
+                let compositor_ref = compositor.upcast_ref();
+                let pad_parent = stored_sink_pad.parent();
+
+                // Check if this pad still belongs to the compositor
+                if pad_parent.as_ref() == Some(compositor_ref) {
+                    println!("[Composite FX] 📤 Releasing stored compositor sink pad...");
+
+                    // Extra safety: try to release the pad but don't crash if it fails
+                    let release_result = std::panic::catch_unwind(|| {
+                        println!("[Composite FX] 📤 Calling compositor.release_request_pad() on stored pad...");
+                        let result = compositor.release_request_pad(stored_sink_pad);
+                        println!("[Composite FX] 📤 release_request_pad() returned: {:?}", result);
+                        result
+                    });
+
+                    match release_result {
+                        Ok(_) => {
+                            println!("[Composite FX] ✅ Released stored compositor sink pad during cleanup");
+
+                            // Verify the pad was actually released by checking if it still has a parent
+                            let pad_parent_after = stored_sink_pad.parent();
+                            let pad_still_has_parent = pad_parent_after.is_some();
+                            println!("[Composite FX] 📊 Stored pad still has parent after release: {}", pad_still_has_parent);
+                        },
+                        Err(e) => {
+                            println!("[Composite FX] ❌ Stored pad release panicked: {:?}", e);
+                        },
+                    }
+                } else {
+                    println!("[Composite FX] ⚠️ Stored sink pad no longer belongs to compositor, skipping release");
+                }
+            }
+        }
+
         // EXTRA DEFENSIVE: Check if bin is still valid and has the expected pad
         let ghost_pad = match fx_bin.static_pad("src") {
             Some(pad) => pad,
             None => {
-                println!("[Composite FX] ⚠️ FX bin has no src pad, cleanup not needed");
+                println!("[Composite FX] ⚠️ FX bin has no src pad, skipping remaining cleanup");
                 return Ok(());
             }
         };
 
-        // Check if ghost pad has a peer (is linked)
+        // Check if ghost pad has a peer (is linked) - only proceed if linked
         let peer_pad = match ghost_pad.peer() {
             Some(pad) => pad,
             None => {
-                println!("[Composite FX] ⚠️ Ghost pad not linked, cleanup not needed");
+                println!("[Composite FX] ⚠️ Ghost pad not linked, skipping remaining cleanup");
                 return Ok(());
             }
         };
@@ -444,7 +482,7 @@ impl GStreamerComposite {
                  should_release, is_linked, compositor_owns_pad);
 
         if !is_linked {
-            println!("[Composite FX] ⚠️ Pad not linked, skipping cleanup");
+            println!("[Composite FX] ⚠️ Pad not linked, skipping remaining cleanup");
             return Ok(());
         }
 
