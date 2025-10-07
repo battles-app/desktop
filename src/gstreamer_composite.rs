@@ -548,6 +548,82 @@ impl GStreamerComposite {
         Ok(())
     }
 
+    /// Hide FX immediately and remove safely later (zero-latency hide)
+    fn hide_and_remove_fx(&self, fx_bin: &gst::Bin, fx_src_pad: &gst::Pad, comp_sink_pad: &gst::Pad, compositor: &gst::Element) -> Result<(), String> {
+        println!("[Composite FX] 🚀 Instant hide: Setting alpha to 0.0 for immediate back-layer visibility");
+
+        // 1) Instant hide: alpha -> 0.0 (no visual stall, applies next frame)
+        comp_sink_pad.set_property("alpha", 0.0f64);
+        println!("[Composite FX] ✅ FX hidden instantly (alpha=0.0) - back layer now visible");
+
+        // 2) Block downstream on compositor sink pad to safely unlink/remove without stalls
+        let comp_sink_pad_weak = comp_sink_pad.downgrade();
+        let fx_src_pad_weak = fx_src_pad.downgrade();
+        let compositor_weak = compositor.downgrade();
+        let pipeline_weak = self.pipeline.as_ref().unwrap().downgrade();
+        let fx_bin_weak = fx_bin.upcast_ref::<gst::Element>().downgrade();
+
+        let pad_operation_mutex = self.pad_operation_mutex.clone();
+
+        comp_sink_pad.add_probe(gst::PadProbeType::BLOCK | gst::PadProbeType::IDLE, move |pad, _info| {
+            // Acquire mutex for pad operations to prevent race conditions
+            let _guard = pad_operation_mutex.lock();
+
+            let Some(comp_sink_pad) = comp_sink_pad_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
+            let Some(fx_src_pad) = fx_src_pad_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
+            let Some(compositor) = compositor_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
+            let Some(pipeline) = pipeline_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
+            let Some(fx_bin) = fx_bin_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
+
+            println!("[Composite FX] 🔧 Safe removal: Unlinking and cleaning up FX...");
+
+            // Unlink ghost → compositor sink (ignore errors if already unlinked)
+            let unlink_result = fx_src_pad.unlink(&comp_sink_pad);
+            match unlink_result {
+                Ok(_) => println!("[Composite FX] ✅ Pads unlinked successfully"),
+                Err(e) => println!("[Composite FX] ⚠️ Unlink failed (might already be unlinked): {:?}", e),
+            }
+
+            // Release request pad from compositor (only if it belongs to it)
+            if comp_sink_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                println!("[Composite FX] 📤 Releasing compositor request pad...");
+                let release_result = std::panic::catch_unwind(|| {
+                    compositor.release_request_pad(&comp_sink_pad)
+                });
+
+                match release_result {
+                    Ok(_) => println!("[Composite FX] ✅ Request pad released"),
+                    Err(e) => println!("[Composite FX] ❌ Request pad release panicked: {:?}", e),
+                }
+            } else {
+                println!("[Composite FX] ⚠️ Pad no longer belongs to compositor, skipping release");
+            }
+
+            // Stop & remove the FX bin
+            let _ = fx_bin.set_state(gst::State::Null);
+            let remove_result = std::panic::catch_unwind(|| {
+                pipeline.remove(&fx_bin)
+            });
+
+            match remove_result {
+                Ok(result) => {
+                    if result.is_ok() {
+                        println!("[Composite FX] ✅ FX bin removed from pipeline");
+                    } else {
+                        println!("[Composite FX] ⚠️ FX bin removal returned error");
+                    }
+                }
+                Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked: {:?}", e),
+            }
+
+            // Done — drop this probe
+            gst::PadProbeReturn::Remove
+        });
+
+        println!("[Composite FX] 🎯 Hide-and-remove initiated - FX invisible, safe cleanup queued");
+        Ok(())
+    }
+
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
@@ -709,18 +785,72 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // BGRA caps for compositor
-        let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "BGRA")
-            .build();
+        // Parse hex color for chroma key (e.g., "#00ff00" -> RGB values)
+        let (key_r, key_g, key_b) = if keycolor.starts_with('#') && keycolor.len() == 7 {
+            let r = u8::from_str_radix(&keycolor[1..3], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&keycolor[3..5], 16).unwrap_or(255);
+            let b = u8::from_str_radix(&keycolor[5..7], 16).unwrap_or(0);
+            (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0)
+        } else {
+            // Default to green if invalid hex
+            println!("[Composite FX] ⚠️ Invalid keycolor '{}', defaulting to green", keycolor);
+            (0.0, 1.0, 0.0) // Green
+        };
+
+        // Create chroma key elements if enabled
+        let (chroma_elements, final_element) = if use_chroma_key {
+            println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
+                     keycolor, key_r, key_g, key_b, tolerance, similarity);
+
+            // Use alphacolor element for chroma keying (GPU-friendly when available)
+            let alphacolor = ElementFactory::make("alphacolor")
+                .name("fxchromakey")
+                .property("target-r", key_r)
+                .property("target-g", key_g)
+                .property("target-b", key_b)
+                .property("tolerance", tolerance)
+                .property("slope", similarity)
+                .property("alpha-mode", 1i32)  // 1 = set, 0 = multiply
+                .build()
+                .map_err(|_| "Failed to create alphacolor for chroma key")?;
+
+            // BGRA caps for compositor (with alpha channel for transparency)
+            let caps = gst::Caps::builder("video/x-raw")
+                .field("format", "BGRA")
+                .build();
+
+            let capsfilter = ElementFactory::make("capsfilter")
+                .name("fxcaps")
+                .property("caps", &caps)
+                .build()
+                .map_err(|_| "Failed to create capsfilter")?;
+
+            // Pipeline with chroma key: videoconvert -> alphacolor -> videoscale -> capsfilter
+            let elements = vec![videoconvert.clone(), alphacolor, videoscale.clone(), capsfilter.clone()];
+            (elements, capsfilter)
+        } else {
+            // No chroma key - BGRA caps for compositor
+            let caps = gst::Caps::builder("video/x-raw")
+                .field("format", "BGRA")
+                .build();
+
+            let capsfilter = ElementFactory::make("capsfilter")
+                .name("fxcaps")
+                .property("caps", &caps)
+                .build()
+                .map_err(|_| "Failed to create capsfilter")?;
+
+            // Pipeline without chroma key: videoconvert -> videoscale -> capsfilter
+            let elements = vec![videoconvert.clone(), videoscale.clone(), capsfilter.clone()];
+            (elements, capsfilter)
+        };
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
-
-        let capsfilter = ElementFactory::make("capsfilter")
-            .name("fxcaps")
-            .property("caps", &caps)
-            .build()
-            .map_err(|_| "Failed to create capsfilter")?;
+        if use_chroma_key {
+            println!("[Composite FX] 🎨 Chroma key pipeline: uridecodebin → videorate → identity_sync → videoconvert → alphacolor → videoscale → capsfilter");
+        } else {
+            println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
+        }
 
         // Set uridecodebin to async for raw playback
         uridecode.set_property("async-handling", true);
@@ -728,15 +858,33 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to add elements to FX bin")?;
+        // Add base elements
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync])
+            .map_err(|_| "Failed to add base elements to FX bin")?;
 
-        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
-            .map_err(|_| "Failed to link FX elements")?;
+        // Add chroma key elements
+        for element in &chroma_elements {
+            fx_bin.add(element).map_err(|_| "Failed to add chroma elements to FX bin")?;
+        }
 
-        let final_element = capsfilter.clone();
+        // Link base elements: videorate enforces 30fps, identity syncs to real-time clock
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync])
+            .map_err(|_| "Failed to link base FX elements")?;
+
+        // Link to videoconvert
+        identity_sync.link(&videoconvert)
+            .map_err(|_| "Failed to link identity_sync to videoconvert")?;
+
+        // Link chroma key pipeline
+        if use_chroma_key {
+            // videoconvert -> alphacolor -> videoscale -> capsfilter
+            gst::Element::link_many(&chroma_elements)
+                .map_err(|_| "Failed to link chroma key elements")?;
+        } else {
+            // videoconvert -> videoscale -> capsfilter
+            gst::Element::link_many(&chroma_elements)
+                .map_err(|_| "Failed to link standard elements")?;
+        }
         
         // Create ghost pad on the bin
         let final_src_pad = final_element.static_pad("src")
@@ -1106,10 +1254,10 @@ impl GStreamerComposite {
         Ok(())
     }
     
-    /// Stop the currently playing FX
+    /// Stop the currently playing FX (instant hide + safe cleanup)
     pub fn stop_fx(&mut self) -> Result<(), String> {
-        println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
-        
+        println!("[Composite FX] 🛑 Stopping FX with instant hide...");
+
         // Get the pipeline
         let pipeline = match &self.pipeline {
             Some(p) => p,
@@ -1119,7 +1267,7 @@ impl GStreamerComposite {
                 return Ok(());
             }
         };
-        
+
         // Get compositor element
         let compositor = match pipeline.by_name("comp") {
             Some(c) => c,
@@ -1129,62 +1277,73 @@ impl GStreamerComposite {
                 return Ok(());
             }
         };
-        
-        // Find and remove FX bin (proper cleanup with safe pad operations)
+
+        // Find FX bin and perform instant hide + safe cleanup
         if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
-            println!("[Composite FX] 🧹 Manual stop: Proper cleanup of FX bin...");
+            println!("[Composite FX] 🚀 Using instant hide-and-remove for FX stop...");
 
-            // Cast to Bin and perform complete cleanup
+            // Cast to Bin
             if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
-                // Try safe cleanup with pad operations first
-                if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
-                    println!("[Composite FX] ❌ Safe cleanup failed during manual stop: {}, trying emergency", e);
+                // Get the ghost pad (FX bin's source pad)
+                let ghost_pad = match fx_bin.static_pad("src") {
+                    Some(pad) => pad,
+                    None => {
+                        println!("[Composite FX] ⚠️ FX bin has no src pad");
+                        *self.fx_state.write() = None;
+                        return Ok(());
+                    }
+                };
 
-                    // Emergency cleanup: force removal without pad operations
-                    let _ = fx_bin.set_state(gst::State::Null);
-                    let remove_result = std::panic::catch_unwind(|| {
-                        pipeline.remove(&fx_bin)
-                    });
-
-                    match remove_result {
-                        Ok(result) => {
-                            if result.is_ok() {
-                                println!("[Composite FX] 🧹 Emergency: FX bin removed during manual stop");
-                            } else {
-                                println!("[Composite FX] ⚠️ Emergency: FX bin removal failed during manual stop");
+                // Get the compositor sink pad from FX state
+                let comp_sink_pad = if let Some(fx_state) = self.fx_state.read().as_ref() {
+                    match &fx_state.compositor_sink_pad {
+                        Some(pad) => pad.clone(),
+                        None => {
+                            println!("[Composite FX] ⚠️ No stored compositor sink pad, falling back to safe cleanup");
+                            // Fallback to old safe cleanup method
+                            if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
+                                println!("[Composite FX] ❌ Fallback cleanup failed: {}", e);
                             }
+                            let _ = fx_bin.set_state(gst::State::Null);
+                            let _ = pipeline.remove(&fx_bin);
+                            *self.fx_state.write() = None;
+                            return Ok(());
                         }
-                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked during manual stop: {:?}", e),
                     }
                 } else {
-                    // Safe cleanup succeeded, now remove the bin
-                    let _ = fx_bin.set_state(gst::State::Null);
-                    let remove_result = std::panic::catch_unwind(|| {
-                        pipeline.remove(&fx_bin)
-                    });
-
-                    match remove_result {
-                        Ok(result) => {
-                            if result.is_ok() {
-                                println!("[Composite FX] 🧹 FX bin removed after safe cleanup (manual stop)");
-                            } else {
-                                println!("[Composite FX] ⚠️ FX bin removal failed after safe cleanup (manual stop)");
-                            }
-                        }
-                        Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup (manual stop): {:?}", e),
+                    println!("[Composite FX] ⚠️ No FX state, falling back to safe cleanup");
+                    // Fallback to old safe cleanup method
+                    if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
+                        println!("[Composite FX] ❌ Fallback cleanup failed: {}", e);
                     }
-                }
+                    let _ = fx_bin.set_state(gst::State::Null);
+                    let _ = pipeline.remove(&fx_bin);
+                    *self.fx_state.write() = None;
+                    return Ok(());
+                };
 
-                println!("[Composite FX] ✅ FX branch removed and memory freed");
+                // Use instant hide-and-remove (zero-latency)
+                if let Err(e) = self.hide_and_remove_fx(&fx_bin, &ghost_pad, &comp_sink_pad, &compositor) {
+                    println!("[Composite FX] ❌ Instant hide failed: {}, falling back to safe cleanup", e);
+
+                    // Fallback to old safe cleanup method
+                    if let Err(e2) = self.safe_cleanup_fx(&fx_bin, &compositor) {
+                        println!("[Composite FX] ❌ Fallback cleanup also failed: {}", e2);
+                    }
+                    let _ = fx_bin.set_state(gst::State::Null);
+                    let _ = pipeline.remove(&fx_bin);
+                }
+            } else {
+                println!("[Composite FX] ⚠️ Could not cast FX element to Bin");
             }
         } else {
             println!("[Composite FX] No FX bin found to remove");
         }
-        
-        // Clear FX state after cleanup complete
+
+        // Clear FX state immediately (hide is instant, cleanup happens async)
         *self.fx_state.write() = None;
-        println!("[Composite FX] ✅ FX state cleared after manual stop");
-        
+        println!("[Composite FX] ✅ FX state cleared - back layer visible instantly");
+
         Ok(())
     }
     
