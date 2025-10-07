@@ -805,9 +805,12 @@ async fn start_composite_websocket_server() {
                         use futures_util::SinkExt;
                         use tokio_tungstenite::tungstenite::protocol::Message;
 
+                        println!("[Composite WS] 📡 Sending frame to WebSocket client ({} bytes)", frame_data.len());
                         if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
                             println!("[Composite WS] Client disconnected");
                             break;
+                        } else {
+                            println!("[Composite WS] ✅ Frame sent successfully");
                         }
                     }
                 } else {

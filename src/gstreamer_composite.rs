@@ -637,22 +637,41 @@ impl GStreamerComposite {
                 );
 
                 // Test if simple pipeline can be parsed (no compositor, no videorotate)
+                println!("[Composite] Testing simple pipeline: {}", simple_pipeline);
                 match gst::parse::launch(&simple_pipeline) {
                     Ok(_) => {
-                        println!("[Composite] Using simple camera pipeline (no rotation)");
+                        println!("[Composite] ✅ Simple camera pipeline created successfully");
                         simple_pipeline
                     }
                     Err(e) => {
-                        println!("[Composite] Simple pipeline failed: {}, trying minimal pipeline", e);
-                        // Try minimal pipeline
-                        format!(
+                        println!("[Composite] ❌ Simple pipeline failed: {}, trying even simpler pipeline", e);
+                        // Try even simpler pipeline without videoconvert
+                        let minimal_pipeline = format!(
                             "mfvideosrc device-index={} ! \
-                             videoconvert ! \
                              video/x-raw,width={},height={},framerate={}/1 ! \
                              jpegenc quality=90 ! \
                              appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
                             device_index, width, height, fps
-                        )
+                        );
+                        println!("[Composite] Testing minimal pipeline: {}", minimal_pipeline);
+                        match gst::parse::launch(&minimal_pipeline) {
+                            Ok(_) => {
+                                println!("[Composite] ✅ Minimal camera pipeline created successfully");
+                                minimal_pipeline
+                            }
+                            Err(e2) => {
+                                println!("[Composite] ❌ Minimal pipeline also failed: {}", e2);
+                                // Last resort - just use videotestsrc
+                                println!("[Composite] Using fallback videotestsrc pipeline");
+                                format!(
+                                    "videotestsrc pattern=black ! \
+                                     video/x-raw,width={},height={},framerate={}/1 ! \
+                                     jpegenc quality=90 ! \
+                                     appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                                    width, height, fps
+                                )
+                            }
+                        }
                     }
                 }
             }
