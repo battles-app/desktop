@@ -1207,31 +1207,32 @@ impl GStreamerComposite {
         println!("[Composite FX] ✅ Emergency cleanup complete");
         Ok(())
     }
-                            if let Some(state) = fx_state.as_ref() {
-                                if state.playback_id != eos_playback_id {
-                                    println!("[Composite FX] ⚠️ EOS cleanup skipped - this is for old FX playback (got {}, current {})",
-                                             eos_playback_id, state.playback_id);
-                                    return;
-                                }
-                                true
-                            } else {
-                                false // No current FX state
-                            }
-                        } else {
-                            false // State was dropped
-                        };
 
-                        if !is_current_fx {
-                            println!("[Composite FX] ⚠️ EOS cleanup skipped - no current FX state");
-                            return;
-                        }
+    /// Stop the currently playing FX
+        println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
 
-                        // Check if cleanup is already in progress to prevent double cleanup
-                        let cleanup_already_started = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
-                            let fx_state = fx_state_arc.read();
-                            if let Some(state) = fx_state.as_ref() {
-                                let already_cleaning = *state.cleanup_in_progress.lock();
-                                if already_cleaning {
+        // Get the pipeline
+        let pipeline = match &self.pipeline {
+            Some(p) => p,
+            None => {
+                println!("[Composite FX] No pipeline running");
+                *self.fx_state.write() = None;
+                return Ok(());
+            }
+        };
+
+        // Get compositor element
+        let compositor = match pipeline.by_name("comp") {
+            Some(c) => c,
+            None => {
+                println!("[Composite FX] Compositor not found");
+                *self.fx_state.write() = None;
+                return Ok(());
+            }
+        };
+
+        Ok(())
+    }
                                     println!("[Composite FX] ⚠️ EOS cleanup skipped - cleanup already in progress");
                                     return;
                                 }
