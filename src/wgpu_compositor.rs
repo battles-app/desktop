@@ -76,6 +76,7 @@ pub struct WgpuCompositor {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     fx_params_buffer: wgpu::Buffer,
+    output_buffer: wgpu::Buffer, // Reusable output buffer
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
@@ -86,6 +87,7 @@ pub struct WgpuCompositor {
     fx_width: u32,
     fx_height: u32,
     fx_params: FxParams,
+    buffer_mapped: bool, // Track if buffer is currently mapped
 }
 
 impl WgpuCompositor {
@@ -196,6 +198,15 @@ impl WgpuCompositor {
             label: Some("Index Buffer"),
             contents: bytemuck::cast_slice(INDICES),
             usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // Create output buffer (reusable)
+        let output_buffer_size = (output_width * output_height * 4) as u64;
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Output Buffer"),
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
         });
 
         // Create FX params buffer
@@ -356,6 +367,7 @@ impl WgpuCompositor {
             vertex_buffer,
             index_buffer,
             fx_params_buffer,
+            output_buffer,
             bind_group_layout,
             bind_group,
             pipeline,
@@ -366,6 +378,7 @@ impl WgpuCompositor {
             fx_width: output_width,
             fx_height: output_height,
             fx_params,
+            buffer_mapped: false,
         })
     }
 
@@ -461,15 +474,11 @@ impl WgpuCompositor {
         Ok(())
     }
 
-    pub fn render_rgba(&self) -> Result<Vec<u8>, CompositorError> {
-        // Create output buffer
-        let output_buffer_size = (self.output_width * self.output_height * 4) as u64;
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output Buffer"),
-            size: output_buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+    pub fn render_rgba(&mut self) -> Result<Vec<u8>, CompositorError> {
+        // Don't render if buffer is still mapped from previous call
+        if self.buffer_mapped {
+            return Err(CompositorError::RenderFailed);
+        }
 
         // Create command encoder
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -510,7 +519,7 @@ impl WgpuCompositor {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &output_buffer,
+                buffer: &self.output_buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.output_width * 4),
@@ -528,9 +537,10 @@ impl WgpuCompositor {
         self.queue.submit(Some(encoder.finish()));
 
         // Read back the data
-        let buffer_slice = output_buffer.slice(..);
+        let buffer_slice = self.output_buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
 
+        self.buffer_mapped = true;
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
@@ -544,8 +554,20 @@ impl WgpuCompositor {
         let result = data.to_vec();
 
         // Unmap buffer
-        output_buffer.unmap();
+        self.output_buffer.unmap();
+        self.buffer_mapped = false;
 
         Ok(result)
+    }
+}
+
+impl Drop for WgpuCompositor {
+    fn drop(&mut self) {
+        // Ensure buffer is unmapped before dropping
+        if self.buffer_mapped {
+            self.output_buffer.unmap();
+        }
+        // WGPU resources will be automatically cleaned up by the Drop implementations
+        // of Device, Queue, Texture, Buffer, etc.
     }
 }
