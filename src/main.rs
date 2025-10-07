@@ -491,6 +491,12 @@ async fn create_monitor_window(
     println!("Logical coordinates: position=({}, {}), size={}x{}",
              logical_x, logical_y, logical_width, logical_height);
 
+    // Validate window position - warn if completely off-screen
+    if logical_y < -2000.0 || logical_y > 3000.0 || logical_x < -4000.0 || logical_x > 8000.0 {
+        println!("⚠️ WARNING: Window position ({}, {}) appears to be far off-screen!", logical_x, logical_y);
+        println!("This might make the window invisible. Monitor layout issue?");
+    }
+
     // Close any existing TV monitor window first
     if let Some(existing_window) = app.get_window("tv-monitor") {
         println!("Destroying existing TV monitor window before creating new one");
@@ -510,7 +516,11 @@ async fn create_monitor_window(
     // Use WebviewWindowBuilder which supports URL in Tauri v2
     // Pass the authenticated URL directly - no loading page needed
     let parsed_url = url.parse().map_err(|e| format!("Invalid URL '{}': {}", url, e))?;
-    let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(parsed_url))
+
+    // Use the URL as-is (Vue code now handles HTTP forcing for Tauri)
+    let window_url = parsed_url;
+
+    let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(window_url))
         .title("TV Monitor")
         .inner_size(logical_width, logical_height)
         .position(logical_x, logical_y)
@@ -546,6 +556,21 @@ async fn create_monitor_window(
     let is_visible = window.is_visible().unwrap_or(false);
     let is_focused = window.is_focused().unwrap_or(false);
     println!("Monitor window state: visible={}, focused={}", is_visible, is_focused);
+
+    // Check if the window can navigate to the URL (this might help debug loading issues)
+    println!("Window created successfully, URL should be loading...");
+
+    // Add a small delay and check if window is still responsive
+    let window_clone = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+        let still_visible = window_clone.is_visible().unwrap_or(false);
+        let still_focused = window_clone.is_focused().unwrap_or(false);
+        println!("Window status after 2 seconds: visible={}, focused={}", still_visible, still_focused);
+        if !still_visible {
+            println!("⚠️ WARNING: Window became invisible after creation!");
+        }
+    });
 
     println!("Monitor window created successfully on monitor {} at logical position ({}, {}) with size {}x{}",
              monitor_index, logical_x, logical_y, logical_width, logical_height);
