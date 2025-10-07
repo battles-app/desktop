@@ -530,15 +530,39 @@ impl GStreamerComposite {
 
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
+        // Rate limiting: prevent rapid successive FX requests during pipeline transitions
+        static LAST_FX_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let last_time = LAST_FX_TIME.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last_time < 500 { // Minimum 500ms between FX requests
+            println!("[Composite FX] ⚡ Rate limiting: ignoring rapid FX request");
+            return Ok(());
+        }
+        LAST_FX_TIME.store(now, std::sync::atomic::Ordering::Relaxed);
+
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
-        
-        // Get the pipeline
+
+        // Check if pipeline is running and ready
         let pipeline = match &self.pipeline {
-            Some(p) => p,
+            Some(p) => {
+                // Check pipeline state
+                match p.current_state() {
+                    gst::State::Playing | gst::State::Paused => p,
+                    _ => {
+                        println!("[Composite FX] ⚠️ Pipeline not ready (state: {:?}) - skipping FX", p.current_state());
+                        return Ok(()); // Don't error, just skip
+                    }
+                }
+            },
             None => {
-                return Err("[Composite FX] ❌ No pipeline running - please select a camera first!".to_string());
+                println!("[Composite FX] ⚠️ No active pipeline - skipping FX");
+                return Ok(()); // Don't error, just skip
             }
         };
         
@@ -924,6 +948,15 @@ impl GStreamerComposite {
         let sink_pad_name = "sink_1";
 
         println!("[Composite FX] 🔌 Requesting sink pad: {}", sink_pad_name);
+
+        // Check if sink_1 already exists and is in use
+        if let Some(existing_pad) = compositor.static_pad(sink_pad_name) {
+            if existing_pad.is_linked() {
+                println!("[Composite FX] ⚠️ Sink pad {} already exists and is linked - FX already playing", sink_pad_name);
+                // Don't try to play new FX if one is already active
+                return Ok(());
+            }
+        }
 
         let comp_sink_pad = compositor
             .request_pad_simple(sink_pad_name)
