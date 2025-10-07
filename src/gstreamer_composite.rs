@@ -730,10 +730,6 @@ impl GStreamerComposite {
                     let pad_mutex_weak_clone = pad_mutex_weak.clone();
 
                     std::thread::spawn(move || {
-                        // Add timeout to prevent hanging cleanup threads
-                        let start_time = std::time::Instant::now();
-                        let timeout_duration = std::time::Duration::from_secs(5); // 5 second timeout
-
                         // Check if this EOS event is for the current FX playback
                         let is_current_fx = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
                             let fx_state = fx_state_arc.read();
@@ -783,10 +779,20 @@ impl GStreamerComposite {
                             (fx_bin_weak_clone.upgrade(), pipeline_weak_clone.upgrade(), compositor_weak_clone.upgrade(), pad_mutex_weak_clone.upgrade()) {
 
                             // Check if this bin is still actually in the pipeline (might have been manually cleaned up)
-                            let bin_still_in_pipeline = fx_bin.parent().is_some();
+                            // First check if bin still has a parent (basic check)
+                            let has_parent = fx_bin.parent().is_some();
 
-                            if !bin_still_in_pipeline {
-                                println!("[Composite FX] ⚠️ EOS cleanup skipped - bin already removed from pipeline");
+                            // Also check if the bin's ghost pad is still linked (more reliable indicator of cleanup status)
+                            let ghost_pad_still_linked = if let Some(ghost_pad) = fx_bin.static_pad("src") {
+                                ghost_pad.is_linked()
+                            } else {
+                                false
+                            };
+
+                            let bin_still_active = has_parent && ghost_pad_still_linked;
+
+                            if !bin_still_active {
+                                println!("[Composite FX] ⚠️ EOS cleanup skipped - bin already cleaned up (no parent or ghost pad not linked)");
                                 return;
                             }
 
@@ -846,9 +852,6 @@ impl GStreamerComposite {
                             }
 
                             // Check for timeout before finishing
-                            if start_time.elapsed() > timeout_duration {
-                                println!("[Composite FX] ⚠️ EOS cleanup timed out after {}ms", start_time.elapsed().as_millis());
-                            }
 
                             // Clear FX state (garbage collection)
                             if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
@@ -957,24 +960,20 @@ impl GStreamerComposite {
         // Get pipeline dimensions
         let comp_width = *self.pipeline_width.read() as i32;
         let comp_height = *self.pipeline_height.read() as i32;
-
-        // Calculate FX positioning: fit within compositor while maintaining aspect ratio
+        
+        // Calculate FX positioning: center and fill height
         // Assume 16:9 FX aspect ratio for horizontal videos
         let fx_aspect = 16.0 / 9.0;
         let comp_aspect = comp_width as f64 / comp_height as f64;
-
-        let (fx_width, fx_height, fx_xpos, fx_ypos) = if comp_aspect > fx_aspect {
-            // Compositor is wider than FX aspect ratio: fit to height, center horizontally
-            let fx_height = comp_height;
-            let fx_width = (comp_height as f64 * fx_aspect) as i32;
-            let fx_xpos = (comp_width - fx_width) / 2;
-            (fx_width, fx_height, fx_xpos, 0)
+        
+        let (fx_width, fx_height, fx_xpos, fx_ypos) = if comp_aspect > 1.0 {
+            // Horizontal compositor (16:9): Fill full width and height
+            (comp_width, comp_height, 0, 0)
         } else {
-            // Compositor is taller than FX aspect ratio: fit to width, center vertically
-            let fx_width = comp_width;
-            let fx_height = (comp_width as f64 / fx_aspect) as i32;
-            let fx_ypos = (comp_height - fx_height) / 2;
-            (fx_width, fx_height, 0, fx_ypos)
+            // Vertical compositor (9:16): Fill height, center horizontally and crop edges
+            let fx_width = (comp_height as f64 * fx_aspect) as i32;
+            let fx_xpos = (comp_width - fx_width) / 2; // Center horizontally (will crop edges)
+            (fx_width, comp_height, fx_xpos, 0)
         };
         
         println!("[Composite FX] 📐 Positioning: {}x{} at ({}, {}) in {}x{} compositor", 
@@ -1156,10 +1155,20 @@ impl GStreamerComposite {
 
         if let Some(pipeline) = &self.pipeline {
             // Look for any orphaned FX bins
-            if let Some(orphaned_bin) = pipeline.by_name("fxbin") {
+            if let Some(found_bin) = pipeline.by_name("fxbin") {
+                // Check if this bin is truly orphaned (not the current active FX)
+                // We can't directly compare bins, so we check if there's any current FX state
+                // If there's no current FX state, then any found bin is orphaned
+                let has_current_fx = self.fx_state.read().is_some();
+
+                if has_current_fx {
+                    println!("[Composite FX] ✅ Current FX is active - bin might be legitimate, skipping emergency cleanup");
+                    return Ok(());
+                }
+
                 println!("[Composite FX] 🚨 Found orphaned FX bin during emergency cleanup");
 
-                if let Ok(bin) = orphaned_bin.dynamic_cast::<gst::Bin>() {
+                if let Ok(bin) = found_bin.dynamic_cast::<gst::Bin>() {
                     // Try safe cleanup first
                     if let Some(compositor) = pipeline.by_name("comp") {
                         let cleanup_result = self.safe_cleanup_fx(&bin, &compositor);
