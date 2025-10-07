@@ -946,11 +946,12 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
     if let Some(composite) = composite_lock.as_mut() {
         composite.start(&camera_device_id, width, height, fps, rotation)?;
         println!("[Composite] ✅ Composite pipeline started");
+        drop(composite_lock);
         Ok(())
     } else {
+        drop(composite_lock);
         Err("Composite pipeline not initialized".to_string())
     }
-    drop(composite_lock);
 }
 
 #[command]
