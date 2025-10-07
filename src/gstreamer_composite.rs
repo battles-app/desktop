@@ -461,18 +461,45 @@ impl GStreamerComposite {
         }
 
         // Release pad only if all safety checks pass - with extra validation
+        println!("[Composite FX] 🔍 RELEASE CHECK: should_release={}, compositor_owns_pad={}, parent_check={}",
+                 should_release, compositor_owns_pad, peer_pad.parent().as_ref() == Some(compositor_ref));
+
         if should_release && compositor_owns_pad && peer_pad.parent().as_ref() == Some(compositor_ref) {
+            println!("[Composite FX] 📤 ATTEMPTING PAD RELEASE...");
+
+            // Check what pads the compositor currently has
+            println!("[Composite FX] 📊 Checking compositor pads...");
+            // Note: We can't easily enumerate all pads, but we can check our specific pad
+
             // Extra safety: try to release the pad but don't crash if it fails
             let release_result = std::panic::catch_unwind(|| {
-                compositor.release_request_pad(&peer_pad);
+                println!("[Composite FX] 📤 Calling compositor.release_request_pad()...");
+                let result = compositor.release_request_pad(&peer_pad);
+                println!("[Composite FX] 📤 release_request_pad() returned: {:?}", result);
+                result
             });
 
             match release_result {
-                Ok(_) => println!("[Composite FX] ✅ Released compositor pad during cleanup"),
-                Err(e) => println!("[Composite FX] ⚠️ Pad release failed (but continuing): {:?}", e),
+                Ok(_) => {
+                    println!("[Composite FX] ✅ Released compositor pad during cleanup");
+
+                    // Verify the pad was actually released by checking if it still has a parent
+                    let pad_parent = peer_pad.parent();
+                    let pad_parent_after = pad_parent.as_ref();
+                    println!("[Composite FX] 📊 After release: Pad parent is {:?}", pad_parent_after);
+                    let pad_still_has_parent = pad_parent_after.is_some();
+                    println!("[Composite FX] 📊 Pad still has parent after release: {}", pad_still_has_parent);
+                },
+                Err(e) => {
+                    println!("[Composite FX] ❌ Pad release panicked: {:?}", e);
+                    // Even if it panicked, check the pad's parent
+                    let pad_parent = peer_pad.parent();
+                    let pad_parent_after_panic = pad_parent.as_ref();
+                    println!("[Composite FX] 📊 After panic: Pad parent is {:?}", pad_parent_after_panic);
+                },
             }
         } else {
-            println!("[Composite FX] ⚠️ Pad already released or safety checks failed");
+            println!("[Composite FX] ⚠️ Pad already released or safety checks failed - not attempting release");
         }
 
         Ok(())
@@ -497,33 +524,49 @@ impl GStreamerComposite {
             .by_name("comp")
             .ok_or("Failed to get compositor element")?;
         
-        // Stop any existing FX first (with complete pad cleanup)
-        // This handles both EOS-initiated and manually-triggered cleanups
+        // Stop any existing FX first (proper cleanup with safe pad operations)
         if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
-            println!("[Composite FX] 🧹 Aggressive cleanup of existing FX pipeline (manual)...");
+            println!("[Composite FX] 🧹 Proper cleanup of existing FX pipeline (manual)...");
 
-            // Cast to Bin and aggressively cleanup all resources
+            // Cast to Bin and perform complete cleanup including pad release
             if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
-                // Use safe cleanup with double-cleanup prevention
+                // First try safe cleanup with pad operations
                 if let Err(e) = self.safe_cleanup_fx(&bin, &compositor) {
-                    println!("[Composite FX] ❌ Safe cleanup failed: {}", e);
-                }
+                    println!("[Composite FX] ❌ Safe cleanup failed: {}, trying emergency cleanup", e);
 
-                // THEN stop bin (non-blocking for instant cleanup)
-                let _ = bin.set_state(gst::State::Null);
-                println!("[Composite FX] ✅ FX bin stopped");
+                    // Emergency cleanup: force removal without pad operations
+                    let _ = bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&bin)
+                    });
 
-                // Force NULL state on all child elements (non-blocking for speed)
-                let iterator = bin.iterate_elements();
-                for item in iterator {
-                    if let Ok(element) = item {
-                        let _ = element.set_state(gst::State::Null);
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 Emergency: FX bin removed from pipeline");
+                            } else {
+                                println!("[Composite FX] ⚠️ Emergency: FX bin removal failed");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked: {:?}", e),
                     }
-                }
+                } else {
+                    // Safe cleanup succeeded, now remove the bin
+                    let _ = bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&bin)
+                    });
 
-                // Remove bin from pipeline (instant)
-                if pipeline.remove(&bin).is_ok() {
-                    println!("[Composite FX] 🧹 Memory cleanup completed");
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 FX bin removed from pipeline after safe cleanup");
+                            } else {
+                                println!("[Composite FX] ⚠️ FX bin removal failed after safe cleanup");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup: {:?}", e),
+                    }
                 }
             }
         }
@@ -965,53 +1008,49 @@ impl GStreamerComposite {
             }
         };
         
-        // Find and remove FX bin
+        // Find and remove FX bin (proper cleanup with safe pad operations)
         if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
-            println!("[Composite FX] 🧹 Manual stop: Cleaning up FX bin...");
+            println!("[Composite FX] 🧹 Manual stop: Proper cleanup of FX bin...");
 
-            // Cast to Bin and set all child elements to NULL to release resources
+            // Cast to Bin and perform complete cleanup
             if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
-                // Use safe cleanup with double-cleanup prevention
+                // Try safe cleanup with pad operations first
                 if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
-                    println!("[Composite FX] ❌ Safe cleanup failed during manual stop: {}", e);
-                }
+                    println!("[Composite FX] ❌ Safe cleanup failed during manual stop: {}, trying emergency", e);
 
-                // Set bin to NULL state (non-blocking) - with panic protection
-                let set_state_result = std::panic::catch_unwind(|| {
-                    fx_bin.set_state(gst::State::Null)
-                });
-                match set_state_result {
-                    Ok(_) => println!("[Composite FX] ✅ FX bin set to NULL state"),
-                    Err(e) => println!("[Composite FX] ⚠️ FX bin set_state panicked: {:?}", e),
-                }
+                    // Emergency cleanup: force removal without pad operations
+                    let _ = fx_bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&fx_bin)
+                    });
 
-                // Set all child elements to NULL (non-blocking) - with panic protection
-                let iterator_result = std::panic::catch_unwind(|| {
-                    fx_bin.iterate_elements()
-                });
-                if let Ok(iterator) = iterator_result {
-                    for item in iterator {
-                        if let Ok(element) = item {
-                            let _ = element.set_state(gst::State::Null);
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 Emergency: FX bin removed during manual stop");
+                            } else {
+                                println!("[Composite FX] ⚠️ Emergency: FX bin removal failed during manual stop");
+                            }
                         }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked during manual stop: {:?}", e),
                     }
                 } else {
-                    println!("[Composite FX] ⚠️ FX bin iterate_elements panicked");
-                }
+                    // Safe cleanup succeeded, now remove the bin
+                    let _ = fx_bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&fx_bin)
+                    });
 
-                // Remove bin from pipeline - with panic protection
-                let remove_result = std::panic::catch_unwind(|| {
-                    pipeline.remove(&fx_bin)
-                });
-                match remove_result {
-                    Ok(result) => {
-                        if result.is_ok() {
-                            println!("[Composite FX] ✅ FX bin removed from pipeline during manual stop");
-                        } else {
-                            println!("[Composite FX] ⚠️ FX bin removal failed during manual stop");
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 FX bin removed after safe cleanup (manual stop)");
+                            } else {
+                                println!("[Composite FX] ⚠️ FX bin removal failed after safe cleanup (manual stop)");
+                            }
                         }
+                        Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup (manual stop): {:?}", e),
                     }
-                    Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked during manual stop: {:?}", e),
                 }
 
                 println!("[Composite FX] ✅ FX branch removed and memory freed");
