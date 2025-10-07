@@ -862,50 +862,95 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // Try multiple chroma key approaches - start with most reliable
-            let chroma_element = {
-                // First try: chromahold element (often available)
-                if let Ok(mut chromahold) = ElementFactory::make("chromahold").name("fxchromakey").build() {
-                    let set_result = std::panic::catch_unwind(|| {
-                        chromahold.set_property("target-r", key_r);
-                        chromahold.set_property("target-g", key_g);
-                        chromahold.set_property("target-b", key_b);
-                        chromahold.set_property("tolerance", tolerance);
-                        chromahold.set_property("slope", similarity);
-                    });
+            // Try software-based chroma keying using appsink/appsrc
+            // This bypasses GStreamer plugin availability issues
+            println!("[Composite FX] 🎨 Using software chroma keying (appsink/appsrc approach)");
 
-                    if set_result.is_ok() {
-                        println!("[Composite FX] ✅ Using chromahold element for chroma keying");
-                        Some(chromahold)
-                    } else {
-                        println!("[Composite FX] ⚠️ Chromahold property setting failed");
-                        None
-                    }
-                }
-                // Second try: coloreffects with matrix mode
-                else if let Ok(mut coloreffects) = ElementFactory::make("coloreffects").name("fxchromakey").build() {
-                    let set_result = std::panic::catch_unwind(|| {
-                        coloreffects.set_property("matrix", "hsv");
-                    });
+            // Create appsink to capture frames for processing
+            let appsink = ElementFactory::make("appsink")
+                .name("chromakey_sink")
+                .property("emit-signals", true)
+                .property("sync", false)
+                .property("max-buffers", 2u32)
+                .property("drop", true)
+                .build()
+                .map_err(|_| "Failed to create chromakey appsink")?;
 
-                    if set_result.is_ok() {
-                        println!("[Composite FX] ✅ Using coloreffects element for chroma keying");
-                        Some(coloreffects)
-                    } else {
-                        println!("[Composite FX] ⚠️ Coloreffects property setting failed");
-                        None
-                    }
-                }
-                // Third try: alpha element (problematic enum)
-                else if let Ok(mut alpha) = ElementFactory::make("alpha").name("fxchromakey").build() {
-                    println!("[Composite FX] ⚠️ Using alpha element (may not work due to enum issues)");
-                    // Don't try to set method - just use default
-                    Some(alpha)
-                } else {
-                    println!("[Composite FX] ❌ No chroma key elements available");
-                    None
-                }
-            };
+            // Create appsrc to output processed frames
+            let appsrc = ElementFactory::make("appsrc")
+                .name("chromakey_src")
+                .property("emit-signals", false)
+                .property("is-live", true)
+                .property("format", gst::Format::Time)
+                .property("do-timestamp", true)
+                .build()
+                .map_err(|_| "Failed to create chromakey appsrc")?;
+
+            // Create a bin to hold our software chroma key pipeline
+            let chromakey_bin = gst::Bin::builder().name("chromakey_bin").build();
+
+            // Add elements to bin
+            chromakey_bin.add_many(&[&appsink, &appsrc])
+                .map_err(|_| "Failed to add elements to chromakey bin")?;
+
+            // Link appsrc -> appsink (they'll be connected via software processing)
+            // Note: We don't link them directly - we'll process frames in between
+
+            // Set up appsink callbacks for software chroma keying
+            let appsrc_weak = appsrc.downgrade();
+            let key_r_clone = key_r;
+            let key_g_clone = key_g;
+            let key_b_clone = key_b;
+            let tolerance_clone = tolerance;
+            let similarity_clone = similarity;
+
+            // Cast to AppSink to use set_callbacks
+            let appsink = appsink.dynamic_cast::<gstreamer_app::AppSink>()
+                .map_err(|_| "Failed to cast appsink")?;
+
+            appsink.set_callbacks(
+                gstreamer_app::AppSinkCallbacks::builder()
+                    .new_sample(move |appsink| {
+                        let sample = match appsink.pull_sample() {
+                            Ok(s) => s,
+                            Err(_) => return Ok(gst::FlowSuccess::Ok),
+                        };
+
+                        let buffer = match sample.buffer() {
+                            Some(b) => b,
+                            None => return Ok(gst::FlowSuccess::Ok),
+                        };
+
+                        // Apply software chroma keying
+                        let processed_buffer = Self::apply_software_chroma_key(
+                            buffer,
+                            key_r_clone,
+                            key_g_clone,
+                            key_b_clone,
+                            tolerance_clone,
+                            similarity_clone
+                        );
+
+                        // Push processed buffer to appsrc (cast to AppSrc)
+                        if let Some(appsrc) = appsrc_weak.upgrade() {
+                            if let Ok(appsrc) = appsrc.dynamic_cast::<gstreamer_app::AppSrc>() {
+                                let _ = appsrc.push_buffer(processed_buffer);
+                            }
+                        }
+
+                        Ok(gst::FlowSuccess::Ok)
+                    })
+                    .build(),
+            );
+
+            // Create ghost pads
+            let sink_pad = appsink.static_pad("sink")
+                .ok_or("Failed to get appsink sink pad")?;
+            let src_pad = appsrc.static_pad("src")
+                .ok_or("Failed to get appsrc src pad")?;
+
+            chromakey_bin.add_pad(&gst::GhostPad::with_target(&sink_pad).unwrap()).unwrap();
+            chromakey_bin.add_pad(&gst::GhostPad::with_target(&src_pad).unwrap()).unwrap();
 
             // BGRA caps for compositor (with alpha channel for transparency)
             let caps = gst::Caps::builder("video/x-raw")
@@ -918,16 +963,8 @@ impl GStreamerComposite {
                 .build()
                 .map_err(|_| "Failed to create capsfilter")?;
 
-            // Build pipeline based on whether chroma key element is available
-            let elements = if let Some(chroma_elem) = chroma_element {
-                // Pipeline with chroma key: videoconvert -> alpha -> videoscale -> capsfilter
-                vec![videoconvert.clone(), chroma_elem, videoscale.clone(), capsfilter.clone()]
-            } else {
-                // Fallback pipeline: videoconvert -> videoscale -> capsfilter
-                println!("[Composite FX] ⚠️ Chroma key elements not available - green screen will be visible");
-                println!("[Composite FX] 💡 Consider using overlay opacity controls or installing gst-plugins-good");
-                vec![videoconvert.clone(), videoscale.clone(), capsfilter.clone()]
-            };
+            // Build pipeline with chroma key bin: videoconvert -> chromakey_bin -> videoscale -> capsfilter
+            let elements = vec![videoconvert.clone(), chromakey_bin.upcast::<gst::Element>(), videoscale.clone(), capsfilter.clone()];
             (elements, capsfilter)
         } else {
             // No chroma key - BGRA caps for compositor
@@ -948,7 +985,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested - trying chromahold/coloreffects/alpha elements");
+            println!("[Composite FX] 🎨 Chroma key requested - using software-based processing (appsink/appsrc)");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
@@ -1448,6 +1485,98 @@ impl GStreamerComposite {
         Ok(())
     }
     
+    /// Apply software-based chroma keying to a video buffer
+    fn apply_software_chroma_key(
+        buffer: &gst::Buffer,
+        key_r: f64,
+        key_g: f64,
+        key_b: f64,
+        tolerance: f64,
+        _similarity: f64
+    ) -> gst::Buffer {
+        // Map the buffer to access pixel data
+        let map = match buffer.map_readable() {
+            Ok(m) => m,
+            Err(_) => {
+                println!("[Chroma Key] ❌ Failed to map buffer for reading");
+                return buffer.clone();
+            }
+        };
+
+        let data = map.as_slice();
+
+        // Assume BGRA format (4 bytes per pixel: B, G, R, A)
+        let bytes_per_pixel = 4;
+        if data.len() % bytes_per_pixel != 0 {
+            println!("[Chroma Key] ⚠️ Buffer size not divisible by 4, assuming BGRA format issue");
+            return buffer.clone();
+        }
+
+        let pixel_count = data.len() / bytes_per_pixel;
+        let mut processed_data = Vec::with_capacity(data.len());
+
+        // Convert key color to 0-255 range for comparison
+        let key_r_255 = (key_r * 255.0) as u8;
+        let key_g_255 = (key_g * 255.0) as u8;
+        let key_b_255 = (key_b * 255.0) as u8;
+
+        // Convert tolerance to a usable range (0-255 distance)
+        let tolerance_255 = (tolerance * 255.0) as u32;
+
+        // Process each pixel
+        for i in 0..pixel_count {
+            let offset = i * bytes_per_pixel;
+            let b = data[offset];     // Blue
+            let g = data[offset + 1]; // Green
+            let r = data[offset + 2]; // Red
+            let _a = data[offset + 3]; // Alpha (existing, unused)
+
+            // Calculate color distance (simple Euclidean distance in RGB space)
+            let dr = r as i32 - key_r_255 as i32;
+            let dg = g as i32 - key_g_255 as i32;
+            let db = b as i32 - key_b_255 as i32;
+
+            let distance_squared = dr * dr + dg * dg + db * db;
+            let distance = ((distance_squared as f64).sqrt()) as u32;
+
+            // Apply chroma key: if color is close to key color, make transparent
+            let new_alpha = if distance <= tolerance_255 {
+                0u8 // Fully transparent
+            } else {
+                255u8 // Fully opaque
+            };
+
+            // Write processed pixel (keep original RGB, modify alpha)
+            processed_data.push(b);
+            processed_data.push(g);
+            processed_data.push(r);
+            processed_data.push(new_alpha);
+        }
+
+        // Create new buffer with processed data
+        let mut new_buffer = gst::Buffer::with_size(processed_data.len())
+            .expect("Failed to create buffer");
+
+        // Copy processed data into buffer
+        {
+            let new_buffer_mut = new_buffer.get_mut().unwrap();
+            let mut map = new_buffer_mut.map_writable().unwrap();
+            map.as_mut_slice().copy_from_slice(&processed_data);
+        }
+
+        // Copy timestamps and other metadata (separate scope to avoid borrowing conflict)
+        {
+            let new_buffer_mut = new_buffer.get_mut().unwrap();
+            new_buffer_mut.set_pts(buffer.pts());
+            new_buffer_mut.set_dts(buffer.dts());
+            new_buffer_mut.set_duration(buffer.duration());
+        }
+
+        println!("[Chroma Key] ✅ Processed {} pixels, key color: RGB({}, {}, {}), tolerance: {}",
+                 pixel_count, key_r_255, key_g_255, key_b_255, tolerance_255);
+        new_buffer
+    }
+
     /// Perform emergency cleanup of any orphaned FX resources
     /// This can be called periodically to ensure no resources leak
     pub fn emergency_cleanup(&self) -> Result<(), String> {
