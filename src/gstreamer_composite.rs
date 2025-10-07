@@ -1,7 +1,7 @@
 // GStreamer composite pipeline for OBS-like functionality
 use gstreamer::prelude::*;
-use gstreamer::{self as gst, Pipeline};
-use gstreamer_app::AppSink;
+use gstreamer::{self as gst, Pipeline, Sample, FlowReturn};
+use gstreamer_app::{AppSink, AppSrc};
 use gstreamer_video;
 
 // Import HSV plugin for proper chroma keying
@@ -807,16 +807,16 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // Force consistent 30fps output with videorate
+        // Force consistent 30fps output with videorate (optimized for file playback)
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
-            .property("skip-to-first", true)   // Start fresh, ignore previous state
-            .property("drop-only", false)      // Allow duplication when input < target
-            .property("max-rate", 30i32)       // Cap to 30fps
+            .property("skip-to-first", true)
+            .property("drop-only", false)   // allow duplication when input < target
+            .property("max-rate", 30i32)    // cap to 30fps
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
-        // Force 30fps output regardless of input framerate
+        // Caps filter to force 30fps output
         let rate_caps = gst::Caps::builder("video/x-raw")
             .field("framerate", gst::Fraction::new(30, 1))
             .build();
@@ -827,7 +827,7 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
 
-        println!("[Composite FX] 🕐 videorate configured - drop-only=false, max-rate=30fps");
+        println!("[Composite FX] 🕐 videorate configured - drop-only=false, max-rate=30fps, allows smooth file playback");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -870,17 +870,7 @@ impl GStreamerComposite {
                     .map_err(|_| "Failed to create alpha element")?;
 
                 // Configure alpha for custom RGB chroma keying
-                // Try setting method with error handling - fall back if it fails
-                let method_set_result = std::panic::catch_unwind(|| {
-                    alpha.set_property("method", 0u32);  // Try custom RGB chroma key
-                });
-
-                if method_set_result.is_err() {
-                    println!("[Composite FX] ⚠️ Alpha method property failed - trying string method");
-                    // Try setting as string
-                    let _ = alpha.set_property_from_str("method", "custom");
-                }
-
+                alpha.set_property_from_str("method", "custom");
                 alpha.set_property("target-r", (key_r * 255.0) as u32);
                 alpha.set_property("target-g", (key_g * 255.0) as u32);
                 alpha.set_property("target-b", (key_b * 255.0) as u32);
@@ -988,8 +978,6 @@ impl GStreamerComposite {
         // Link base elements: videorate enforces 30fps, then to videoconvert
         gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert])
             .map_err(|_| "Failed to link base FX elements")?;
-        videoconvert.link(&videoscale)
-            .map_err(|_| "Failed to link videoconvert to videoscale")?;
 
         // Link chroma key pipeline
         if use_chroma_key {
