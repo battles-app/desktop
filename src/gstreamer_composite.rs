@@ -748,6 +748,7 @@ impl GStreamerComposite {
                 .property("noise-level", noise_level as i32)
                 .property("black-sensitivity", 100u32)  // Reduce black holes
                 .property("white-sensitivity", 100u32)  // Reduce white spill
+                .property_from_str("qos", "false")     // Disable QoS for real-time processing
                 .build()
                 .map_err(|e| format!("Failed to create alpha element: {}", e))?;
             
@@ -784,11 +785,12 @@ impl GStreamerComposite {
 
         // Add elements to bin - conditionally include chroma keying
         if let Some(ref alpha) = chroma_element {
-            // Pipeline with chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> alpha -> videoscale -> capsfilter
+            // Optimized pipeline for real-time chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> alpha -> videoscale -> capsfilter
+            // This ensures timing is synchronized early, then chroma key processes synchronized frames for optimal real-time performance
             fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
 
-            // Link elements with chroma key in the chain
+            // Link elements with chroma key in the chain - optimized for real-time performance
             gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
                 .map_err(|_| "Failed to link FX elements with chroma key")?;
             
