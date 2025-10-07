@@ -25,8 +25,6 @@ pub struct GStreamerComposite {
     pipeline_height: Arc<RwLock<u32>>,
     // Add mutex for pad operations to prevent race conditions
     pad_operation_mutex: Arc<parking_lot::Mutex<()>>,
-    // GPU-accelerated chroma key FX bin
-    fx_bin: Option<FxKeyBin>,
 }
 
 #[derive(Clone, Debug)]
@@ -55,8 +53,6 @@ pub struct FxPlaybackState {
     pub cleanup_in_progress: Arc<parking_lot::Mutex<bool>>, // Prevent double cleanup
     pub playback_id: u64, // Unique ID to prevent old EOS probes from interfering
 }
-
-/// Real-time GPU-accelerated chroma key FX source bin with ultra-low latency
 pub struct FxKeyBin {
     pub bin: gst::Bin,
     decode: gst::Element,         // decodebin3
@@ -247,8 +243,7 @@ impl GStreamerComposite {
             pipeline_fps: Arc::new(RwLock::new(30)),
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
-            pad_operation_mutex: Arc::new(parking_lot::Mutex::new(())),
-            fx_bin: None,
+            pad_operation_mutex: Arc::new(parking_lot::Mutex::new(()))
         })
     }
     
@@ -455,34 +450,6 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to start pipeline: {}", e))?;
         
         println!("[Composite] ✅ Composite pipeline started successfully!");
-
-        // Initialize the GPU-accelerated chroma key FX bin
-        match FxKeyBin::new("fx") {
-            Ok(fx_bin) => {
-                // Add the FX bin to the pipeline
-                pipeline.add(&fx_bin.bin)
-                    .map_err(|e| format!("Failed to add FX bin to pipeline: {:?}", e))?;
-
-                // Link FX bin src pad to compositor sink_1
-                let comp_sink1 = pipeline.by_name("comp")
-                    .and_then(|comp| comp.dynamic_cast::<gst::Element>().ok())
-                    .and_then(|comp| comp.request_pad_simple("sink_1"))
-                    .ok_or("Failed to get compositor sink_1 pad")?;
-
-                let fx_src_pad = fx_bin.bin.static_pad("src")
-                    .ok_or("Failed to get FX bin src pad")?;
-
-                fx_src_pad.link(&comp_sink1)
-                    .map_err(|e| format!("Failed to link FX bin to compositor: {:?}", e))?;
-
-                self.fx_bin = Some(fx_bin);
-                println!("[Composite] ✅ GPU-accelerated chroma key FX bin initialized and linked");
-            },
-            Err(e) => {
-                println!("[Composite] ⚠️ Failed to initialize GPU FX bin: {:?}", e);
-                println!("[Composite] Continuing without GPU acceleration (CPU fallback not implemented yet)");
-            }
-        }
 
         self.pipeline = Some(pipeline);
         Ok(())
@@ -709,17 +676,9 @@ impl GStreamerComposite {
 
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
-        println!("[Composite FX] 🎬 Playing FX from file (GPU-accelerated chroma key)");
+        println!("[Composite FX] 🎬 Playing FX from file (CPU-based with timer fixes)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
-
-        // Check if FxKeyBin is available
-        let fx_bin = match &self.fx_bin {
-            Some(fx) => fx,
-            None => {
-                return Err("[Composite FX] ❌ GPU FX bin not available - please restart the composite pipeline".to_string());
-            }
-        };
 
         // Get the pipeline
         let pipeline = match &self.pipeline {
@@ -728,69 +687,276 @@ impl GStreamerComposite {
                 return Err("[Composite FX] ❌ No pipeline running - please select a camera first!".to_string());
             }
         };
-        
+
+        // Get compositor element
+        let compositor = pipeline
+            .by_name("comp")
+            .ok_or("Failed to get compositor element")?;
+
+        // Stop any existing FX first (proper cleanup with safe pad operations)
+        if let Some(existing_fx_bin) = pipeline.by_name("fxbin") {
+            println!("[Composite FX] 🧹 Proper cleanup of existing FX pipeline (manual)...");
+
+            // Cast to Bin and perform complete cleanup including pad release
+            if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
+                // First try safe cleanup with pad operations
+                if let Err(e) = self.safe_cleanup_fx(&bin, &compositor) {
+                    println!("[Composite FX] ❌ Safe cleanup failed: {}, trying emergency cleanup", e);
+
+                    // Emergency cleanup: force removal without pad operations
+                    let _ = bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&bin)
+                    });
+
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 Emergency: FX bin removed from pipeline");
+                            } else {
+                                println!("[Composite FX] ⚠️ Emergency: FX bin removal failed");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked: {:?}", e),
+                    }
+                } else {
+                    // Safe cleanup succeeded, now remove the bin
+                    let _ = bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&bin)
+                    });
+
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 FX bin removed from pipeline after safe cleanup");
+                            } else {
+                                println!("[Composite FX] ⚠️ FX bin removal failed after safe cleanup");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup: {:?}", e),
+                    }
+                }
+            }
+        }
+
+        // Clear FX state to prevent double-release
+        *self.fx_state.write() = None;
+
+        // Ensure pipeline is in playing state after cleanup
+        pipeline.set_state(gst::State::Playing).ok();
+
+        // Create NEW FX state for this playback (AFTER cleanup, BEFORE pad request)
         // Generate unique playback ID for this FX
         let playback_id = FX_PLAYBACK_COUNTER.fetch_add(1, Ordering::SeqCst);
 
-        // Create FX state for this playback
         *self.fx_state.write() = Some(FxPlaybackState {
             file_url: file_path.clone(),
             keycolor: keycolor.clone(),
             tolerance,
             similarity,
             use_chroma_key,
-            compositor_sink_pad: None, // FxKeyBin handles its own linking
+            compositor_sink_pad: None, // Will be set when pad is requested
             cleanup_in_progress: Arc::new(parking_lot::Mutex::new(false)),
             playback_id,
         });
 
+        println!("[Composite FX] 🚀 Creating uridecodebin (no disk I/O!)...");
+
+        // Create filesrc with typefind for instant format detection
+        use gstreamer::ElementFactory;
+
         let file_uri = format!("file:///{}", file_path.replace("\\", "/"));
         println!("[Composite FX] 📁 File URI: {}", file_uri);
 
-        // FLUSH BEFORE: Reset timing for clean start
-        if let Err(e) = fx_bin.flush() {
-            println!("[Composite FX] ⚠️ Pre-flush failed: {:?}", e);
-        }
+        // Create unique uridecodebin name for each play to prevent state carryover
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let bin_name = format!("fxbin_{}", timestamp);
+        println!("[Composite FX] 🏷️ Unique bin name: {}", bin_name);
 
-        // Set the URI for the new video
-        fx_bin.set_uri(&file_uri)
-            .map_err(|e| format!("Failed to set FX URI: {:?}", e))?;
+        // Build ultra-low-latency FX pipeline: decode → convert → scale → filter
+        let fx_bin = gst::Bin::new(Some(&bin_name));
 
-        // Configure chroma key based on parameters
-        fx_bin.set_key_enabled(use_chroma_key)
-            .map_err(|e| format!("Failed to configure chroma key: {:?}", e))?;
+        // Create elements with unique names to prevent state carryover
+        let decode = gst::ElementFactory::make("uridecodebin").name(&format!("decode_{}", timestamp)).build()
+            .map_err(|_| "Failed to create uridecodebin")?;
+        let vconv = gst::ElementFactory::make("videoconvert").name(&format!("vconv_{}", timestamp)).build()
+            .map_err(|_| "Failed to create videoconvert")?;
+        let vscale = gst::ElementFactory::make("videoscale").name(&format!("vscale_{}", timestamp)).build()
+            .map_err(|_| "Failed to create videoscale")?;
+        let vrate = gst::ElementFactory::make("videorate").name(&format!("vrate_{}", timestamp)).build()
+            .map_err(|_| "Failed to create videorate")?;
+        let caps = gst::ElementFactory::make("capsfilter").name(&format!("caps_{}", timestamp)).build()
+            .map_err(|_| "Failed to create capsfilter")?;
+        let identity = gst::ElementFactory::make("identity").name(&format!("identity_{}", timestamp)).build()
+            .map_err(|_| "Failed to create identity")?;
 
-        // If chroma key is enabled, set the key parameters
-        if use_chroma_key {
-            // Parse keycolor and set parameters
-            // For now, use default green chroma key settings
-            // TODO: Parse keycolor and set custom parameters
-            fx_bin.set_key_params("green", 18, 1, 80, 80)
-                .map_err(|e| format!("Failed to set chroma key parameters: {:?}", e))?;
-            println!("[Composite FX] 🎨 Chroma key enabled with default green settings");
+        // Configure elements for low latency
+        decode.set_property("uri", &file_uri);
+        decode.set_property("use-buffering", &false); // No buffering for instant playback
+
+        // Force 30fps playback for consistent timing
+        caps.set_property("caps", &gst::Caps::builder("video/x-raw")
+            .field("framerate", &gst::Fraction::new(30, 1))
+            .build());
+
+        // Configure identity for real-time sync (blocks buffers to enforce timing)
+        identity.set_property("sync", &true);
+
+        // Add elements to bin
+        fx_bin.add_many(&[&decode, &vconv, &vscale, &vrate, &caps, &identity])
+            .map_err(|_| "Failed to add elements to FX bin")?;
+
+        // Link static elements (dynamic decode pad links to vconv later)
+        gst::Element::link_many(&[&vconv, &vscale, &vrate, &caps, &identity])
+            .map_err(|_| "Failed to link FX elements")?;
+
+        // Create ghost src pad from identity
+        let final_src_pad = identity.static_pad("src").unwrap();
+        let ghost_pad = gst::GhostPad::with_target(&final_src_pad)
+            .map_err(|_| "Failed to create ghost pad")?;
+        ghost_pad.set_active(true).map_err(|_| "Failed to activate ghost pad")?;
+        fx_bin.add_pad(&ghost_pad).map_err(|_| "Failed to add ghost pad")?;
+
+        // Dynamic link: decodebin3 video pad → vconv.sink
+        let vconv_sink = vconv.static_pad("sink").unwrap();
+        decode.connect_pad_added(move |_dbin, src_pad| {
+            let is_video = src_pad
+                .current_caps()
+                .and_then(|c| c.structure(0).map(|s| s.name().starts_with("video/")))
+                .unwrap_or(false);
+            if is_video && !vconv_sink.is_linked() {
+                let _ = src_pad.link(&vconv_sink);
+            }
+        });
+
+        // Add FX bin to pipeline
+        pipeline.add(&fx_bin).map_err(|e| format!("Failed to add FX bin to pipeline: {:?}", e))?;
+
+        // Configure compositor pad properties BEFORE linking
+        let comp_sink_pad = compositor
+            .request_pad_simple("sink_1")
+            .ok_or("Failed to request compositor sink pad")?;
+
+        // Set pad properties for positioning and opacity
+        let comp_width = *self.pipeline_width.read() as i32;
+        let comp_height = *self.pipeline_height.read() as i32;
+
+        // Calculate FX positioning: center and fill height
+        // Assume 16:9 FX aspect ratio for horizontal videos
+        let fx_aspect = 16.0 / 9.0;
+        let comp_aspect = comp_width as f64 / comp_height as f64;
+
+        let (fx_width, fx_height, fx_xpos, fx_ypos) = if comp_aspect > fx_aspect {
+            // Compositor is wider than FX aspect ratio: fit to height, center horizontally
+            let fx_height = comp_height;
+            let fx_width = (comp_height as f64 * fx_aspect) as i32;
+            let fx_xpos = (comp_width - fx_width) / 2;
+            (fx_width, fx_height, fx_xpos, 0)
         } else {
-            println!("[Composite FX] 🎨 Chroma key disabled - clean passthrough");
+            // Compositor is taller than FX aspect ratio: fit to width, center vertically
+            let fx_width = comp_width;
+            let fx_height = (comp_width as f64 / fx_aspect) as i32;
+            let fx_ypos = (comp_height - fx_height) / 2;
+            (fx_width, fx_height, 0, fx_ypos)
+        };
+
+        // Set pad properties
+        comp_sink_pad.set_property("zorder", &1i32);
+        comp_sink_pad.set_property("alpha", &1.0f64);
+        comp_sink_pad.set_property("xpos", &fx_xpos);
+        comp_sink_pad.set_property("ypos", &fx_ypos);
+        comp_sink_pad.set_property("width", &fx_width);
+        comp_sink_pad.set_property("height", &fx_height);
+
+        // Store the sink pad for proper cleanup
+        if let Some(ref mut fx_state) = *self.fx_state.write() {
+            fx_state.compositor_sink_pad = Some(comp_sink_pad.clone());
         }
 
-        // FLUSH AFTER: Start with clean timing
-        if let Err(e) = fx_bin.flush() {
-            println!("[Composite FX] ⚠️ Post-flush failed: {:?}", e);
+        // Verify properties were set
+        println!("[Composite FX] ✅ Pad properties set: zorder=1, alpha={:.2}, pos=({}, {}), size={}x{}",
+                 1.0, fx_xpos, fx_ypos, fx_width, fx_height);
+
+        // CRITICAL: Add timestamp offset probe to align media timestamps to pipeline running-time
+        // This prevents "late frames" → "QoS catch-up sprint" on replays
+        println!("[Composite FX] ⏱️ Setting up timestamp offset probe...");
+        let pipeline_weak_ts = pipeline.downgrade();
+
+        let probe_result = std::panic::catch_unwind(|| {
+            ghost_pad.add_probe(
+                gst::PadProbeType::BUFFER,  // No BLOCK flag = instant start, no delay!
+                move |pad, info| {
+                    // Add panic protection inside the probe callback too
+                    let result = std::panic::catch_unwind(|| {
+                        if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
+                            if let Some(pipeline) = pipeline_weak_ts.upgrade() {
+                                if let Some(clock) = pipeline.clock() {
+                                    if let (Some(now), Some(pts), Some(base)) = (clock.time(), buf.pts(), pipeline.base_time()) {
+                                        // running-time = clock-time - base-time
+                                        let running = now.saturating_sub(base);
+
+                                        if running > pts {
+                                            // Align media to "now" - prevents catch-up sprint
+                                            let delta = (running.nseconds() - pts.nseconds()) as i64;
+                                            pad.set_offset(delta);
+                                            println!("[Composite FX] ⏱️ Applied ts-offset {} ns to align FX to running-time", delta);
+                                        } else {
+                                            println!("[Composite FX] ⏱️ No ts-offset needed (pts >= running-time)");
+                                        }
+                                    }
+                                }
+                            }
+                            // Remove this probe after first buffer (unblocks flow)
+                            gst::PadProbeReturn::Remove
+                        } else {
+                            gst::PadProbeReturn::Ok
+                        }
+                    });
+
+                    match result {
+                        Ok(ret) => ret,
+                        Err(e) => {
+                            println!("[Composite FX] ❌ Timestamp probe panicked: {:?}", e);
+                            gst::PadProbeReturn::Remove
+                        }
+                    }
+                },
+            )
+        });
+
+        match probe_result {
+            Ok(_) => println!("[Composite FX] ✅ Timestamp offset probe added successfully"),
+            Err(e) => println!("[Composite FX] ⚠️ Failed to add timestamp probe: {:?}", e),
         }
 
-        // Set up EOS probe for auto-cleanup when video ends
+        // Sync FX bin state with pipeline FIRST (faster than syncing after link)
+        fx_bin.sync_state_with_parent()
+            .map_err(|_| "Failed to sync FX bin state".to_string())?;
+
+        // Link FX bin to compositor (happens instantly while bin is already playing)
+        println!("[Composite FX] 🔗 Linking ghost pad to compositor sink pad...");
+        ghost_pad
+            .link(&comp_sink_pad)
+            .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
+
+        println!("[Composite FX] ✅ Pad linking successful!");
+        println!("[Composite FX] 🔗 Link status: ghost_pad.is_linked()={}, comp_sink_pad.is_linked()={}",
+                 ghost_pad.is_linked(), comp_sink_pad.is_linked());
+
+        // Add EOS (End-of-Stream) probe to detect when video finishes naturally
         println!("[Composite FX] 📡 Adding EOS probe for auto-cleanup (playback_id: {})...", playback_id);
-
-        // Get the FxKeyBin's src pad for EOS monitoring
-        let fx_src_pad = fx_bin.bin.static_pad("src")
-            .ok_or("Failed to get FX bin src pad for EOS probe")?;
-
-        let fx_bin_weak = fx_bin.bin.downgrade();
+        let fx_bin_weak = fx_bin.downgrade();
         let pipeline_weak = pipeline.downgrade();
         let fx_state_weak = Arc::downgrade(&self.fx_state);
         let pad_mutex_weak = Arc::downgrade(&self.pad_operation_mutex);
         let eos_playback_id = playback_id; // Capture current playback ID
 
-        fx_src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+        ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
             if let Some(gst::PadProbeData::Event(ref event)) = info.data {
                 if event.type_() == gst::EventType::Eos {
                     println!("[Composite FX] 🎬 Video finished (EOS) - auto-cleaning in 100ms...");
@@ -887,8 +1053,9 @@ impl GStreamerComposite {
             }
         });
 
-        println!("[Composite FX] ✅ GPU-accelerated FX playback started");
-        println!("[Composite FX] 🔍 Pipeline: decodebin3 → videoconvert → glupload → glcolorconvert → tee → [glalpha|queue] → inputselector → glcolorconvert → capsfilter → compositor.sink_1");
+        println!("[Composite FX] ✅ FX added to pipeline - playing from file");
+        println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
+        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
 
         Ok(())
     }
