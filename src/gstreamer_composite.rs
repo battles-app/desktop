@@ -862,12 +862,30 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // TEMPORARY: Skip chroma key elements for now to avoid crashes
-            // TODO: Implement proper chroma keying when GStreamer plugins are available
-            println!("[Composite FX] ⚠️ Chroma key requested but using fallback (no keying applied)");
-            println!("[Composite FX] 💡 Video will be composited with overlay opacity controls instead");
+            // Try alpha element with proper enum handling for green screen chroma key
+            let chroma_element = if let Ok(mut alpha) = ElementFactory::make("alpha").name("fxchromakey").build() {
+                // Try setting method property - use green method (1) for green screen
+                // Note: set_property returns () not Result, so we assume it works or catch panics
+                let set_result = std::panic::catch_unwind(|| {
+                    alpha.set_property("method", 1i32);
+                });
 
-            // Just use BGRA caps for compositor compatibility (alpha channel available for blending)
+                match set_result {
+                    Ok(_) => {
+                        println!("[Composite FX] ✅ Using alpha element with green method for chroma keying");
+                        Some(alpha)
+                    },
+                    Err(_) => {
+                        println!("[Composite FX] ⚠️ Alpha method property failed (panic)");
+                        None
+                    }
+                }
+            } else {
+                println!("[Composite FX] ⚠️ Alpha element not available");
+                None
+            };
+
+            // BGRA caps for compositor (with alpha channel for transparency)
             let caps = gst::Caps::builder("video/x-raw")
                 .field("format", "BGRA")
                 .build();
@@ -878,8 +896,16 @@ impl GStreamerComposite {
                 .build()
                 .map_err(|_| "Failed to create capsfilter")?;
 
-            // Pipeline without chroma key elements: videoconvert -> videoscale -> capsfilter
-            let elements = vec![videoconvert.clone(), videoscale.clone(), capsfilter.clone()];
+            // Build pipeline based on whether chroma key element is available
+            let elements = if let Some(chroma_elem) = chroma_element {
+                // Pipeline with chroma key: videoconvert -> alpha -> videoscale -> capsfilter
+                vec![videoconvert.clone(), chroma_elem, videoscale.clone(), capsfilter.clone()]
+            } else {
+                // Fallback pipeline: videoconvert -> videoscale -> capsfilter
+                println!("[Composite FX] ⚠️ Chroma key elements not available - green screen will be visible");
+                println!("[Composite FX] 💡 Consider using overlay opacity controls or installing gst-plugins-good");
+                vec![videoconvert.clone(), videoscale.clone(), capsfilter.clone()]
+            };
             (elements, capsfilter)
         } else {
             // No chroma key - BGRA caps for compositor
@@ -900,8 +926,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested - using fallback pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
-            println!("[Composite FX] 💡 No actual chroma keying applied - use overlay opacity controls for blending");
+            println!("[Composite FX] 🎨 Chroma key requested - pipeline will include alpha element if available");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
@@ -1303,7 +1328,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
+        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → identity_sync → videoconvert → [chroma elements] → videoscale → capsfilter");
         
         Ok(())
     }
