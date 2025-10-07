@@ -730,7 +730,7 @@ impl GStreamerComposite {
         // Set up appsink callbacks for frame processing
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let _wgpu_renderer = self.wgpu_renderer.as_mut().unwrap();
+        // WGPU renderer is optional - only used for FX processing
 
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -746,11 +746,21 @@ impl GStreamerComposite {
                     let jpeg_data = map.as_slice();
 
                     // Broadcast JPEG frame to WebSocket clients
-                    if let Some(sender) = &*frame_sender.read() {
-                        println!("[Composite] 📡 Sending frame to WebSocket ({} bytes)", jpeg_data.len());
-                        let _ = sender.send(jpeg_data.to_vec());
-                    } else {
-                        println!("[Composite] ⚠️ No frame sender available for WebSocket");
+                    match frame_sender.read().as_ref() {
+                        Some(sender) => {
+                            println!("[Composite] 📡 Sending frame to WebSocket ({} bytes)", jpeg_data.len());
+                            match sender.send(jpeg_data.to_vec()) {
+                                Ok(_) => {
+                                    // Frame sent successfully
+                                }
+                                Err(e) => {
+                                    println!("[Composite] ❌ Failed to send frame: {}", e);
+                                }
+                            }
+                        }
+                        None => {
+                            println!("[Composite] ⚠️ Frame sender not available - pipeline may not be initialized properly");
+                        }
                     }
 
                     Ok(gst::FlowSuccess::Ok)
