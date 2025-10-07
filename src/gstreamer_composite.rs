@@ -862,27 +862,49 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // Try alpha element with proper enum handling for green screen chroma key
-            let chroma_element = if let Ok(mut alpha) = ElementFactory::make("alpha").name("fxchromakey").build() {
-                // Try setting method property - use green method (1) for green screen
-                // Note: set_property returns () not Result, so we assume it works or catch panics
-                let set_result = std::panic::catch_unwind(|| {
-                    alpha.set_property("method", 1i32);
-                });
+            // Try multiple chroma key approaches - start with most reliable
+            let chroma_element = {
+                // First try: chromahold element (often available)
+                if let Ok(mut chromahold) = ElementFactory::make("chromahold").name("fxchromakey").build() {
+                    let set_result = std::panic::catch_unwind(|| {
+                        chromahold.set_property("target-r", key_r);
+                        chromahold.set_property("target-g", key_g);
+                        chromahold.set_property("target-b", key_b);
+                        chromahold.set_property("tolerance", tolerance);
+                        chromahold.set_property("slope", similarity);
+                    });
 
-                match set_result {
-                    Ok(_) => {
-                        println!("[Composite FX] ✅ Using alpha element with green method for chroma keying");
-                        Some(alpha)
-                    },
-                    Err(_) => {
-                        println!("[Composite FX] ⚠️ Alpha method property failed (panic)");
+                    if set_result.is_ok() {
+                        println!("[Composite FX] ✅ Using chromahold element for chroma keying");
+                        Some(chromahold)
+                    } else {
+                        println!("[Composite FX] ⚠️ Chromahold property setting failed");
                         None
                     }
                 }
-            } else {
-                println!("[Composite FX] ⚠️ Alpha element not available");
-                None
+                // Second try: coloreffects with matrix mode
+                else if let Ok(mut coloreffects) = ElementFactory::make("coloreffects").name("fxchromakey").build() {
+                    let set_result = std::panic::catch_unwind(|| {
+                        coloreffects.set_property("matrix", "hsv");
+                    });
+
+                    if set_result.is_ok() {
+                        println!("[Composite FX] ✅ Using coloreffects element for chroma keying");
+                        Some(coloreffects)
+                    } else {
+                        println!("[Composite FX] ⚠️ Coloreffects property setting failed");
+                        None
+                    }
+                }
+                // Third try: alpha element (problematic enum)
+                else if let Ok(mut alpha) = ElementFactory::make("alpha").name("fxchromakey").build() {
+                    println!("[Composite FX] ⚠️ Using alpha element (may not work due to enum issues)");
+                    // Don't try to set method - just use default
+                    Some(alpha)
+                } else {
+                    println!("[Composite FX] ❌ No chroma key elements available");
+                    None
+                }
             };
 
             // BGRA caps for compositor (with alpha channel for transparency)
@@ -926,7 +948,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested - pipeline will include alpha element if available");
+            println!("[Composite FX] 🎨 Chroma key requested - trying chromahold/coloreffects/alpha elements");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
@@ -1328,7 +1350,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → identity_sync → videoconvert → [chroma elements] → videoscale → capsfilter");
+        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → identity_sync → videoconvert → [chroma key] → videoscale → capsfilter");
         
         Ok(())
     }
