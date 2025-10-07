@@ -862,19 +862,12 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // Use alpha element for chroma keying - more reliable and widely available
-            let alpha = ElementFactory::make("alpha")
-                .name("fxchromakey")
-                .property("method", 0i32)  // 0 = custom color, 1 = green, 2 = blue
-                .property("target-r", key_r)
-                .property("target-g", key_g)
-                .property("target-b", key_b)
-                .property("angle", tolerance * 50.0)  // Smaller angle for tighter keying (degrees)
-                .property("noise-level", similarity)   // Noise level for edge smoothing
-                .build()
-                .map_err(|_| "Failed to create alpha for chroma key")?;
+            // TEMPORARY: Skip chroma key elements for now to avoid crashes
+            // TODO: Implement proper chroma keying when GStreamer plugins are available
+            println!("[Composite FX] ⚠️ Chroma key requested but using fallback (no keying applied)");
+            println!("[Composite FX] 💡 Video will be composited with overlay opacity controls instead");
 
-            // BGRA caps for compositor (with alpha channel for transparency)
+            // Just use BGRA caps for compositor compatibility (alpha channel available for blending)
             let caps = gst::Caps::builder("video/x-raw")
                 .field("format", "BGRA")
                 .build();
@@ -885,8 +878,8 @@ impl GStreamerComposite {
                 .build()
                 .map_err(|_| "Failed to create capsfilter")?;
 
-            // Pipeline with chroma key: videoconvert -> alpha -> videoscale -> capsfilter
-            let elements = vec![videoconvert.clone(), alpha, videoscale.clone(), capsfilter.clone()];
+            // Pipeline without chroma key elements: videoconvert -> videoscale -> capsfilter
+            let elements = vec![videoconvert.clone(), videoscale.clone(), capsfilter.clone()];
             (elements, capsfilter)
         } else {
             // No chroma key - BGRA caps for compositor
@@ -907,7 +900,8 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key pipeline: uridecodebin → videorate → identity_sync → videoconvert → alpha → videoscale → capsfilter");
+            println!("[Composite FX] 🎨 Chroma key requested - using fallback pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
+            println!("[Composite FX] 💡 No actual chroma keying applied - use overlay opacity controls for blending");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
