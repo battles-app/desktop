@@ -883,6 +883,11 @@ async fn start_system_monitor() {
                 } else {
                     println!("  🔧 Pipeline State: No pipeline");
                 }
+
+                // Perform emergency cleanup check
+                if let Err(e) = composite.emergency_cleanup() {
+                    println!("  🚨 Emergency cleanup failed: {}", e);
+                }
             }
 
             println!("  💾 System: Monitoring active");
