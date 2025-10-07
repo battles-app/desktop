@@ -459,11 +459,21 @@ async fn create_monitor_window(
     let native_monitors = app.available_monitors().unwrap_or_default();
     println!("Found {} native monitors", native_monitors.len());
 
+    // Log all available monitors for debugging
+    for (i, monitor) in native_monitors.iter().enumerate() {
+        let pos = monitor.position();
+        let size = monitor.size();
+        let scale = monitor.scale_factor();
+        println!("Monitor {}: name='{:?}', pos=({},{}) size={}x{}, scale={}",
+                 i, monitor.name(), pos.x, pos.y, size.width, size.height, scale);
+    }
+
     if monitor_index >= native_monitors.len() {
         return Err(format!("Invalid monitor index: {} (total monitors: {})", monitor_index, native_monitors.len()));
     }
 
     let native_monitor = &native_monitors[monitor_index];
+    println!("Selected monitor {}: {:?}", monitor_index, native_monitor.name());
     let monitor_pos = native_monitor.position();
     let monitor_size = native_monitor.size();
     let scale_factor = native_monitor.scale_factor();
@@ -499,7 +509,8 @@ async fn create_monitor_window(
 
     // Use WebviewWindowBuilder which supports URL in Tauri v2
     // Pass the authenticated URL directly - no loading page needed
-    let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(url.parse().unwrap()))
+    let parsed_url = url.parse().map_err(|e| format!("Invalid URL '{}': {}", url, e))?;
+    let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(parsed_url))
         .title("TV Monitor")
         .inner_size(logical_width, logical_height)
         .position(logical_x, logical_y)
@@ -521,10 +532,20 @@ async fn create_monitor_window(
     });
 
     // Show and focus the window
+    println!("Attempting to show monitor window...");
     window.show()
         .map_err(|e| format!("Failed to show monitor window: {}", e))?;
+    println!("Monitor window shown successfully");
+
+    println!("Attempting to focus monitor window...");
     window.set_focus()
         .map_err(|e| format!("Failed to focus monitor window: {}", e))?;
+    println!("Monitor window focused successfully");
+
+    // Verify window state
+    let is_visible = window.is_visible().unwrap_or(false);
+    let is_focused = window.is_focused().unwrap_or(false);
+    println!("Monitor window state: visible={}, focused={}", is_visible, is_focused);
 
     println!("Monitor window created successfully on monitor {} at logical position ({}, {}) with size {}x{}",
              monitor_index, logical_x, logical_y, logical_width, logical_height);
