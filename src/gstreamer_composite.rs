@@ -16,6 +16,8 @@ pub struct GStreamerComposite {
     pipeline_fps: Arc<RwLock<u32>>,
     pipeline_width: Arc<RwLock<u32>>,
     pipeline_height: Arc<RwLock<u32>>,
+    // Add mutex for pad operations to prevent race conditions
+    pad_operation_mutex: Arc<parking_lot::Mutex<()>>,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +43,7 @@ pub struct FxPlaybackState {
     pub similarity: f64,       // 0.0 - 1.0
     pub use_chroma_key: bool,
     pub compositor_sink_pad: Option<gst::Pad>, // Store sink pad for proper cleanup
+    pub cleanup_in_progress: Arc<parking_lot::Mutex<bool>>, // Prevent double cleanup
 }
 
 impl Default for LayerSettings {
@@ -71,6 +74,7 @@ impl GStreamerComposite {
             pipeline_fps: Arc::new(RwLock::new(30)),
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
+            pad_operation_mutex: Arc::new(parking_lot::Mutex::new(())),
         })
     }
     
@@ -347,7 +351,89 @@ impl GStreamerComposite {
     pub fn get_pipeline_state(&self) -> Option<gst::State> {
         self.pipeline.as_ref().map(|p| p.current_state())
     }
-    
+
+    /// Safely flush a media pad with proper synchronization
+    fn safe_flush_pad(&self, pad: &gst::Pad, compositor: &gst::Element) -> Result<(), String> {
+        // Acquire mutex to prevent concurrent pad operations
+        let _guard = self.pad_operation_mutex.lock();
+
+        // Double-check pad is still valid and belongs to compositor
+        if pad.parent().as_ref() != Some(compositor.upcast_ref()) {
+            println!("[Composite FX] ⚠️ Pad no longer belongs to compositor, skipping flush");
+            return Ok(());
+        }
+
+        // Send flush events - these must be done atomically
+        match pad.send_event(gst::event::FlushStart::new()) {
+            true => {
+                println!("[Composite FX] 🔄 FlushStart sent successfully");
+            },
+            false => {
+                println!("[Composite FX] ❌ Failed to send FlushStart");
+                return Err("Failed to send FlushStart event".to_string());
+            }
+        }
+
+        // Small delay to ensure FlushStart is processed
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        match pad.send_event(gst::event::FlushStop::new(true)) {
+            true => {
+                println!("[Composite FX] 🔄 FlushStop sent successfully");
+            },
+            false => {
+                println!("[Composite FX] ❌ Failed to send FlushStop");
+                return Err("Failed to send FlushStop event".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Safely perform FX cleanup with double-cleanup prevention
+    fn safe_cleanup_fx(&self, fx_bin: &gst::Bin, compositor: &gst::Element) -> Result<(), String> {
+        // Check if cleanup is already in progress
+        if let Some(fx_state) = self.fx_state.read().as_ref() {
+            let already_cleaning = *fx_state.cleanup_in_progress.lock();
+            if already_cleaning {
+                println!("[Composite FX] ⚠️ Cleanup already in progress, skipping duplicate cleanup");
+                return Ok(());
+            }
+            // Mark cleanup as in progress
+            *fx_state.cleanup_in_progress.lock() = true;
+        }
+
+        println!("[Composite FX] 🧹 Performing safe cleanup...");
+
+        // Unlink from compositor FIRST to stop data flow
+        if let Some(ghost_pad) = fx_bin.static_pad("src") {
+            if let Some(peer_pad) = ghost_pad.peer() {
+                // Check if pad belongs to compositor BEFORE unlinking
+                let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
+
+                if should_release {
+                    // FLUSH the media pad to reset timing
+                    if let Err(e) = self.safe_flush_pad(&peer_pad, compositor) {
+                        println!("[Composite FX] ❌ Safe flush failed during cleanup: {}", e);
+                    }
+                }
+
+                // Unlink
+                ghost_pad.unlink(&peer_pad).ok();
+
+                // Release if it belonged to compositor (checked before unlink)
+                if should_release && peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                    compositor.release_request_pad(&peer_pad);
+                    println!("[Composite FX] ✅ Released compositor pad during cleanup");
+                } else {
+                    println!("[Composite FX] ⚠️ Pad already released or ownership changed");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
@@ -373,30 +459,9 @@ impl GStreamerComposite {
 
             // Cast to Bin and aggressively cleanup all resources
             if let Ok(bin) = existing_fx_bin.dynamic_cast::<gst::Bin>() {
-                // Unlink from compositor FIRST to stop data flow
-                if let Some(ghost_pad) = bin.static_pad("src") {
-                    if let Some(peer_pad) = ghost_pad.peer() {
-                        // Check if pad belongs to compositor BEFORE unlinking
-                        let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
-                        
-                        if should_release {
-                            // FLUSH the media pad BEFORE unlinking/releasing to reset timing (no wait = faster)
-                            peer_pad.send_event(gst::event::FlushStart::new());
-                            peer_pad.send_event(gst::event::FlushStop::new(true));
-                            println!("[Composite FX] 🔄 Flushed media pad to reset timing");
-                        }
-                        
-                        // Unlink
-                        ghost_pad.unlink(&peer_pad).ok();
-                        
-                        // Release if it belonged to compositor (checked before unlink)
-                        if should_release {
-                            compositor.release_request_pad(&peer_pad);
-                            println!("[Composite FX] ✅ Unlinked and released sink_1 pad");
-                        } else {
-                            println!("[Composite FX] ⚠️ Pad doesn't belong to compositor, skipping release");
-                        }
-                    }
+                // Use safe cleanup with double-cleanup prevention
+                if let Err(e) = self.safe_cleanup_fx(&bin, &compositor) {
+                    println!("[Composite FX] ❌ Safe cleanup failed: {}", e);
                 }
 
                 // THEN stop bin (non-blocking for instant cleanup)
@@ -432,6 +497,7 @@ impl GStreamerComposite {
             similarity,
             use_chroma_key,
             compositor_sink_pad: None, // Will be set when pad is requested
+            cleanup_in_progress: Arc::new(parking_lot::Mutex::new(false)),
         });
         
         println!("[Composite FX] 🚀 Creating uridecodebin (no disk I/O!)...");
@@ -550,59 +616,100 @@ impl GStreamerComposite {
         let pipeline_weak = pipeline.downgrade();
         let compositor_weak = compositor.downgrade();
         let fx_state_weak = Arc::downgrade(&self.fx_state);
-        
+        let pad_mutex_weak = Arc::downgrade(&self.pad_operation_mutex);
+
         ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
             if let Some(gst::PadProbeData::Event(ref event)) = info.data {
                 if event.type_() == gst::EventType::Eos {
                     println!("[Composite FX] 🎬 Video finished (EOS) - auto-cleaning in 100ms...");
-                    
+
                     // Spawn cleanup task (don't block probe callback)
                     let fx_bin_weak_clone = fx_bin_weak.clone();
                     let pipeline_weak_clone = pipeline_weak.clone();
                     let compositor_weak_clone = compositor_weak.clone();
                     let fx_state_weak_clone = fx_state_weak.clone();
-                    
+                    let pad_mutex_weak_clone = pad_mutex_weak.clone();
+
                     std::thread::spawn(move || {
-                        if let (Some(fx_bin), Some(pipeline), Some(compositor)) = 
-                            (fx_bin_weak_clone.upgrade(), pipeline_weak_clone.upgrade(), compositor_weak_clone.upgrade()) {
-                            
-                            println!("[Composite FX] 🧹 Auto-cleanup: Unlinking from compositor...");
-                            
-                            // Unlink and release pad (only if still owned by compositor)
+                        // Check if cleanup is already in progress to prevent double cleanup
+                        let cleanup_already_started = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
+                            let fx_state = fx_state_arc.read();
+                            if let Some(state) = fx_state.as_ref() {
+                                let already_cleaning = *state.cleanup_in_progress.lock();
+                                if already_cleaning {
+                                    println!("[Composite FX] ⚠️ EOS cleanup skipped - cleanup already in progress");
+                                    return;
+                                }
+                                // Mark cleanup as started
+                                *state.cleanup_in_progress.lock() = true;
+                                false // Not already started, we just marked it
+                            } else {
+                                true // No state, assume cleanup already happened
+                            }
+                        } else {
+                            true // State was dropped, assume cleanup already happened
+                        };
+
+                        if cleanup_already_started {
+                            return;
+                        }
+
+                        if let (Some(fx_bin), Some(pipeline), Some(compositor), Some(pad_mutex)) =
+                            (fx_bin_weak_clone.upgrade(), pipeline_weak_clone.upgrade(), compositor_weak_clone.upgrade(), pad_mutex_weak_clone.upgrade()) {
+
+                            println!("[Composite FX] 🧹 EOS Auto-cleanup: Unlinking from compositor...");
+
+                            // Unlink and release pad (only if still owned by compositor) - with proper synchronization
                             if let Some(ghost_pad) = fx_bin.static_pad("src") {
                                 if let Some(peer_pad) = ghost_pad.peer() {
                                     // Check if pad belongs to compositor BEFORE unlinking
                                     let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
-                                    
+
                                     if should_release {
-                                        // FLUSH the media pad after EOS to reset timing (no wait = instant)
-                                        peer_pad.send_event(gst::event::FlushStart::new());
-                                        peer_pad.send_event(gst::event::FlushStop::new(true));
-                                        println!("[Composite FX] 🔄 Flushed sink_1 after EOS");
+                                        // Acquire mutex to prevent concurrent pad operations
+                                        let _guard = pad_mutex.lock();
+
+                                        // Double-check pad is still valid after acquiring lock
+                                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
+                                            // FLUSH the media pad after EOS to reset timing
+                                            let flush_start_ok = peer_pad.send_event(gst::event::FlushStart::new());
+                                            std::thread::sleep(std::time::Duration::from_millis(1)); // Small delay
+                                            let flush_stop_ok = peer_pad.send_event(gst::event::FlushStop::new(true));
+
+                                            if flush_start_ok && flush_stop_ok {
+                                                println!("[Composite FX] 🔄 Flushed sink_1 after EOS");
+                                            } else {
+                                                println!("[Composite FX] ⚠️ Flush events failed during EOS cleanup");
+                                            }
+                                        } else {
+                                            println!("[Composite FX] ⚠️ Pad ownership changed during EOS cleanup, skipping flush");
+                                        }
                                     }
-                                    
-                                    // Unlink
+
+                                    // Unlink (safe to do even if flush failed)
                                     ghost_pad.unlink(&peer_pad).ok();
-                                    
+
                                     // Release if it belonged to compositor (checked before unlink)
-                                    if should_release {
+                                    if should_release && peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
                                         compositor.release_request_pad(&peer_pad);
                                         println!("[Composite FX] ✅ Released compositor pad via EOS cleanup");
+                                    } else {
+                                        println!("[Composite FX] ⚠️ Pad already released or ownership changed");
                                     }
                                 }
                             }
-                            
+
                             // Stop and remove bin
                             fx_bin.set_state(gst::State::Null).ok();
                             let _ = fx_bin.state(Some(gst::ClockTime::from_seconds(1)));
                             pipeline.remove(&fx_bin).ok();
-                            
+
                             // Clear FX state (garbage collection)
                             if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
                                 *fx_state_arc.write() = None;
                             }
-                            
-                            println!("[Composite FX] ✅ Auto-cleanup complete - memory freed, ready for next FX");
+
+                            println!("[Composite FX] ✅ EOS Auto-cleanup complete - memory freed, ready for next FX");
                         }
                     });
                 }
@@ -778,29 +885,13 @@ impl GStreamerComposite {
         
         // Find and remove FX bin
         if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
-            println!("[Composite FX] 🧹 Cleaning up FX bin...");
+            println!("[Composite FX] 🧹 Manual stop: Cleaning up FX bin...");
 
             // Cast to Bin and set all child elements to NULL to release resources
             if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
-                // Unlink from compositor FIRST to stop data flow
-                if let Some(ghost_pad) = fx_bin.static_pad("src") {
-                    if let Some(peer_pad) = ghost_pad.peer() {
-                        // FLUSH the media pad on manual stop to reset timing (no wait = instant)
-                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
-                            peer_pad.send_event(gst::event::FlushStart::new());
-                            peer_pad.send_event(gst::event::FlushStop::new(true));
-                            println!("[Composite FX] 🔄 Flushed sink_1 on manual stop");
-                        }
-                        
-                        ghost_pad.unlink(&peer_pad).ok();
-                        // Only release if pad still belongs to compositor
-                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
-                            compositor.release_request_pad(&peer_pad);
-                            println!("[Composite FX] 🧹 Released compositor sink_1 pad");
-                        } else {
-                            println!("[Composite FX] ⚠️ Pad already released, skipping");
-                        }
-                    }
+                // Use safe cleanup with double-cleanup prevention
+                if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
+                    println!("[Composite FX] ❌ Safe cleanup failed during manual stop: {}", e);
                 }
 
                 // Set bin to NULL state (non-blocking)
@@ -813,10 +904,10 @@ impl GStreamerComposite {
                         let _ = element.set_state(gst::State::Null);
                     }
                 }
-                
+
                 // Remove bin from pipeline
                 pipeline.remove(&fx_bin).ok();
-                
+
                 println!("[Composite FX] ✅ FX branch removed and memory freed");
             }
         } else {
