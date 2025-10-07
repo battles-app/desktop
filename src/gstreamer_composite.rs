@@ -18,6 +18,9 @@ pub struct GStreamerComposite {
     pipeline_height: Arc<RwLock<u32>>,
     // Add mutex for pad operations to prevent race conditions
     pad_operation_mutex: Arc<parking_lot::Mutex<()>>,
+    // Track FX playback to prevent infinite loops
+    fx_playback_tracker: Arc<RwLock<std::collections::HashMap<String, u32>>>,
+    fx_tracker_last_reset: Arc<RwLock<std::time::Instant>>,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +78,8 @@ impl GStreamerComposite {
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
             pad_operation_mutex: Arc::new(parking_lot::Mutex::new(())),
+            fx_playback_tracker: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            fx_tracker_last_reset: Arc::new(RwLock::new(std::time::Instant::now())),
         })
     }
     
@@ -951,34 +956,55 @@ impl GStreamerComposite {
 
         // CRITICAL: Add timestamp offset probe to align media timestamps to pipeline running-time
         // This prevents "late frames" → "QoS catch-up sprint" on replays
+        println!("[Composite FX] ⏱️ Setting up timestamp offset probe...");
         let pipeline_weak_ts = pipeline.downgrade();
-        ghost_pad.add_probe(
-            gst::PadProbeType::BUFFER,  // No BLOCK flag = instant start, no delay!
-            move |pad, info| {
-                if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
-                    if let Some(pipeline) = pipeline_weak_ts.upgrade() {
-                        if let Some(clock) = pipeline.clock() {
-                            if let (Some(now), Some(pts), Some(base)) = (clock.time(), buf.pts(), pipeline.base_time()) {
-                                // running-time = clock-time - base-time
-                                let running = now.saturating_sub(base);
-                                
-                                if running > pts {
-                                    // Align media to "now" - prevents catch-up sprint
-                                    let delta = (running.nseconds() - pts.nseconds()) as i64;
-                                    pad.set_offset(delta);
-                                    println!("[Composite FX] ⏱️ Applied ts-offset {} ns to align FX to running-time", delta);
-                                } else {
-                                    println!("[Composite FX] ⏱️ No ts-offset needed (pts >= running-time)");
+
+        let probe_result = std::panic::catch_unwind(|| {
+            ghost_pad.add_probe(
+                gst::PadProbeType::BUFFER,  // No BLOCK flag = instant start, no delay!
+                move |pad, info| {
+                    // Add panic protection inside the probe callback too
+                    let result = std::panic::catch_unwind(|| {
+                        if let Some(gst::PadProbeData::Buffer(ref buf)) = info.data {
+                            if let Some(pipeline) = pipeline_weak_ts.upgrade() {
+                                if let Some(clock) = pipeline.clock() {
+                                    if let (Some(now), Some(pts), Some(base)) = (clock.time(), buf.pts(), pipeline.base_time()) {
+                                        // running-time = clock-time - base-time
+                                        let running = now.saturating_sub(base);
+
+                                        if running > pts {
+                                            // Align media to "now" - prevents catch-up sprint
+                                            let delta = (running.nseconds() - pts.nseconds()) as i64;
+                                            pad.set_offset(delta);
+                                            println!("[Composite FX] ⏱️ Applied ts-offset {} ns to align FX to running-time", delta);
+                                        } else {
+                                            println!("[Composite FX] ⏱️ No ts-offset needed (pts >= running-time)");
+                                        }
+                                    }
                                 }
                             }
+                            // Remove this probe after first buffer (unblocks flow)
+                            gst::PadProbeReturn::Remove
+                        } else {
+                            gst::PadProbeReturn::Ok
+                        }
+                    });
+
+                    match result {
+                        Ok(ret) => ret,
+                        Err(e) => {
+                            println!("[Composite FX] ❌ Timestamp probe panicked: {:?}", e);
+                            gst::PadProbeReturn::Remove
                         }
                     }
-                    // Remove this probe after first buffer (unblocks flow)
-                    return gst::PadProbeReturn::Remove;
-                }
-                gst::PadProbeReturn::Ok
-            },
-        );
+                },
+            )
+        });
+
+        match probe_result {
+            Ok(_) => println!("[Composite FX] ✅ Timestamp offset probe added successfully"),
+            Err(e) => println!("[Composite FX] ⚠️ Failed to add timestamp probe: {:?}", e),
+        }
 
         // Sync FX bin state with pipeline FIRST (faster than syncing after link)
         fx_bin.sync_state_with_parent()
@@ -1140,6 +1166,31 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ Emergency cleanup complete");
         Ok(())
+    }
+
+    /// Check if we should allow FX playback (prevent excessive repeated plays)
+    fn should_allow_fx_playback(&self, file_path: &str) -> bool {
+        // Simple check: if we've played this exact file more than 5 times recently, block it
+        // This prevents the infinite loop we saw in the logs
+        let mut tracker = self.fx_playback_tracker.write();
+        let mut last_reset = self.fx_tracker_last_reset.write();
+
+        // Reset counter every 30 seconds
+        if last_reset.elapsed().as_secs() > 30 {
+            tracker.clear();
+            *last_reset = std::time::Instant::now();
+        }
+
+        let count = tracker.entry(file_path.to_string()).or_insert(0);
+        *count += 1;
+
+        if *count > 5 {
+            println!("[Composite FX] 🚫 Blocking repeated FX playback of {} (played {} times)", file_path, count);
+            false
+        } else {
+            println!("[Composite FX] ✅ Allowing FX playback of {} (play count: {})", file_path, count);
+            true
+        }
     }
 
     /// Convert hex color to RGB tuple
