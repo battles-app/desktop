@@ -35,9 +35,6 @@ gstreamer-video = { version = "0.24", features = ["v1_20"] }
 gstreamer-audio = { version = "0.24", features = ["v1_20"] }
 gstreamer-sys = { version = "0.24", features = ["v1_20"] }
 glib = "0.20"
-
-# Rust GStreamer plugins for advanced video processing
-gst-plugin-hsv = "0.14"
 image = { version = "0.25", features = ["png"] }
 tauri-plugin-cache = "0.1"
 

@@ -2,10 +2,6 @@
 use gstreamer::prelude::*;
 use gstreamer::{self as gst, Pipeline};
 use gstreamer_app::AppSink;
-use gstreamer_video;
-
-// Import HSV plugin for proper chroma keying
-// The plugin is automatically registered when imported
 use tokio::sync::broadcast;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,8 +22,6 @@ pub struct GStreamerComposite {
     pipeline_height: Arc<RwLock<u32>>,
     // Add mutex for pad operations to prevent race conditions
     pad_operation_mutex: Arc<parking_lot::Mutex<()>>,
-    // Compositor mode preference (CPU vs GPU)
-    compositor_mode: Arc<RwLock<CompositorMode>>,
 }
 
 #[derive(Clone, Debug)]
@@ -35,12 +29,6 @@ pub enum OutputFormat {
     Preview,
     VirtualCamera,
     NDI,
-}
-
-#[derive(Clone, Debug)]
-pub enum CompositorMode {
-    CPU,      // Standard CPU compositor
-    GPU,      // GPU-accelerated compositor (d3d11compositor on Windows)
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +80,6 @@ impl GStreamerComposite {
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
             pad_operation_mutex: Arc::new(parking_lot::Mutex::new(())),
-            compositor_mode: Arc::new(RwLock::new(CompositorMode::CPU)), // Default to CPU
         })
     }
     
@@ -141,29 +128,11 @@ impl GStreamerComposite {
         // Build GStreamer composite pipeline with compositor element
         // The compositor element combines multiple video streams with alpha blending
         // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
-
-        // Choose compositor element based on mode preference
-        let compositor_name = match *self.compositor_mode.read() {
-            CompositorMode::CPU => "compositor",
-            CompositorMode::GPU => {
-                #[cfg(target_os = "windows")]
-                {
-                    "d3d11compositor"
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    println!("[Composite] ⚠️ GPU compositor only available on Windows, falling back to CPU");
-                    "compositor"
-                }
-            }
-        };
-
-        println!("[Composite] Using {} compositor (mode: {:?})", compositor_name, *self.compositor_mode.read());
         
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
-                "{} name=comp background=black \
+                "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
@@ -183,7 +152,6 @@ impl GStreamerComposite {
                  queue leaky=downstream max-size-buffers=3 ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
-                compositor_name,
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
@@ -196,7 +164,7 @@ impl GStreamerComposite {
             )
         } else {
             format!(
-                "{} name=comp background=black \
+                "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
                    sink_1::zorder=1 sink_1::alpha={} ! \
                  videoconvert ! \
@@ -214,7 +182,6 @@ impl GStreamerComposite {
                  queue leaky=downstream max-size-buffers=3 ! \
                  video/x-raw,width={},height={},format=BGRA ! \
                  comp.sink_0",
-                compositor_name,
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
@@ -228,7 +195,7 @@ impl GStreamerComposite {
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "{} name=comp background=black \
+            "compositor name=comp background=black \
                sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
                sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
              videoconvert ! \
@@ -246,7 +213,6 @@ impl GStreamerComposite {
              queue leaky=downstream max-size-buffers=3 ! \
              video/x-raw,width={},height={},format=BGRA ! \
              comp.sink_0",
-            compositor_name,
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
             width,
@@ -356,44 +322,14 @@ impl GStreamerComposite {
             "ndi" => OutputFormat::NDI,
             _ => return Err(format!("Unknown output format: {}", format)),
         };
-
+        
         *self.output_format.write() = new_format;
         println!("[Composite] Output format changed to: {:?}", format);
-
+        
         // Restart pipeline with new output
         // TODO: Implement dynamic pipeline reconfiguration
-
+        
         Ok(())
-    }
-
-    /// Set compositor mode (CPU vs GPU)
-    pub fn set_compositor_mode(&self, mode: &str) -> Result<(), String> {
-        let new_mode = match mode {
-            "cpu" => CompositorMode::CPU,
-            "gpu" => CompositorMode::GPU,
-            _ => return Err(format!("Unknown compositor mode: {}", mode)),
-        };
-
-        let mode_str = match new_mode {
-            CompositorMode::CPU => "CPU",
-            CompositorMode::GPU => "GPU",
-        };
-
-        *self.compositor_mode.write() = new_mode;
-        println!("[Composite] Compositor mode changed to: {}", mode_str);
-
-        // Note: Pipeline restart required for mode change to take effect
-        // This is because we need to use different GStreamer elements
-
-        Ok(())
-    }
-
-    /// Get current compositor mode as string
-    pub fn get_compositor_mode(&self) -> String {
-        match *self.compositor_mode.read() {
-            CompositorMode::CPU => "cpu".to_string(),
-            CompositorMode::GPU => "gpu".to_string(),
-        }
     }
     
     pub fn stop(&mut self) -> Result<(), String> {
@@ -612,82 +548,6 @@ impl GStreamerComposite {
         Ok(())
     }
 
-    /// Hide FX immediately and remove safely later (zero-latency hide)
-    fn hide_and_remove_fx(&self, fx_bin: &gst::Bin, fx_src_pad: &gst::Pad, comp_sink_pad: &gst::Pad, compositor: &gst::Element) -> Result<(), String> {
-        println!("[Composite FX] 🚀 Instant hide: Setting alpha to 0.0 for immediate back-layer visibility");
-
-        // 1) Instant hide: alpha -> 0.0 (no visual stall, applies next frame)
-        comp_sink_pad.set_property("alpha", 0.0f64);
-        println!("[Composite FX] ✅ FX hidden instantly (alpha=0.0) - back layer now visible");
-
-        // 2) Block downstream on compositor sink pad to safely unlink/remove without stalls
-        let comp_sink_pad_weak = comp_sink_pad.downgrade();
-        let fx_src_pad_weak = fx_src_pad.downgrade();
-        let compositor_weak = compositor.downgrade();
-        let pipeline_weak = self.pipeline.as_ref().unwrap().downgrade();
-        let fx_bin_weak = fx_bin.upcast_ref::<gst::Element>().downgrade();
-
-        let pad_operation_mutex = self.pad_operation_mutex.clone();
-
-        comp_sink_pad.add_probe(gst::PadProbeType::BLOCK | gst::PadProbeType::IDLE, move |pad, _info| {
-            // Acquire mutex for pad operations to prevent race conditions
-            let _guard = pad_operation_mutex.lock();
-
-            let Some(comp_sink_pad) = comp_sink_pad_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
-            let Some(fx_src_pad) = fx_src_pad_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
-            let Some(compositor) = compositor_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
-            let Some(pipeline) = pipeline_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
-            let Some(fx_bin) = fx_bin_weak.upgrade() else { return gst::PadProbeReturn::Remove; };
-
-            println!("[Composite FX] 🔧 Safe removal: Unlinking and cleaning up FX...");
-
-            // Unlink ghost → compositor sink (ignore errors if already unlinked)
-            let unlink_result = fx_src_pad.unlink(&comp_sink_pad);
-            match unlink_result {
-                Ok(_) => println!("[Composite FX] ✅ Pads unlinked successfully"),
-                Err(e) => println!("[Composite FX] ⚠️ Unlink failed (might already be unlinked): {:?}", e),
-            }
-
-            // Release request pad from compositor (only if it belongs to it)
-            if comp_sink_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
-                println!("[Composite FX] 📤 Releasing compositor request pad...");
-                let release_result = std::panic::catch_unwind(|| {
-                    compositor.release_request_pad(&comp_sink_pad)
-                });
-
-                match release_result {
-                    Ok(_) => println!("[Composite FX] ✅ Request pad released"),
-                    Err(e) => println!("[Composite FX] ❌ Request pad release panicked: {:?}", e),
-                }
-            } else {
-                println!("[Composite FX] ⚠️ Pad no longer belongs to compositor, skipping release");
-            }
-
-            // Stop & remove the FX bin
-            let _ = fx_bin.set_state(gst::State::Null);
-            let remove_result = std::panic::catch_unwind(|| {
-                pipeline.remove(&fx_bin)
-            });
-
-            match remove_result {
-                Ok(result) => {
-                    if result.is_ok() {
-                        println!("[Composite FX] ✅ FX bin removed from pipeline");
-                    } else {
-                        println!("[Composite FX] ⚠️ FX bin removal returned error");
-                    }
-                }
-                Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked: {:?}", e),
-            }
-
-            // Done — drop this probe
-            gst::PadProbeReturn::Remove
-        });
-
-        println!("[Composite FX] 🎯 Hide-and-remove initiated - FX invisible, safe cleanup queued");
-        Ok(())
-    }
-
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
@@ -807,16 +667,24 @@ impl GStreamerComposite {
         
         println!("[Composite FX] 🧹 Fresh decoder created - no caching, clean state");
 
-        // Force consistent 30fps output with videorate (optimized for file playback)
+        // Use identity with sync=true to enforce real-time playback based on buffer timestamps
+        // This blocks and waits for each frame's timestamp to arrive in real-time
+        let identity_sync = ElementFactory::make("identity")
+            .name("fxsync")
+            .property("sync", true)              // Block until buffer timestamp arrives in real-time
+            .property("single-segment", true)    // Collapse to one timeline (no segment carry-over)
+            .build()
+            .map_err(|_| "Failed to create identity sync")?;
+
+        // Force consistent 30fps output with videorate
         let videorate = ElementFactory::make("videorate")
             .name("fxvideorate")
-            .property("skip-to-first", true)
-            .property("drop-only", false)   // allow duplication when input < target
-            .property("max-rate", 30i32)    // cap to 30fps
+            .property("skip-to-first", true)   // Start fresh, ignore previous state
+            .property("drop-only", true)       // Only drop, never duplicate
             .build()
             .map_err(|_| "Failed to create videorate")?;
 
-        // Caps filter to force 30fps output
+        // Force 30fps output regardless of input framerate
         let rate_caps = gst::Caps::builder("video/x-raw")
             .field("framerate", gst::Fraction::new(30, 1))
             .build();
@@ -826,8 +694,8 @@ impl GStreamerComposite {
             .property("caps", &rate_caps)
             .build()
             .map_err(|_| "Failed to create rate capsfilter")?;
-
-        println!("[Composite FX] 🕐 videorate configured - drop-only=false, max-rate=30fps, allows smooth file playback");
+        
+        println!("[Composite FX] 🕐 identity sync=true added - blocks buffers to enforce real-time playback");
 
         let videoconvert = ElementFactory::make("videoconvert")
             .name("fxconvert")
@@ -841,124 +709,18 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // Parse hex color for chroma key (e.g., "#00ff00" -> RGB values)
-        let (key_r, key_g, key_b) = if keycolor.starts_with('#') && keycolor.len() == 7 {
-            let r = u8::from_str_radix(&keycolor[1..3], 16).unwrap_or(0);
-            let g = u8::from_str_radix(&keycolor[3..5], 16).unwrap_or(255);
-            let b = u8::from_str_radix(&keycolor[5..7], 16).unwrap_or(0);
-            (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0)
-        } else {
-            // Default to green if invalid hex
-            println!("[Composite FX] ⚠️ Invalid keycolor '{}', defaulting to green", keycolor);
-            (0.0, 1.0, 0.0) // Green
-        };
-
-        // Create chroma key elements if enabled
-        let (chroma_elements, final_element) = if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
-                     keycolor, key_r, key_g, key_b, tolerance, similarity);
-
-            // Implement proper chroma keying using alpha element in a bin
-            let chroma_element = {
-                // Create a bin to hold chroma keying elements
-                let chroma_bin = gst::Bin::builder().name("chroma_bin").build();
-
-                // Alpha element for chroma keying
-                let alpha = ElementFactory::make("alpha")
-                    .name("chroma_alpha")
-                    .build()
-                    .map_err(|_| "Failed to create alpha element")?;
-
-                // Configure alpha for custom RGB chroma keying
-                alpha.set_property_from_str("method", "custom");
-                alpha.set_property("target-r", (key_r * 255.0) as u32);
-                alpha.set_property("target-g", (key_g * 255.0) as u32);
-                alpha.set_property("target-b", (key_b * 255.0) as u32);
-
-                // Fine-tune chroma key parameters
-                alpha.set_property("angle", (tolerance * 90.0) as f32);  // Color cube size
-                alpha.set_property("noise-level", (similarity * 64.0) as f32);  // Edge smoothing
-                alpha.set_property("white-sensitivity", 100u32);
-                alpha.set_property("black-sensitivity", 100u32);
-
-                // Add alpha to bin
-                chroma_bin.add(&alpha).map_err(|_| "Failed to add alpha to chroma bin")?;
-
-                // Create ghost pads for the bin
-                let sink_pad = alpha.static_pad("sink").unwrap();
-                let src_pad = alpha.static_pad("src").unwrap();
-
-                let ghost_sink = gst::GhostPad::with_target(&sink_pad).unwrap();
-                let ghost_src = gst::GhostPad::with_target(&src_pad).unwrap();
-
-                ghost_sink.set_active(true).unwrap();
-                ghost_src.set_active(true).unwrap();
-
-                chroma_bin.add_pad(&ghost_sink).unwrap();
-                chroma_bin.add_pad(&ghost_src).unwrap();
-
-                println!("[Chroma Key] 🎨 Alpha element configured for chroma keying:");
-                println!("  Method: Custom RGB chroma key");
-                println!("  Target color: RGB({}, {}, {})", (key_r * 255.0) as u32, (key_g * 255.0) as u32, (key_b * 255.0) as u32);
-                println!("  Angle: {:.1}° (color tolerance)", tolerance * 90.0);
-                println!("  Noise level: {:.1} (edge smoothing)", similarity * 64.0);
-
-                Some(chroma_bin.upcast::<gst::Element>())
-            };
-
-            // Build pipeline based on chroma key availability
-            let (elements, final_capsfilter) = if let Some(chroma_elem) = chroma_element {
-                // Pipeline with chroma key: videoconvert -> chroma_bin(alpha) -> videoscale -> capsfilter
-                // Alpha element handles chroma keying and outputs RGBA with transparency
-                let rgba_caps = gst::Caps::builder("video/x-raw")
-                    .field("format", "RGBA")
-                    .build();
-
-                let capsfilter = ElementFactory::make("capsfilter")
-                    .name("fxcaps")
-                    .property("caps", &rgba_caps)
-                    .build()
-                    .map_err(|_| "Failed to create RGBA capsfilter")?;
-
-                (vec![videoconvert.clone(), chroma_elem, videoscale.clone(), capsfilter.clone()], capsfilter)
-            } else {
-                // Fallback pipeline: videoconvert -> videoscale -> capsfilter
-                let caps = gst::Caps::builder("video/x-raw")
-                    .field("format", "BGRA")
-                    .build();
-
-                let capsfilter = ElementFactory::make("capsfilter")
-                    .name("fxcaps")
-                    .property("caps", &caps)
-                    .build()
-                    .map_err(|_| "Failed to create capsfilter")?;
-
-                (vec![videoconvert.clone(), videoscale.clone(), capsfilter.clone()], capsfilter)
-            };
-            (elements, final_capsfilter)
-        } else {
-            // No chroma key - BGRA caps for compositor
-            let caps = gst::Caps::builder("video/x-raw")
-                .field("format", "BGRA")
-                .build();
-
-            let capsfilter = ElementFactory::make("capsfilter")
-                .name("fxcaps")
-                .property("caps", &caps)
-                .build()
-                .map_err(|_| "Failed to create capsfilter")?;
-
-            // Pipeline without chroma key: videoconvert -> videoscale -> capsfilter
-            let elements = vec![videoconvert.clone(), videoscale.clone(), capsfilter.clone()];
-            (elements, capsfilter)
-        };
+        // BGRA caps for compositor
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "BGRA")
+            .build();
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
-        if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested - using alpha element for green screen removal");
-        } else {
-            println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → videoconvert → videoscale → capsfilter");
-        }
+
+        let capsfilter = ElementFactory::make("capsfilter")
+            .name("fxcaps")
+            .property("caps", &caps)
+            .build()
+            .map_err(|_| "Failed to create capsfilter")?;
 
         // Set uridecodebin to async for raw playback
         uridecode.set_property("async-handling", true);
@@ -966,46 +728,60 @@ impl GStreamerComposite {
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Add base elements
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter])
-            .map_err(|_| "Failed to add base elements to FX bin")?;
+        // Build pipeline with optional chroma key elements
+        let mut elements_to_add = vec![&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale];
+        let mut link_elements = vec![&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale];
 
-        // Add chroma key elements
-        for element in &chroma_elements {
-            fx_bin.add(element).map_err(|_| "Failed to add chroma elements to FX bin")?;
-        }
+        // Add chroma key elements if enabled
+        let alphacolor = if use_chroma_key {
+            println!("[Composite FX] 🎨 Chroma key enabled - adding alphacolor element");
 
-        // Link base elements: videorate enforces 30fps, then to videoconvert
-        gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert])
-            .map_err(|_| "Failed to link base FX elements")?;
+            // Parse hex color (remove # if present and convert to u32)
+            let color_str = keycolor.trim_start_matches('#');
+            let color_u32 = u32::from_str_radix(color_str, 16)
+                .map_err(|_| format!("Invalid chroma key color format: {}", keycolor))?;
 
-        // Link chroma key pipeline
-        if use_chroma_key {
-            // videoconvert -> alphacolor -> videoscale -> capsfilter
-            gst::Element::link_many(&chroma_elements)
-                .map_err(|_| "Failed to link chroma key elements")?;
+            // Add alpha channel (fully opaque) - GStreamer expects ARGB format
+            let argb_color = (color_u32 << 8) | 0xFF;
+
+            println!("[Composite FX] 🎨 Chroma key color: {} -> ARGB: 0x{:08x}", keycolor, argb_color);
+
+            let alphacolor_element = ElementFactory::make("alphacolor")
+                .name("fxalphacolor")
+                .property("color", argb_color as u32)  // Key color in ARGB format
+                .property("similarity", similarity as f64)  // Similarity threshold (0.0-1.0)
+                .property("slope", (tolerance * 100.0) as f64)  // Slope based on tolerance (0-100 -> 0-100)
+                .build()
+                .map_err(|_| "Failed to create alphacolor element")?;
+
+            println!("[Composite FX] 🎨 Chroma key configured: color=0x{:08x}, similarity={:.2}, slope={:.2}",
+                    argb_color, similarity, tolerance * 100.0);
+
+            elements_to_add.push(&alphacolor_element);
+            link_elements.push(&alphacolor_element);
+            Some(alphacolor_element)
         } else {
-            // videoconvert -> videoscale -> capsfilter
-            gst::Element::link_many(&chroma_elements)
-                .map_err(|_| "Failed to link standard elements")?;
-        }
+            println!("[Composite FX] 🎨 Chroma key disabled");
+            None
+        };
 
-        // Add queue before compositor to prevent one stream from pacing others
-        let q_to_comp = ElementFactory::make("queue")
-            .name("q_to_comp")
-            .property_from_str("leaky", "downstream")  // downstream
-            .property("max-size-buffers", 0u32)
-            .property("max-size-bytes", 0u32)
-            .property("max-size-time", 200_000_000i64) // 200ms
-            .build()
-            .map_err(|_| "Failed to create queue to compositor")?;
+        // Add final capsfilter
+        elements_to_add.push(&capsfilter);
+        link_elements.push(&capsfilter);
 
-        fx_bin.add(&q_to_comp).map_err(|_| "Failed to add queue to FX bin")?;
-        final_element.link(&q_to_comp).map_err(|_| "Failed to link final element to queue")?;
+        // Add elements to bin
+        fx_bin.add_many(&elements_to_add)
+            .map_err(|_| "Failed to add elements to FX bin")?;
 
+        // Link elements in sequence
+        gst::Element::link_many(&link_elements)
+            .map_err(|_| "Failed to link FX elements")?;
+
+        let final_element = capsfilter.clone();
+        
         // Create ghost pad on the bin
-        let final_src_pad = q_to_comp.static_pad("src")
-            .ok_or("Failed to get queue src pad")?;
+        let final_src_pad = final_element.static_pad("src")
+            .ok_or("Failed to get final element src pad")?;
         let ghost_pad = gst::GhostPad::with_target(&final_src_pad)
             .map_err(|_| "Failed to create ghost pad")?;
         ghost_pad.set_active(true).ok();
@@ -1366,15 +1142,15 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → videoconvert → [chroma key] → videoscale → capsfilter → queue → compositor");
+        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
         
         Ok(())
     }
     
-    /// Stop the currently playing FX (instant hide + safe cleanup)
+    /// Stop the currently playing FX
     pub fn stop_fx(&mut self) -> Result<(), String> {
-        println!("[Composite FX] 🛑 Stopping FX with instant hide...");
-
+        println!("[Composite FX] 🛑 Stopping FX and cleaning memory...");
+        
         // Get the pipeline
         let pipeline = match &self.pipeline {
             Some(p) => p,
@@ -1384,7 +1160,7 @@ impl GStreamerComposite {
                 return Ok(());
             }
         };
-
+        
         // Get compositor element
         let compositor = match pipeline.by_name("comp") {
             Some(c) => c,
@@ -1394,198 +1170,65 @@ impl GStreamerComposite {
                 return Ok(());
             }
         };
-
-        // Optional: Help the compositor with better timing behavior
-        let _ = compositor.set_property("start-time-selection", "zero");
-        let _ = compositor.set_property("ignore-inactive-pads", true);
-
-        // Find FX bin and perform instant hide + safe cleanup
+        
+        // Find and remove FX bin (proper cleanup with safe pad operations)
         if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
-            println!("[Composite FX] 🚀 Using instant hide-and-remove for FX stop...");
+            println!("[Composite FX] 🧹 Manual stop: Proper cleanup of FX bin...");
 
-            // Cast to Bin
+            // Cast to Bin and perform complete cleanup
             if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
-                // Get the ghost pad (FX bin's source pad)
-                let ghost_pad = match fx_bin.static_pad("src") {
-                    Some(pad) => pad,
-                    None => {
-                        println!("[Composite FX] ⚠️ FX bin has no src pad");
-                        *self.fx_state.write() = None;
-                        return Ok(());
-                    }
-                };
+                // Try safe cleanup with pad operations first
+                if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
+                    println!("[Composite FX] ❌ Safe cleanup failed during manual stop: {}, trying emergency", e);
 
-                // Get the compositor sink pad from FX state
-                let comp_sink_pad = if let Some(fx_state) = self.fx_state.read().as_ref() {
-                    match &fx_state.compositor_sink_pad {
-                        Some(pad) => pad.clone(),
-                        None => {
-                            println!("[Composite FX] ⚠️ No stored compositor sink pad, falling back to safe cleanup");
-                            // Fallback to old safe cleanup method
-                            if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
-                                println!("[Composite FX] ❌ Fallback cleanup failed: {}", e);
+                    // Emergency cleanup: force removal without pad operations
+                    let _ = fx_bin.set_state(gst::State::Null);
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&fx_bin)
+                    });
+
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 Emergency: FX bin removed during manual stop");
+                            } else {
+                                println!("[Composite FX] ⚠️ Emergency: FX bin removal failed during manual stop");
                             }
-                            let _ = fx_bin.set_state(gst::State::Null);
-                            let _ = pipeline.remove(&fx_bin);
-                            *self.fx_state.write() = None;
-                            return Ok(());
                         }
+                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked during manual stop: {:?}", e),
                     }
                 } else {
-                    println!("[Composite FX] ⚠️ No FX state, falling back to safe cleanup");
-                    // Fallback to old safe cleanup method
-                    if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
-                        println!("[Composite FX] ❌ Fallback cleanup failed: {}", e);
-                    }
+                    // Safe cleanup succeeded, now remove the bin
                     let _ = fx_bin.set_state(gst::State::Null);
-                    let _ = pipeline.remove(&fx_bin);
-                    *self.fx_state.write() = None;
-                    return Ok(());
-                };
+                    let remove_result = std::panic::catch_unwind(|| {
+                        pipeline.remove(&fx_bin)
+                    });
 
-                // Use instant hide-and-remove (zero-latency)
-                if let Err(e) = self.hide_and_remove_fx(&fx_bin, &ghost_pad, &comp_sink_pad, &compositor) {
-                    println!("[Composite FX] ❌ Instant hide failed: {}, falling back to safe cleanup", e);
-
-                    // Fallback to old safe cleanup method
-                    if let Err(e2) = self.safe_cleanup_fx(&fx_bin, &compositor) {
-                        println!("[Composite FX] ❌ Fallback cleanup also failed: {}", e2);
+                    match remove_result {
+                        Ok(result) => {
+                            if result.is_ok() {
+                                println!("[Composite FX] 🧹 FX bin removed after safe cleanup (manual stop)");
+                            } else {
+                                println!("[Composite FX] ⚠️ FX bin removal failed after safe cleanup (manual stop)");
+                            }
+                        }
+                        Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup (manual stop): {:?}", e),
                     }
-                    let _ = fx_bin.set_state(gst::State::Null);
-                    let _ = pipeline.remove(&fx_bin);
                 }
-            } else {
-                println!("[Composite FX] ⚠️ Could not cast FX element to Bin");
+
+                println!("[Composite FX] ✅ FX branch removed and memory freed");
             }
         } else {
             println!("[Composite FX] No FX bin found to remove");
         }
-
-        // Clear FX state immediately (hide is instant, cleanup happens async)
+        
+        // Clear FX state after cleanup complete
         *self.fx_state.write() = None;
-        println!("[Composite FX] ✅ FX state cleared - back layer visible instantly");
-
+        println!("[Composite FX] ✅ FX state cleared after manual stop");
+        
         Ok(())
     }
     
-
-    /// Convert RGB color to HSV color space for better chroma keying
-    fn rgb_to_hsv(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
-        let max = r.max(g).max(b);
-        let min = r.min(g).min(b);
-        let delta = max - min;
-
-        let h = if delta == 0.0 {
-            0.0 // Undefined hue for grayscale
-        } else if max == r {
-            60.0 * (((g - b) / delta) % 6.0)
-        } else if max == g {
-            60.0 * ((b - r) / delta + 2.0)
-        } else {
-            60.0 * ((r - g) / delta + 4.0)
-        };
-
-        let h = if h < 0.0 { h + 360.0 } else { h };
-
-        let s = if max == 0.0 { 0.0 } else { delta / max };
-        let v = max;
-
-        (h, s, v)
-    }
-
-    /// Process a frame for chroma keying - make pixels matching key color transparent
-    fn process_chroma_key_frame(
-        sample: &gst::Sample,
-        key_r: f64,
-        key_g: f64,
-        key_b: f64,
-        tolerance: f64,
-        similarity: f64
-    ) -> Option<gst::Sample> {
-        let buffer = sample.buffer()?;
-        let caps = sample.caps()?;
-
-        // Get video info
-        let video_info = gstreamer_video::VideoInfo::from_caps(caps).ok()?;
-
-        // Only process BGRA format
-        if video_info.format() != gstreamer_video::VideoFormat::Bgra {
-            return Some(sample.clone());
-        }
-
-        let width = video_info.width() as usize;
-        let height = video_info.height() as usize;
-        let stride = video_info.stride()[0] as usize; // 4 bytes per pixel (BGRA)
-
-        // Map the buffer for reading
-        let buffer_map = buffer.map_readable().ok()?;
-        let data = buffer_map.as_slice();
-
-        // Create a new buffer for the processed data
-        let mut processed_data = vec![0u8; data.len()];
-
-        // Convert tolerance and similarity to practical ranges
-        let hue_tolerance = tolerance * 60.0; // Convert to degrees
-        let sat_similarity = similarity * 0.5; // Convert to saturation range
-
-        // Process each pixel
-        for y in 0..height {
-            for x in 0..width {
-                let pixel_offset = y * stride + x * 4;
-
-                if pixel_offset + 3 >= data.len() {
-                    continue;
-                }
-
-                // BGRA format: B, G, R, A
-                let b = data[pixel_offset] as f64 / 255.0;
-                let g = data[pixel_offset + 1] as f64 / 255.0;
-                let r = data[pixel_offset + 2] as f64 / 255.0;
-                let a = data[pixel_offset + 3];
-
-                // Convert to HSV for better color matching
-                let (h, s, v) = Self::rgb_to_hsv(r, g, b);
-
-                // Calculate distance from key color in HSV space
-                let (key_h, key_s, key_v) = Self::rgb_to_hsv(key_r, key_g, key_b);
-
-                // Hue distance (circular)
-                let hue_diff = (h - key_h).abs();
-                let hue_distance = hue_diff.min(360.0 - hue_diff);
-
-                // Saturation and value distances
-                let sat_distance = (s - key_s).abs();
-                let val_distance = (v - key_v).abs();
-
-                // Determine if pixel should be transparent
-                let is_key_color = hue_distance <= hue_tolerance &&
-                                 sat_distance <= sat_similarity &&
-                                 val_distance <= 0.3; // Allow some brightness variation
-
-                // Set alpha based on keying result
-                let new_alpha = if is_key_color { 0u8 } else { 255u8 };
-
-                // Copy pixel data with new alpha
-                processed_data[pixel_offset] = data[pixel_offset];     // B
-                processed_data[pixel_offset + 1] = data[pixel_offset + 1]; // G
-                processed_data[pixel_offset + 2] = data[pixel_offset + 2]; // R
-                processed_data[pixel_offset + 3] = new_alpha;          // A
-            }
-        }
-
-        // Create new buffer with processed data
-        let new_buffer = gst::Buffer::from_slice(processed_data);
-
-        // Create new sample with processed buffer
-        let owned_caps = caps.to_owned();
-        let new_sample = gst::Sample::builder()
-            .buffer(&new_buffer)
-            .caps(&owned_caps)
-            .build();
-
-        Some(new_sample)
-    }
-
     /// Perform emergency cleanup of any orphaned FX resources
     /// This can be called periodically to ensure no resources leak
     pub fn emergency_cleanup(&self) -> Result<(), String> {
