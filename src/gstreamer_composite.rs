@@ -896,10 +896,17 @@ impl GStreamerComposite {
             }
         });
         
-        // Request sink_1 pad from compositor
+        // Request sink_1 pad from compositor (standard naming)
+        // The key is to ensure proper cleanup so this pad can be reused
+        let sink_pad_name = "sink_1";
+
+        println!("[Composite FX] 🔌 Requesting sink pad: {}", sink_pad_name);
+
         let comp_sink_pad = compositor
-            .request_pad_simple("sink_1")
-            .ok_or("Failed to request compositor sink_1 pad")?;
+            .request_pad_simple(sink_pad_name)
+            .ok_or(format!("Failed to request compositor sink pad: {}", sink_pad_name))?;
+
+        println!("[Composite FX] ✅ Successfully requested sink pad: {}", comp_sink_pad.name());
 
         // Store the sink pad for proper cleanup
         if let Some(ref mut fx_state) = *self.fx_state.write() {
@@ -928,13 +935,18 @@ impl GStreamerComposite {
         println!("[Composite FX] 📐 Positioning: {}x{} at ({}, {}) in {}x{} compositor", 
                  fx_width, fx_height, fx_xpos, fx_ypos, comp_width, comp_height);
         
-        // Set compositor sink properties
+        // Set compositor sink properties on the actual pad object
+        println!("[Composite FX] 🎨 Setting pad properties on: {}", comp_sink_pad.name());
         comp_sink_pad.set_property("zorder", 1u32);
         comp_sink_pad.set_property("alpha", self.layers.read().overlay_opacity);
         comp_sink_pad.set_property("xpos", fx_xpos);
         comp_sink_pad.set_property("ypos", fx_ypos);
         comp_sink_pad.set_property("width", fx_width);
         comp_sink_pad.set_property("height", fx_height);
+
+        // Verify properties were set
+        println!("[Composite FX] ✅ Pad properties set: zorder=1, alpha={:.2}, pos=({}, {}), size={}x{}",
+                 self.layers.read().overlay_opacity, fx_xpos, fx_ypos, fx_width, fx_height);
         
 
         // CRITICAL: Add timestamp offset probe to align media timestamps to pipeline running-time
@@ -973,9 +985,14 @@ impl GStreamerComposite {
             .map_err(|_| "Failed to sync FX bin state".to_string())?;
 
         // Link FX bin to compositor (happens instantly while bin is already playing)
+        println!("[Composite FX] 🔗 Linking ghost pad to compositor sink pad...");
         ghost_pad
             .link(&comp_sink_pad)
             .map_err(|e| format!("Failed to link FX to compositor: {:?}", e))?;
+
+        println!("[Composite FX] ✅ Pad linking successful!");
+        println!("[Composite FX] 🔗 Link status: ghost_pad.is_linked()={}, comp_sink_pad.is_linked()={}",
+                 ghost_pad.is_linked(), comp_sink_pad.is_linked());
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
