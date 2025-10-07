@@ -4,7 +4,7 @@ use gstreamer::{self as gst, Pipeline};
 use gstreamer_app::AppSink;
 use tokio::sync::broadcast;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use parking_lot::RwLock;
 
 // Global counter for unique FX playback IDs
@@ -45,15 +45,8 @@ impl FxKeyBin {
             .build()
             .map_err(|e| format!("Failed to create decodebin3: {}", e))?;
         
-        // Prefer hardware video decoders when available
-        decode.connect_autoplug_select(|_dbin, _pad, _caps, factory| {
-            let fname = factory.name();
-            if fname.starts_with("d3d11") || fname.starts_with("nv") || fname.starts_with("vaapi") {
-                gst::AutoplugSelectResult::Try
-            } else {
-                gst::AutoplugSelectResult::Try
-            }
-        });
+        // Note: Hardware decoder preference is set via environment variables or decoder selection
+        // decodebin3 will automatically choose hardware decoders when available
 
         let vconv = gst::ElementFactory::make("videoconvert")
             .name(&format!("{}_vconv", name))
@@ -115,9 +108,9 @@ impl FxKeyBin {
         
         // Keep it in GL memory & RGBA for glvideomixer
         let gl_caps = gst::Caps::builder("video/x-raw")
-            .features(gst::CapsFeatures::new(&["memory:GLMemory"]))
             .field("format", "RGBA")
             .build();
+        // Note: GL memory caps are set at link time by glupload
         out_caps.set_property("caps", &gl_caps);
 
         bin.add_many(&[
@@ -692,75 +685,32 @@ impl GStreamerComposite {
             Some(p) => p,
             None => {
                 println!("[Composite FX] No pipeline running");
-                *self.fx_state.write() = None;
+                *self.fx_bin.write() = None;
                 return Ok(());
             }
         };
         
-        // Get compositor element
-        let compositor = match pipeline.by_name("comp") {
-            Some(c) => c,
-            None => {
-                println!("[Composite FX] Compositor not found");
-                *self.fx_state.write() = None;
-                return Ok(());
-            }
-        };
-        
-        // Find and remove FX bin (proper cleanup with safe pad operations)
-        if let Some(fx_bin_element) = pipeline.by_name("fxbin") {
-            println!("[Composite FX] 🧹 Manual stop: Proper cleanup of FX bin...");
-
-            // Cast to Bin and perform complete cleanup
-            if let Ok(fx_bin) = fx_bin_element.dynamic_cast::<gst::Bin>() {
-                // Try safe cleanup with pad operations first
-                if let Err(e) = self.safe_cleanup_fx(&fx_bin, &compositor) {
-                    println!("[Composite FX] ❌ Safe cleanup failed during manual stop: {}, trying emergency", e);
-
-                    // Emergency cleanup: force removal without pad operations
-                    let _ = fx_bin.set_state(gst::State::Null);
-                    let remove_result = std::panic::catch_unwind(|| {
-                        pipeline.remove(&fx_bin)
-                    });
-
-                    match remove_result {
-                        Ok(result) => {
-                            if result.is_ok() {
-                                println!("[Composite FX] 🧹 Emergency: FX bin removed during manual stop");
-                            } else {
-                                println!("[Composite FX] ⚠️ Emergency: FX bin removal failed during manual stop");
-                            }
-                        }
-                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Pipeline removal panicked during manual stop: {:?}", e),
-                    }
-                } else {
-                    // Safe cleanup succeeded, now remove the bin
-                    let _ = fx_bin.set_state(gst::State::Null);
-                    let remove_result = std::panic::catch_unwind(|| {
-                        pipeline.remove(&fx_bin)
-                    });
-
-                    match remove_result {
-                        Ok(result) => {
-                            if result.is_ok() {
-                                println!("[Composite FX] 🧹 FX bin removed after safe cleanup (manual stop)");
-                            } else {
-                                println!("[Composite FX] ⚠️ FX bin removal failed after safe cleanup (manual stop)");
-                            }
-                        }
-                        Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked after safe cleanup (manual stop): {:?}", e),
-                    }
-                }
-
-                println!("[Composite FX] ✅ FX branch removed and memory freed");
-            }
+        // Stop and remove FX bin
+        if let Some(fx_bin) = self.fx_bin.read().as_ref() {
+            println!("[Composite FX] 🧹 Stopping GPU FX bin...");
+            
+            // Flush before stopping
+            let _ = fx_bin.flush();
+            
+            // Set to NULL
+            let _ = fx_bin.bin.set_state(gst::State::Null);
+            
+            // Remove from pipeline
+            let _ = pipeline.remove(&fx_bin.bin);
+            
+            println!("[Composite FX] ✅ FX bin stopped and removed");
         } else {
             println!("[Composite FX] No FX bin found to remove");
         }
         
-        // Clear FX state after cleanup complete
-        *self.fx_state.write() = None;
-        println!("[Composite FX] ✅ FX state cleared after manual stop");
+        // Clear FX bin
+        *self.fx_bin.write() = None;
+        println!("[Composite FX] ✅ FX stopped and memory freed");
         
         Ok(())
     }
@@ -776,7 +726,7 @@ impl GStreamerComposite {
                 // Check if this bin is truly orphaned (not the current active FX)
                 // We can't directly compare bins, so we check if there's any current FX state
                 // If there's no current FX state, then any found bin is orphaned
-                let has_current_fx = self.fx_state.read().is_some();
+                let has_current_fx = self.fx_bin.read().is_some();
 
                 if has_current_fx {
                     println!("[Composite FX] ✅ Current FX is active - bin might be legitimate, skipping emergency cleanup");
@@ -786,47 +736,18 @@ impl GStreamerComposite {
                 println!("[Composite FX] 🚨 Found orphaned FX bin during emergency cleanup");
 
                 if let Ok(bin) = found_bin.dynamic_cast::<gst::Bin>() {
-                    // Try safe cleanup first
-                    if let Some(compositor) = pipeline.by_name("comp") {
-                        let cleanup_result = self.safe_cleanup_fx(&bin, &compositor);
-                        if cleanup_result.is_err() {
-                            println!("[Composite FX] 🚨 Safe cleanup failed, forcing removal");
-                        }
-                    }
-
-                    // Force removal regardless
-                    let set_state_result = std::panic::catch_unwind(|| {
-                        bin.set_state(gst::State::Null)
-                    });
-
-                    match set_state_result {
-                        Ok(_) => println!("[Composite FX] ✅ Emergency: Bin set to NULL"),
-                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Set state failed: {:?}", e),
-                    }
-
-                    let remove_result = std::panic::catch_unwind(|| {
-                        pipeline.remove(&bin)
-                    });
-
-                    match remove_result {
-                        Ok(result) => {
-                            if result.is_ok() {
-                                println!("[Composite FX] ✅ Emergency: Orphaned bin removed");
-                            } else {
-                                println!("[Composite FX] ⚠️ Emergency: Bin removal failed");
-                            }
-                        }
-                        Err(e) => println!("[Composite FX] ⚠️ Emergency: Remove panicked: {:?}", e),
-                    }
+                    let _ = bin.set_state(gst::State::Null);
+                    let _ = pipeline.remove(&bin);
+                    println!("[Composite FX] ✅ Emergency: Orphaned bin removed");
                 }
             } else {
                 println!("[Composite FX] ✅ Emergency: No orphaned bins found");
             }
 
-            // Clear any stale FX state
-            if self.fx_state.read().is_some() {
-                *self.fx_state.write() = None;
-                println!("[Composite FX] ✅ Emergency: Stale FX state cleared");
+            // Clear any stale FX bin reference
+            if self.fx_bin.read().is_some() {
+                *self.fx_bin.write() = None;
+                println!("[Composite FX] ✅ Emergency: Stale FX bin reference cleared");
             }
         }
 
