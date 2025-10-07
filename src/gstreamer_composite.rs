@@ -703,41 +703,55 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoconvert")?;
 
-        // Create hardware-accelerated chroma key if enabled
+        // Create optimized chroma key if enabled - using alpha element only
         let chroma_element = if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key enabled - using hardware-accelerated chromahold");
+            println!("[Composite FX] 🎨 Chroma key enabled - using optimized alpha element");
             
-            // Parse hex color to 32-bit integer (0xRRGGBB)
+            // Parse hex color to RGB components (0-255)
             let hex = keycolor.trim_start_matches('#');
-            let color_int = u32::from_str_radix(hex, 16).unwrap_or(0x00ff00);
+            let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
+            let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
             
-            println!("[Composite FX] 🎨 Chroma key color: 0x{:06X}", color_int);
+            println!("[Composite FX] 🎨 Chroma key RGB: ({}, {}, {})", r, g, b);
             println!("[Composite FX] 🎨 Tolerance: {:.2}, Similarity: {:.2}", tolerance, similarity);
             
-            // Convert tolerance to threshold (0.0-1.0 -> 0.0-180.0 degrees in HSV space)
-            let similarity_threshold = (similarity * 30.0) as f32; // Fine-tune edge smoothness
+            // Determine the best method based on the key color
+            let (method, angle, noise_level) = if g > r && g > b {
+                // Green is dominant - use optimized green method
+                ("green", (tolerance * 40.0) as f32, (1.0 - similarity) as f32 * 64.0)
+            } else if b > r && b > g {
+                // Blue is dominant - use optimized blue method
+                ("blue", (tolerance * 40.0) as f32, (1.0 - similarity) as f32 * 64.0)
+            } else {
+                // Use custom color method for other colors
+                ("custom", (tolerance * 40.0) as f32, (1.0 - similarity) as f32 * 64.0)
+            };
             
-            // Create chromahold element - removes all colors except the key color, then invert
-            // We'll use a combination of chromahold to isolate the key color, then use alpha to invert
-            let chromahold = ElementFactory::make("chromahold")
-                .name("fxchromahold")
-                .property("target-r", ((color_int >> 16) & 0xFF) as u32)
-                .property("target-g", ((color_int >> 8) & 0xFF) as u32)
-                .property("target-b", (color_int & 0xFF) as u32)
-                .property("tolerance", (tolerance * 180.0) as u32)  // 0.0-1.0 -> 0-180 degrees (integer)
-                .build()
-                .map_err(|e| format!("Failed to create chromahold: {}", e))?;
+            println!("[Composite FX] 🎨 Using method: {}, angle: {:.1}, noise: {:.1}", method, angle, noise_level);
             
-            // Create alpha element to make the selected color transparent
-            let alpha = ElementFactory::make("alpha")
+            // Create alpha element with proper chroma keying configuration
+            let mut alpha_builder = ElementFactory::make("alpha")
                 .name("fxalpha")
-                .property_from_str("method", "green")  // Use optimized green method
-                .property("angle", (tolerance * 40.0) as f32)  // Angle for edge detection
-                .property("noise-level", (1.0 - similarity) as f32 * 10.0)  // Noise filtering
-                .build()
-                .map_err(|e| format!("Failed to create alpha: {}", e))?;
+                .property_from_str("method", method);
             
-            Some((chromahold, alpha))
+            // Set color-specific properties for custom method
+            if method == "custom" {
+                alpha_builder = alpha_builder
+                    .property("target-r", r as i32)
+                    .property("target-g", g as i32)
+                    .property("target-b", b as i32);
+            }
+            
+            let alpha = alpha_builder
+                .property("angle", angle)
+                .property("noise-level", noise_level as i32)
+                .property("black-sensitivity", 100u32)  // Reduce black holes
+                .property("white-sensitivity", 100u32)  // Reduce white spill
+                .build()
+                .map_err(|e| format!("Failed to create alpha element: {}", e))?;
+            
+            Some(alpha)
         } else {
             println!("[Composite FX] ⏭️ Chroma key disabled - no green screen removal");
             None
@@ -769,16 +783,16 @@ impl GStreamerComposite {
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
         // Add elements to bin - conditionally include chroma keying
-        if let Some((ref chromahold, ref alpha)) = chroma_element {
-            // Pipeline with chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> chromahold -> alpha -> videoscale -> capsfilter
-            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, chromahold, alpha, &videoscale, &capsfilter])
+        if let Some(ref alpha) = chroma_element {
+            // Pipeline with chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> alpha -> videoscale -> capsfilter
+            fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
                 .map_err(|_| "Failed to add elements to FX bin")?;
 
             // Link elements with chroma key in the chain
-            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, chromahold, alpha, &videoscale, &capsfilter])
+            gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, alpha, &videoscale, &capsfilter])
                 .map_err(|_| "Failed to link FX elements with chroma key")?;
             
-            println!("[Composite FX] ✅ Pipeline built with chroma key: videoconvert -> chromahold -> alpha -> videoscale");
+            println!("[Composite FX] ✅ Pipeline built with chroma key: videoconvert -> alpha -> videoscale");
         } else {
             // Pipeline without chroma key: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
             fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
@@ -1158,10 +1172,10 @@ impl GStreamerComposite {
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
         
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Hardware chroma key active: color={}, tolerance={:.2}, similarity={:.2}", 
+            println!("[Composite FX] 🎨 Optimized chroma key active: color={}, tolerance={:.2}, similarity={:.2}", 
                      keycolor, tolerance, similarity);
-            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → chromahold → alpha → videoscale → compositor");
-            println!("[Composite FX] ⚡ Optimized chroma keying - low CPU/GPU usage");
+            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → alpha → videoscale → compositor");
+            println!("[Composite FX] ⚡ Fast and efficient chroma keying with minimal CPU usage");
         } else {
             println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → videoconvert → videoscale → compositor");
         }
