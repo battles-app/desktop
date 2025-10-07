@@ -1,7 +1,7 @@
 // GStreamer composite pipeline for OBS-like functionality
 use gstreamer::prelude::*;
-use gstreamer::{self as gst, Pipeline, Sample, FlowReturn};
-use gstreamer_app::{AppSink, AppSrc};
+use gstreamer::{self as gst, Pipeline};
+use gstreamer_app::AppSink;
 use gstreamer_video;
 
 // Import HSV plugin for proper chroma keying
@@ -870,7 +870,17 @@ impl GStreamerComposite {
                     .map_err(|_| "Failed to create alpha element")?;
 
                 // Configure alpha for custom RGB chroma keying
-                alpha.set_property_from_str("method", "custom");
+                // Try setting method with error handling - fall back if it fails
+                let method_set_result = std::panic::catch_unwind(|| {
+                    alpha.set_property("method", 0u32);  // Try custom RGB chroma key
+                });
+
+                if method_set_result.is_err() {
+                    println!("[Composite FX] ⚠️ Alpha method property failed - trying string method");
+                    // Try setting as string
+                    let _ = alpha.set_property_from_str("method", "custom");
+                }
+
                 alpha.set_property("target-r", (key_r * 255.0) as u32);
                 alpha.set_property("target-g", (key_g * 255.0) as u32);
                 alpha.set_property("target-b", (key_b * 255.0) as u32);
@@ -957,7 +967,7 @@ impl GStreamerComposite {
         if use_chroma_key {
             println!("[Composite FX] 🎨 Chroma key requested - using alpha element for green screen removal");
         } else {
-            println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
+            println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → videoconvert → videoscale → capsfilter");
         }
 
         // Set uridecodebin to async for raw playback
@@ -967,7 +977,7 @@ impl GStreamerComposite {
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
         // Add base elements
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync])
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter])
             .map_err(|_| "Failed to add base elements to FX bin")?;
 
         // Add chroma key elements
@@ -975,13 +985,11 @@ impl GStreamerComposite {
             fx_bin.add(element).map_err(|_| "Failed to add chroma elements to FX bin")?;
         }
 
-        // Link base elements: videorate enforces 30fps, identity syncs to real-time clock
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync])
+        // Link base elements: videorate enforces 30fps, then to videoconvert
+        gst::Element::link_many(&[&videorate, &rate_filter, &videoconvert])
             .map_err(|_| "Failed to link base FX elements")?;
-
-        // Link to videoconvert
-        identity_sync.link(&videoconvert)
-            .map_err(|_| "Failed to link identity_sync to videoconvert")?;
+        videoconvert.link(&videoscale)
+            .map_err(|_| "Failed to link videoconvert to videoscale")?;
 
         // Link chroma key pipeline
         if use_chroma_key {
@@ -1357,7 +1365,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → identity_sync → videoconvert → [chroma key] → videoscale → capsfilter");
+        println!("[Composite FX] 🔍 FX bin pipeline: uridecodebin → videorate → videoconvert → [chroma key] → videoscale → capsfilter");
         
         Ok(())
     }
