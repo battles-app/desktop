@@ -1,7 +1,8 @@
 // GStreamer composite pipeline for OBS-like functionality
 use gstreamer::prelude::*;
-use gstreamer::{self as gst, Pipeline};
+use gstreamer::{self as gst, Pipeline, Sample};
 use gstreamer_app::AppSink;
+use gstreamer_video;
 
 // Import HSV plugin for proper chroma keying
 // The plugin is automatically registered when imported
@@ -889,7 +890,7 @@ impl GStreamerComposite {
                     .map_err(|_| "Failed to create appsrc")?;
 
                 // Add elements to bin
-                chroma_bin.add_many(&[&appsink, &appsrc])?;
+                chroma_bin.add_many(&[&appsink, &appsrc]).map_err(|_| "Failed to add elements to chroma bin")?;
 
                 // Create ghost pads for the bin
                 let sink_pad = appsink.static_pad("sink").unwrap();
@@ -916,14 +917,11 @@ impl GStreamerComposite {
                     let appsink = values[0].get::<gst::Element>().unwrap();
                     let appsrc = match appsrc_weak.upgrade() {
                         Some(src) => src,
-                        None => return Some(glib::Value::from(false)),
+                        None => return Some(gst::glib::Value::from(false)),
                     };
 
                     // Get the sample
-                    let sample = match appsink.emit_by_name::<gst::Sample>("pull-sample", &[]) {
-                        Ok(sample) => sample,
-                        Err(_) => return Some(glib::Value::from(false)),
-                    };
+                    let sample: Sample = appsink.emit_by_name("pull-sample", &[]);
 
                     // Process the frame for chroma keying
                     if let Some(processed_sample) = Self::process_chroma_key_frame(&sample, key_r, key_g, key_b, tolerance, similarity) {
@@ -931,7 +929,7 @@ impl GStreamerComposite {
                         let _ = appsrc.emit_by_name::<bool>("push-sample", &[&processed_sample]);
                     }
 
-                    Some(glib::Value::from(true))
+                    Some(gst::glib::Value::from(true))
                 });
 
                 println!("[Chroma Key] 🎨 Software chroma keying pipeline created:");
@@ -999,7 +997,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested - using alpha element (basic mode)");
+            println!("[Composite FX] 🎨 Chroma key requested - using software RGBA processing with appsink/appsrc");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
@@ -1537,10 +1535,10 @@ impl GStreamerComposite {
         let caps = sample.caps()?;
 
         // Get video info
-        let video_info = gst_video::VideoInfo::from_caps(&caps).ok()?;
+        let video_info = gstreamer_video::VideoInfo::from_caps(caps).ok()?;
 
         // Only process BGRA format
-        if video_info.format() != gst_video::VideoFormat::Bgra {
+        if video_info.format() != gstreamer_video::VideoFormat::Bgra {
             return Some(sample.clone());
         }
 
@@ -1608,9 +1606,10 @@ impl GStreamerComposite {
         let new_buffer = gst::Buffer::from_slice(processed_data);
 
         // Create new sample with processed buffer
+        let owned_caps = caps.to_owned();
         let new_sample = gst::Sample::builder()
             .buffer(&new_buffer)
-            .caps(&caps)
+            .caps(&owned_caps)
             .build();
 
         Some(new_sample)
