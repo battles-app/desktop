@@ -84,10 +84,10 @@ impl FxKeyBin {
             .build()
             .map_err(|e| format!("Failed to create glalpha: {}", e))?;
         glalpha.set_property_from_str("method", "green");
-        glalpha.set_property("angle", 18i32);
-        glalpha.set_property("noise-level", 1i32);
-        glalpha.set_property("black-sensitivity", 80i32);
-        glalpha.set_property("white-sensitivity", 80i32);
+        glalpha.set_property("angle", 18.0f32);
+        glalpha.set_property("noise-level", 1.0f32);
+        glalpha.set_property("black-sensitivity", 80u32);
+        glalpha.set_property("white-sensitivity", 80u32);
 
         let q_clean = Self::make_leaky_queue(&format!("{}_q_clean", name))?;
 
@@ -220,7 +220,7 @@ impl FxKeyBin {
     }
 
     /// Optional: tweak chroma at runtime like OBS
-    pub fn set_key_params(&self, method: &str, angle: i32, noise: i32, black: i32, white: i32) -> Result<(), String> {
+    pub fn set_key_params(&self, method: &str, angle: f32, noise: f32, black: u32, white: u32) -> Result<(), String> {
         self.glalpha.set_property_from_str("method", method);
         self.glalpha.set_property("angle", angle);
         self.glalpha.set_property("noise-level", noise);
