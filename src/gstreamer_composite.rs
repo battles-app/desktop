@@ -1,7 +1,7 @@
 // GStreamer composite pipeline for OBS-like functionality
 use gstreamer::prelude::*;
-use gstreamer::{self as gst, Pipeline, Sample};
-use gstreamer_app::AppSink;
+use gstreamer::{self as gst, Pipeline, Sample, FlowReturn};
+use gstreamer_app::{AppSink, AppSrc};
 use gstreamer_video;
 
 // Import HSV plugin for proper chroma keying
@@ -866,79 +866,11 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // Implement software-based chroma keying using appsink/appsrc
-            let chroma_element = {
-                // Create a bin to hold our custom chroma keying elements
-                let chroma_bin = gst::Bin::builder().name("chroma_bin").build();
-
-                // Create appsink to capture frames
-                let appsink = ElementFactory::make("appsink")
-                    .name("chroma_sink")
-                    .property("emit-signals", true)
-                    .property("sync", false)
-                    .property("max-buffers", 1u32)
-                    .property("drop", true)
-                    .build()
-                    .map_err(|_| "Failed to create appsink")?;
-
-                // Create appsrc to inject processed frames
-                let appsrc = ElementFactory::make("appsrc")
-                    .name("chroma_src")
-                    .property("format", gst::Format::Time)
-                    .property("is-live", true)
-                    .build()
-                    .map_err(|_| "Failed to create appsrc")?;
-
-                // Add elements to bin
-                chroma_bin.add_many(&[&appsink, &appsrc]).map_err(|_| "Failed to add elements to chroma bin")?;
-
-                // Create ghost pads for the bin
-                let sink_pad = appsink.static_pad("sink").unwrap();
-                let src_pad = appsrc.static_pad("src").unwrap();
-
-                let ghost_sink = gst::GhostPad::with_target(&sink_pad).unwrap();
-                let ghost_src = gst::GhostPad::with_target(&src_pad).unwrap();
-
-                ghost_sink.set_active(true).unwrap();
-                ghost_src.set_active(true).unwrap();
-
-                chroma_bin.add_pad(&ghost_sink).unwrap();
-                chroma_bin.add_pad(&ghost_src).unwrap();
-
-                // Connect appsink signal to process frames
-                let appsrc_weak = appsrc.downgrade();
-                let key_r = key_r;
-                let key_g = key_g;
-                let key_b = key_b;
-                let tolerance = tolerance;
-                let similarity = similarity;
-
-                appsink.connect("new-sample", false, move |values| {
-                    let appsink = values[0].get::<gst::Element>().unwrap();
-                    let appsrc = match appsrc_weak.upgrade() {
-                        Some(src) => src,
-                        None => return Some(gst::glib::Value::from(false)),
-                    };
-
-                    // Get the sample
-                    let sample: Sample = appsink.emit_by_name("pull-sample", &[]);
-
-                    // Process the frame for chroma keying
-                    if let Some(processed_sample) = Self::process_chroma_key_frame(&sample, key_r, key_g, key_b, tolerance, similarity) {
-                        // Push the processed sample to appsrc
-                        let _ = appsrc.emit_by_name::<bool>("push-sample", &[&processed_sample]);
-                    }
-
-                    Some(gst::glib::Value::from(true))
-                });
-
-                println!("[Chroma Key] 🎨 Software chroma keying pipeline created:");
-                println!("  Target color: RGB({}, {}, {})", (key_r * 255.0) as u32, (key_g * 255.0) as u32, (key_b * 255.0) as u32);
-                println!("  Tolerance: {:.3}, Similarity: {:.3}", tolerance, similarity);
-                println!("  Method: RGBA frame processing with appsink/appsrc");
-
-                Some(chroma_bin.upcast::<gst::Element>())
-            };
+            // TEMPORARILY DISABLE CHROMA KEYING - appsink/appsrc blocking pipeline flow
+            println!("[Chroma Key] ⚠️ Chroma keying disabled - appsink/appsrc causing frame stalls");
+            println!("  Issue: Signal handlers blocking GStreamer pipeline flow");
+            println!("  TODO: Implement simpler chroma keying approach");
+            let chroma_element = None;
 
             // Build pipeline based on chroma key availability
             let (elements, final_capsfilter) = if let Some(chroma_elem) = chroma_element {
@@ -997,7 +929,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested - using software RGBA processing with appsink/appsrc");
+            println!("[Composite FX] 🎨 Chroma key requested but temporarily disabled (pipeline flow issues)");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
