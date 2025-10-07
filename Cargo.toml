@@ -38,6 +38,12 @@ glib = "0.20"
 image = { version = "0.25", features = ["png"] }
 tauri-plugin-cache = "0.1"
 
+# WGPU - Modern graphics API for hardware-accelerated chroma key and compositing
+wgpu = "27.0.1"
+pollster = "0.3"
+bytemuck = { version = "1.16", features = ["derive"] }
+futures-intrusive = "0.5"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = ["Win32_Graphics_Gdi", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
