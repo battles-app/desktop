@@ -709,12 +709,12 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create videoscale")?;
 
-        // BGRA caps for compositor
+        // RGBA caps for compositor (with alpha channel for chroma keying)
         let caps = gst::Caps::builder("video/x-raw")
-            .field("format", "BGRA")
+            .field("format", "RGBA")
             .build();
 
-        println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
+        println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback with chroma keying - videorate ensures consistent timing");
 
         let capsfilter = ElementFactory::make("capsfilter")
             .name("fxcaps")
@@ -722,18 +722,31 @@ impl GStreamerComposite {
             .build()
             .map_err(|_| "Failed to create capsfilter")?;
 
+        // Add chroma keying element (CPU version - zero extra deps)
+        let alpha = ElementFactory::make("alpha")
+            .name("fx_chroma")
+            .build()
+            .map_err(|_| "Failed to create alpha element")?;
+
+        // Configure chroma keying for green screen (OBS-like settings)
+        alpha.set_property_from_str("method", "green");  // built-in green key
+        alpha.set_property("angle", 32.0f32);            // widen/narrow the green band (0-90)
+        alpha.set_property("noise-level", 2.0f32);       // light edge cleanup
+
+        println!("[Composite FX] 🎨 Chroma key configured: method=green, angle=32.0, noise-level=2.0");
+
         // Set uridecodebin to async for raw playback
         uridecode.set_property("async-handling", true);
 
         // Create bin to hold FX elements
         let fx_bin = gst::Bin::builder().name("fxbin").build();
 
-        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> capsfilter
-        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Pipeline: uridecodebin -> videorate -> rate_filter -> identity_sync -> videoconvert -> videoscale -> alpha -> capsfilter
+        fx_bin.add_many(&[&uridecode, &videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &alpha, &capsfilter])
             .map_err(|_| "Failed to add elements to FX bin")?;
 
-        // Link elements: videorate enforces 30fps, identity syncs to real-time clock
-        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &capsfilter])
+        // Link elements: videorate enforces 30fps, identity syncs to real-time clock, alpha provides chroma keying
+        gst::Element::link_many(&[&videorate, &rate_filter, &identity_sync, &videoconvert, &videoscale, &alpha, &capsfilter])
             .map_err(|_| "Failed to link FX elements")?;
 
         let final_element = capsfilter.clone();
