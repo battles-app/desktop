@@ -15,6 +15,10 @@ use gstreamer_camera::GStreamerCamera;
 mod gstreamer_composite;
 use gstreamer_composite::GStreamerComposite;
 
+// GPU compositor (native wgpu + WGSL)
+mod wgpu_compositor;
+use wgpu_compositor::WgpuCompositor;
+
 use shared_memory::{Shmem, ShmemConf};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -938,18 +942,19 @@ async fn stop_camera_preview() -> Result<(), String> {
 // ====================
 
 #[command]
-async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
+async fn start_composite_pipeline(app: tauri::AppHandle, camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
     println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-    
+
     let mut composite_lock = GSTREAMER_COMPOSITE.write();
     if let Some(composite) = composite_lock.as_mut() {
+        composite.set_tauri_app(app);
         composite.start(&camera_device_id, width, height, fps, rotation)?;
         println!("[Composite] ✅ Composite pipeline started");
     } else {
         return Err("Composite pipeline not initialized".to_string());
     }
     drop(composite_lock);
-    
+
     Ok(())
 }
 

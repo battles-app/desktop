@@ -222,9 +222,9 @@ impl GStreamerCamera {
 
         let frame_count_clone = frame_count.clone();
         let warned_black_clone = warned_black.clone();
-        let start_time_clone = start_time.clone();
-        let last_log_time_clone = last_log_time.clone();
-        let last_frame_count_clone = last_frame_count.clone();
+        let _start_time_clone = start_time.clone();
+        let _last_log_time_clone = last_log_time.clone();
+        let _last_frame_count_clone = last_frame_count.clone();
         
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()

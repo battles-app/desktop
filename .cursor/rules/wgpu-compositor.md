@@ -1,0 +1,5 @@
+- Keep GStreamer inputs/decoders/caps unchanged.
+- No GStreamer compositor element; use two appsinks (camera, fx) → wgpu compositor.
+- Frontend contract unchanged: emit final RGBA bytes to existing canvas event shape.
+- Prefer RGBA8 sRGB throughout; keep preview low-latency; avoid unnecessary copies.
+- If texture sizes change, reallocate textures; otherwise reuse.
