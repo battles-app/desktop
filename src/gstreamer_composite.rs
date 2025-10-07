@@ -2,9 +2,9 @@
 use gstreamer::prelude::*;
 use gstreamer::{self as gst, Pipeline};
 use gstreamer_app::AppSink;
-use tokio::sync::{broadcast, CancellationToken};
+use tokio::sync::broadcast;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use parking_lot::RwLock;
 
 // GPU compositor
@@ -30,8 +30,8 @@ pub struct GStreamerComposite {
     wgpu_compositor: Option<Arc<parking_lot::Mutex<WgpuCompositor>>>,
     // Tauri app handle for emitting events
     tauri_app: Option<tauri::AppHandle>,
-    // Render task cancellation token
-    render_cancel_token: CancellationToken,
+    // Render task cancellation flag
+    render_cancelled: Arc<std::sync::atomic::AtomicBool>,
     // Handle to the render task for cleanup
     render_task_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -92,7 +92,7 @@ impl GStreamerComposite {
             pipeline_height: Arc::new(RwLock::new(720)),
             wgpu_compositor: None,
             tauri_app: None,
-            render_cancel_token: CancellationToken::new(),
+            render_cancelled: Arc::new(AtomicBool::new(false)),
             render_task_handle: None,
         })
     }
@@ -266,32 +266,27 @@ impl GStreamerComposite {
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let cancel_token = self.render_cancel_token.clone();
+        let cancelled = self.render_cancelled.clone();
 
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(33)); // ~30fps
 
             loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if cancel_token.is_cancelled() || !*is_running.read() {
-                            break;
-                        }
+                interval.tick().await;
 
-                        // Render frame
-                        if let Ok(mut compositor_guard) = wgpu_compositor.try_lock() {
-                            if let Ok(rgba_data) = compositor_guard.render_rgba() {
-                                // Send RGBA data over WebSocket broadcast (existing mechanism)
-                                // Use try_send to avoid blocking if channel is full
-                                if let Some(sender) = frame_sender.read().as_ref() {
-                                    // Only send if there's capacity to avoid accumulation
-                                    let _ = sender.send(rgba_data);
-                                }
-                            }
+                if cancelled.load(Ordering::Relaxed) || !*is_running.read() {
+                    break;
+                }
+
+                // Render frame
+                if let Some(mut compositor_guard) = wgpu_compositor.try_lock() {
+                    if let Ok(rgba_data) = compositor_guard.render_rgba() {
+                        // Send RGBA data over WebSocket broadcast (existing mechanism)
+                        // Use try_send to avoid blocking if channel is full
+                        if let Some(sender) = frame_sender.read().as_ref() {
+                            // Only send if there's capacity to avoid accumulation
+                            let _ = sender.send(rgba_data);
                         }
-                    }
-                    _ = cancel_token.cancelled() => {
-                        break;
                     }
                 }
             }
@@ -326,15 +321,11 @@ impl GStreamerComposite {
         *self.is_running.write() = false;
 
         // Cancel render task
-        self.render_cancel_token.cancel();
+        self.render_cancelled.store(true, Ordering::Relaxed);
 
-        // Wait for render task to finish (with timeout to avoid hanging)
-        if let Some(handle) = self.render_task_handle.take() {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_millis(100),
-                handle
-            ).await;
-        }
+        // Don't wait for the task to finish to avoid async issues
+        // The task will be cancelled and cleaned up automatically
+        self.render_task_handle.take();
 
         if let Some(pipeline) = &self.pipeline {
             pipeline
@@ -356,7 +347,6 @@ impl GStreamerComposite {
     pub fn get_pipeline_state(&self) -> Option<gst::State> {
         self.pipeline.as_ref().map(|p| p.current_state())
     }
-}
 
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
@@ -902,6 +892,7 @@ impl GStreamerComposite {
         println!("[Composite FX] ✅ Emergency cleanup complete");
         Ok(())
     }
+}
 
 impl Drop for GStreamerComposite {
     fn drop(&mut self) {
