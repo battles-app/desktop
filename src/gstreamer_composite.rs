@@ -728,7 +728,10 @@ impl GStreamerComposite {
 
                     // Broadcast JPEG frame to WebSocket clients
                     if let Some(sender) = &*frame_sender.read() {
+                        println!("[Composite] 📡 Sending frame to WebSocket ({} bytes)", jpeg_data.len());
                         let _ = sender.send(jpeg_data.to_vec());
+                    } else {
+                        println!("[Composite] ⚠️ No frame sender available for WebSocket");
                     }
 
                     Ok(gst::FlowSuccess::Ok)

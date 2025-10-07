@@ -772,12 +772,13 @@ async fn start_composite_websocket_server() {
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
-                println!("[Composite WS] Failed to bind to {}: {}", addr, e);
+                println!("[Composite WS] ❌ Failed to bind to {}: {}", addr, e);
+                println!("[Composite WS] This might be because port {} is already in use", COMPOSITE_WS_PORT);
                 return;
             }
         };
-        
-        println!("[Composite WS] WebSocket server listening on {}", addr);
+
+        println!("[Composite WS] ✅ WebSocket server listening on {}", addr);
         
         while let Ok((stream, _)) = listener.accept().await {
             // Clone the sender before spawning
