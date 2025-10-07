@@ -866,35 +866,69 @@ impl GStreamerComposite {
             println!("[Composite FX] 🎨 Chroma key enabled - keycolor: {} (R:{:.2}, G:{:.2}, B:{:.2}), tolerance: {:.2}, similarity: {:.2}",
                      keycolor, key_r, key_g, key_b, tolerance, similarity);
 
-            // TEMPORARILY DISABLE CHROMA KEYING - appsink/appsrc blocking pipeline flow
-            println!("[Chroma Key] ⚠️ Chroma keying disabled - appsink/appsrc causing frame stalls");
-            println!("  Issue: Signal handlers blocking GStreamer pipeline flow");
-            println!("  TODO: Implement simpler chroma keying approach");
-            let chroma_element = None;
+            // Implement proper chroma keying using alpha element in a bin
+            let chroma_element = {
+                // Create a bin to hold chroma keying elements
+                let chroma_bin = gst::Bin::builder().name("chroma_bin").build();
+
+                // Alpha element for chroma keying
+                let alpha = ElementFactory::make("alpha")
+                    .name("chroma_alpha")
+                    .build()
+                    .map_err(|_| "Failed to create alpha element")?;
+
+                // Configure alpha for custom RGB chroma keying
+                alpha.set_property_from_str("method", "custom");
+                alpha.set_property("target-r", (key_r * 255.0) as u32);
+                alpha.set_property("target-g", (key_g * 255.0) as u32);
+                alpha.set_property("target-b", (key_b * 255.0) as u32);
+
+                // Fine-tune chroma key parameters
+                alpha.set_property("angle", (tolerance * 90.0) as f32);  // Color cube size
+                alpha.set_property("noise-level", (similarity * 64.0) as f32);  // Edge smoothing
+                alpha.set_property("white-sensitivity", 100u32);
+                alpha.set_property("black-sensitivity", 100u32);
+
+                // Add alpha to bin
+                chroma_bin.add(&alpha).map_err(|_| "Failed to add alpha to chroma bin")?;
+
+                // Create ghost pads for the bin
+                let sink_pad = alpha.static_pad("sink").unwrap();
+                let src_pad = alpha.static_pad("src").unwrap();
+
+                let ghost_sink = gst::GhostPad::with_target(&sink_pad).unwrap();
+                let ghost_src = gst::GhostPad::with_target(&src_pad).unwrap();
+
+                ghost_sink.set_active(true).unwrap();
+                ghost_src.set_active(true).unwrap();
+
+                chroma_bin.add_pad(&ghost_sink).unwrap();
+                chroma_bin.add_pad(&ghost_src).unwrap();
+
+                println!("[Chroma Key] 🎨 Alpha element configured for chroma keying:");
+                println!("  Method: Custom RGB chroma key");
+                println!("  Target color: RGB({}, {}, {})", (key_r * 255.0) as u32, (key_g * 255.0) as u32, (key_b * 255.0) as u32);
+                println!("  Angle: {:.1}° (color tolerance)", tolerance * 90.0);
+                println!("  Noise level: {:.1} (edge smoothing)", similarity * 64.0);
+
+                Some(chroma_bin.upcast::<gst::Element>())
+            };
 
             // Build pipeline based on chroma key availability
             let (elements, final_capsfilter) = if let Some(chroma_elem) = chroma_element {
-                // Pipeline with chroma key: videoconvert -> capsfilter(BGRA) -> chroma_bin -> videoscale -> capsfilter(BGRA)
-                // Chroma bin contains appsink/appsrc for software processing
-                let bgra_caps = gst::Caps::builder("video/x-raw")
-                    .field("format", "BGRA")
+                // Pipeline with chroma key: videoconvert -> chroma_bin(alpha) -> videoscale -> capsfilter
+                // Alpha element handles chroma keying and outputs RGBA with transparency
+                let rgba_caps = gst::Caps::builder("video/x-raw")
+                    .field("format", "RGBA")
                     .build();
 
-                // Input capsfilter to ensure BGRA format for processing
-                let input_capsfilter = ElementFactory::make("capsfilter")
-                    .name("fxinputcaps")
-                    .property("caps", &bgra_caps)
-                    .build()
-                    .map_err(|_| "Failed to create input capsfilter")?;
-
-                // Output capsfilter for compositor
-                let output_capsfilter = ElementFactory::make("capsfilter")
+                let capsfilter = ElementFactory::make("capsfilter")
                     .name("fxcaps")
-                    .property("caps", &bgra_caps)
+                    .property("caps", &rgba_caps)
                     .build()
-                    .map_err(|_| "Failed to create output capsfilter")?;
+                    .map_err(|_| "Failed to create RGBA capsfilter")?;
 
-                (vec![videoconvert.clone(), input_capsfilter, chroma_elem, videoscale.clone(), output_capsfilter.clone()], output_capsfilter)
+                (vec![videoconvert.clone(), chroma_elem, videoscale.clone(), capsfilter.clone()], capsfilter)
             } else {
                 // Fallback pipeline: videoconvert -> videoscale -> capsfilter
                 let caps = gst::Caps::builder("video/x-raw")
@@ -929,7 +963,7 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🎬 Forced 30fps H.264 MP4 playback - videorate ensures consistent timing");
         if use_chroma_key {
-            println!("[Composite FX] 🎨 Chroma key requested but temporarily disabled (pipeline flow issues)");
+            println!("[Composite FX] 🎨 Chroma key requested - using alpha element for green screen removal");
         } else {
             println!("[Composite FX] 📹 Standard pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter");
         }
