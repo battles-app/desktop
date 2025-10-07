@@ -4,7 +4,11 @@ use gstreamer::{self as gst, Pipeline};
 use gstreamer_app::AppSink;
 use tokio::sync::broadcast;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::RwLock;
+
+// Global counter for unique FX playback IDs
+static FX_PLAYBACK_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
@@ -44,6 +48,7 @@ pub struct FxPlaybackState {
     pub use_chroma_key: bool,
     pub compositor_sink_pad: Option<gst::Pad>, // Store sink pad for proper cleanup
     pub cleanup_in_progress: Arc<parking_lot::Mutex<bool>>, // Prevent double cleanup
+    pub playback_id: u64, // Unique ID to prevent old EOS probes from interfering
 }
 
 impl Default for LayerSettings {
@@ -578,6 +583,9 @@ impl GStreamerComposite {
         pipeline.set_state(gst::State::Playing).ok();
         
         // Create NEW FX state for this playback (AFTER cleanup, BEFORE pad request)
+        // Generate unique playback ID for this FX
+        let playback_id = FX_PLAYBACK_COUNTER.fetch_add(1, Ordering::SeqCst);
+
         *self.fx_state.write() = Some(FxPlaybackState {
             file_url: file_path.clone(),
             keycolor: keycolor.clone(),
@@ -586,6 +594,7 @@ impl GStreamerComposite {
             use_chroma_key,
             compositor_sink_pad: None, // Will be set when pad is requested
             cleanup_in_progress: Arc::new(parking_lot::Mutex::new(false)),
+            playback_id,
         });
         
         println!("[Composite FX] 🚀 Creating uridecodebin (no disk I/O!)...");
