@@ -95,28 +95,22 @@ impl GStreamerComposite {
     
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
         println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-
+        
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
             let _ = pipeline.set_state(gst::State::Null);
         }
-
+        
         *self.is_running.write() = true;
-
+        
         // Store pipeline dimensions and FPS
         *self.pipeline_fps.write() = fps;
         *self.pipeline_width.write() = width;
         *self.pipeline_height.write() = height;
-
-        // Check if effects-only mode (no camera)
-        let is_effects_only = camera_device_id.is_empty();
-
-        let device_index: u32 = if is_effects_only {
-            0 // Dummy value, won't be used
-        } else {
-            camera_device_id.parse().map_err(|_| "Invalid camera device ID")?
-        };
-
+        
+        let device_index: u32 = camera_device_id.parse()
+            .map_err(|_| "Invalid camera device ID")?;
+        
         // Map rotation degrees to videoflip method
         // 0 = none, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
         let videoflip_method = match rotation {
@@ -131,24 +125,7 @@ impl GStreamerComposite {
         // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
         
         #[cfg(target_os = "windows")]
-        let pipeline_str = if is_effects_only {
-            // Effects-only mode: no camera input, just compositor with black background
-            format!(
-                "compositor name=comp background=black \
-                   sink_1::zorder=1 sink_1::alpha={} ! \
-                 videoconvert ! \
-                 video/x-raw,format=BGRx,width={},height={} ! \
-                 tee name=t \
-                 t. ! queue leaky=downstream max-size-buffers=2 ! \
-                   jpegenc quality=90 ! \
-                   appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
-                 t. ! queue leaky=downstream max-size-buffers=2 ! {}",
-                self.layers.read().overlay_opacity,
-                width,
-                height,
-                self.get_output_branch()
-            )
-        } else if videoflip_method != "none" {
+        let pipeline_str = if videoflip_method != "none" {
             format!(
                 "compositor name=comp background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
@@ -530,39 +507,15 @@ impl GStreamerComposite {
 
     /// Play an FX file from file path (file already written by main.rs, NO I/O while locked!)
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
-        // Rate limiting: prevent rapid successive FX requests during pipeline transitions
-        static LAST_FX_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-
-        let last_time = LAST_FX_TIME.load(std::sync::atomic::Ordering::Relaxed);
-        if now - last_time < 500 { // Minimum 500ms between FX requests
-            println!("[Composite FX] ⚡ Rate limiting: ignoring rapid FX request");
-            return Ok(());
-        }
-        LAST_FX_TIME.store(now, std::sync::atomic::Ordering::Relaxed);
-
         println!("[Composite FX] 🎬 Playing FX from file (clean playback - no effects)");
         println!("[Composite FX] 📁 File: {}", file_path);
         println!("[Composite FX] ⏰ Start time: {:?}", std::time::Instant::now());
-
-        // Check if pipeline is running and ready
+        
+        // Get the pipeline
         let pipeline = match &self.pipeline {
-            Some(p) => {
-                // Check pipeline state
-                match p.current_state() {
-                    gst::State::Playing | gst::State::Paused => p,
-                    _ => {
-                        println!("[Composite FX] ⚠️ Pipeline not ready (state: {:?}) - skipping FX", p.current_state());
-                        return Ok(()); // Don't error, just skip
-                    }
-                }
-            },
+            Some(p) => p,
             None => {
-                println!("[Composite FX] ⚠️ No active pipeline - skipping FX");
-                return Ok(()); // Don't error, just skip
+                return Err("[Composite FX] ❌ No pipeline running - please select a camera first!".to_string());
             }
         };
         
@@ -948,15 +901,6 @@ impl GStreamerComposite {
         let sink_pad_name = "sink_1";
 
         println!("[Composite FX] 🔌 Requesting sink pad: {}", sink_pad_name);
-
-        // Check if sink_1 already exists and is in use
-        if let Some(existing_pad) = compositor.static_pad(sink_pad_name) {
-            if existing_pad.is_linked() {
-                println!("[Composite FX] ⚠️ Sink pad {} already exists and is linked - FX already playing", sink_pad_name);
-                // Don't try to play new FX if one is already active
-                return Ok(());
-            }
-        }
 
         let comp_sink_pad = compositor
             .request_pad_simple(sink_pad_name)
