@@ -405,30 +405,74 @@ impl GStreamerComposite {
 
         println!("[Composite FX] 🧹 Performing safe cleanup...");
 
-        // Unlink from compositor FIRST to stop data flow
-        if let Some(ghost_pad) = fx_bin.static_pad("src") {
-            if let Some(peer_pad) = ghost_pad.peer() {
-                // Check if pad belongs to compositor BEFORE unlinking
-                let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
-
-                if should_release {
-                    // FLUSH the media pad to reset timing
-                    if let Err(e) = self.safe_flush_pad(&peer_pad, compositor) {
-                        println!("[Composite FX] ❌ Safe flush failed during cleanup: {}", e);
-                    }
-                }
-
-                // Unlink
-                ghost_pad.unlink(&peer_pad).ok();
-
-                // Release if it belonged to compositor (checked before unlink)
-                if should_release && peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
-                    compositor.release_request_pad(&peer_pad);
-                    println!("[Composite FX] ✅ Released compositor pad during cleanup");
-                } else {
-                    println!("[Composite FX] ⚠️ Pad already released or ownership changed");
-                }
+        // EXTRA DEFENSIVE: Check if bin is still valid and has the expected pad
+        let ghost_pad = match fx_bin.static_pad("src") {
+            Some(pad) => pad,
+            None => {
+                println!("[Composite FX] ⚠️ FX bin has no src pad, cleanup not needed");
+                return Ok(());
             }
+        };
+
+        // Check if ghost pad has a peer (is linked)
+        let peer_pad = match ghost_pad.peer() {
+            Some(pad) => pad,
+            None => {
+                println!("[Composite FX] ⚠️ Ghost pad not linked, cleanup not needed");
+                return Ok(());
+            }
+        };
+
+        // MULTIPLE SAFETY CHECKS for pad validity
+        let compositor_ref = compositor.upcast_ref();
+
+        // Check 1: Pad still belongs to compositor
+        let should_release = peer_pad.parent().as_ref() == Some(compositor_ref);
+
+        // Check 2: Pad is still active/linked
+        let is_linked = ghost_pad.is_linked();
+
+        // Check 3: Compositor still owns this pad (check if pad parent is still compositor)
+        let compositor_owns_pad = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
+
+        println!("[Composite FX] 🛡️ Safety checks: should_release={}, is_linked={}, compositor_owns={}",
+                 should_release, is_linked, compositor_owns_pad);
+
+        if !is_linked {
+            println!("[Composite FX] ⚠️ Pad not linked, skipping cleanup");
+            return Ok(());
+        }
+
+        if should_release && compositor_owns_pad {
+            // FLUSH the media pad to reset timing - with extra safety
+            if let Err(e) = self.safe_flush_pad(&peer_pad, compositor) {
+                println!("[Composite FX] ❌ Safe flush failed during cleanup: {}", e);
+                // Don't fail the entire cleanup just because flush failed
+            }
+        }
+
+        // Unlink pads safely
+        let unlink_result = ghost_pad.unlink(&peer_pad);
+        match unlink_result {
+            Ok(_) => println!("[Composite FX] ✅ Successfully unlinked pads"),
+            Err(e) => {
+                println!("[Composite FX] ⚠️ Unlink failed (might already be unlinked): {:?}", e);
+            }
+        }
+
+        // Release pad only if all safety checks pass - with extra validation
+        if should_release && compositor_owns_pad && peer_pad.parent().as_ref() == Some(compositor_ref) {
+            // Extra safety: try to release the pad but don't crash if it fails
+            let release_result = std::panic::catch_unwind(|| {
+                compositor.release_request_pad(&peer_pad);
+            });
+
+            match release_result {
+                Ok(_) => println!("[Composite FX] ✅ Released compositor pad during cleanup"),
+                Err(e) => println!("[Composite FX] ⚠️ Pad release failed (but continuing): {:?}", e),
+            }
+        } else {
+            println!("[Composite FX] ⚠️ Pad already released or safety checks failed");
         }
 
         Ok(())
@@ -631,6 +675,10 @@ impl GStreamerComposite {
                     let pad_mutex_weak_clone = pad_mutex_weak.clone();
 
                     std::thread::spawn(move || {
+                        // Add timeout to prevent hanging cleanup threads
+                        let start_time = std::time::Instant::now();
+                        let timeout_duration = std::time::Duration::from_secs(5); // 5 second timeout
+
                         // Check if cleanup is already in progress to prevent double cleanup
                         let cleanup_already_started = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
                             let fx_state = fx_state_arc.read();
@@ -657,59 +705,117 @@ impl GStreamerComposite {
                         if let (Some(fx_bin), Some(pipeline), Some(compositor), Some(pad_mutex)) =
                             (fx_bin_weak_clone.upgrade(), pipeline_weak_clone.upgrade(), compositor_weak_clone.upgrade(), pad_mutex_weak_clone.upgrade()) {
 
-                            println!("[Composite FX] 🧹 EOS Auto-cleanup: Unlinking from compositor...");
+                            println!("[Composite FX] 🧹 EOS Auto-cleanup: Starting defensive cleanup...");
 
-                            // Unlink and release pad (only if still owned by compositor) - with proper synchronization
-                            if let Some(ghost_pad) = fx_bin.static_pad("src") {
-                                if let Some(peer_pad) = ghost_pad.peer() {
-                                    // Check if pad belongs to compositor BEFORE unlinking
-                                    let should_release = peer_pad.parent().as_ref() == Some(compositor.upcast_ref());
-
-                                    if should_release {
-                                        // Acquire mutex to prevent concurrent pad operations
-                                        let _guard = pad_mutex.lock();
-
-                                        // Double-check pad is still valid after acquiring lock
-                                        if peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
-                                            // FLUSH the media pad after EOS to reset timing
-                                            let flush_start_ok = peer_pad.send_event(gst::event::FlushStart::new());
-                                            std::thread::sleep(std::time::Duration::from_millis(1)); // Small delay
-                                            let flush_stop_ok = peer_pad.send_event(gst::event::FlushStop::new(true));
-
-                                            if flush_start_ok && flush_stop_ok {
-                                                println!("[Composite FX] 🔄 Flushed sink_1 after EOS");
-                                            } else {
-                                                println!("[Composite FX] ⚠️ Flush events failed during EOS cleanup");
-                                            }
-                                        } else {
-                                            println!("[Composite FX] ⚠️ Pad ownership changed during EOS cleanup, skipping flush");
-                                        }
-                                    }
-
-                                    // Unlink (safe to do even if flush failed)
-                                    ghost_pad.unlink(&peer_pad).ok();
-
-                                    // Release if it belonged to compositor (checked before unlink)
-                                    if should_release && peer_pad.parent().as_ref() == Some(compositor.upcast_ref()) {
-                                        compositor.release_request_pad(&peer_pad);
-                                        println!("[Composite FX] ✅ Released compositor pad via EOS cleanup");
-                                    } else {
-                                        println!("[Composite FX] ⚠️ Pad already released or ownership changed");
-                                    }
+                            // DEFENSIVE CLEANUP: Multiple safety checks before touching pads
+                            let ghost_pad = match fx_bin.static_pad("src") {
+                                Some(pad) => pad,
+                                None => {
+                                    println!("[Composite FX] ⚠️ EOS: FX bin has no src pad");
+                                    return;
                                 }
+                            };
+
+                            let peer_pad = match ghost_pad.peer() {
+                                Some(pad) => pad,
+                                None => {
+                                    println!("[Composite FX] ⚠️ EOS: Ghost pad not linked");
+                                    return;
+                                }
+                            };
+
+                            // MULTIPLE SAFETY CHECKS (same as safe_cleanup_fx)
+                            let compositor_ref = compositor.upcast_ref();
+                            let should_release = peer_pad.parent().as_ref() == Some(compositor_ref);
+                            let is_linked = ghost_pad.is_linked();
+                            let compositor_owns_pad = peer_pad.parent().as_ref() == Some(compositor_ref);
+
+                            println!("[Composite FX] 🛡️ EOS Safety checks: should_release={}, is_linked={}, compositor_owns={}",
+                                     should_release, is_linked, compositor_owns_pad);
+
+                            if !is_linked {
+                                println!("[Composite FX] ⚠️ EOS: Pad not linked, skipping cleanup");
+                            } else if should_release && compositor_owns_pad {
+                                // Acquire mutex to prevent concurrent pad operations
+                                let _guard = pad_mutex.lock();
+
+                                // Double-check pad is still valid after acquiring lock
+                                if peer_pad.parent().as_ref() == Some(compositor_ref) {
+                                    // FLUSH the media pad after EOS to reset timing
+                                    let flush_start_ok = peer_pad.send_event(gst::event::FlushStart::new());
+                                    std::thread::sleep(std::time::Duration::from_millis(1)); // Small delay
+                                    let flush_stop_ok = peer_pad.send_event(gst::event::FlushStop::new(true));
+
+                                    if flush_start_ok && flush_stop_ok {
+                                        println!("[Composite FX] 🔄 Flushed sink_1 after EOS");
+                                    } else {
+                                        println!("[Composite FX] ⚠️ Flush events failed during EOS cleanup");
+                                    }
+                                } else {
+                                    println!("[Composite FX] ⚠️ Pad ownership changed during EOS cleanup, skipping flush");
+                                }
+
+                                // Unlink (safe to do even if flush failed)
+                                let unlink_result = ghost_pad.unlink(&peer_pad);
+                                match unlink_result {
+                                    Ok(_) => println!("[Composite FX] ✅ EOS: Successfully unlinked pads"),
+                                    Err(e) => println!("[Composite FX] ⚠️ EOS: Unlink failed: {:?}", e),
+                                }
+
+                                // Release if it belonged to compositor and still belongs after unlink - with panic protection
+                                if peer_pad.parent().as_ref() == Some(compositor_ref) {
+                                    // Extra safety: try to release the pad but don't crash if it fails
+                                    let release_result = std::panic::catch_unwind(|| {
+                                        compositor.release_request_pad(&peer_pad);
+                                    });
+
+                                    match release_result {
+                                        Ok(_) => println!("[Composite FX] ✅ Released compositor pad via EOS cleanup"),
+                                        Err(e) => println!("[Composite FX] ⚠️ Pad release failed during EOS cleanup (but continuing): {:?}", e),
+                                    }
+                                } else {
+                                    println!("[Composite FX] ⚠️ Pad already released or ownership changed during EOS cleanup");
+                                }
+                            } else {
+                                // Just unlink if we can't safely flush/release
+                                let _ = ghost_pad.unlink(&peer_pad);
+                                println!("[Composite FX] ⚠️ EOS: Skipped flush/release, only unlinked");
                             }
 
-                            // Stop and remove bin
-                            fx_bin.set_state(gst::State::Null).ok();
+                            // Stop and remove bin - with extra safety
+                            let _ = fx_bin.set_state(gst::State::Null);
                             let _ = fx_bin.state(Some(gst::ClockTime::from_seconds(1)));
-                            pipeline.remove(&fx_bin).ok();
+
+                            // Safe pipeline removal with panic protection
+                            let remove_result = std::panic::catch_unwind(|| {
+                                pipeline.remove(&fx_bin)
+                            });
+
+                            match remove_result {
+                                Ok(result) => {
+                                    if result.is_ok() {
+                                        println!("[Composite FX] ✅ FX bin removed from pipeline");
+                                    } else {
+                                        println!("[Composite FX] ⚠️ FX bin removal returned error");
+                                    }
+                                }
+                                Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked (but continuing): {:?}", e),
+                            }
+
+                            // Check for timeout before finishing
+                            if start_time.elapsed() > timeout_duration {
+                                println!("[Composite FX] ⚠️ EOS cleanup timed out after {}ms", start_time.elapsed().as_millis());
+                            }
 
                             // Clear FX state (garbage collection)
                             if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
                                 *fx_state_arc.write() = None;
+                                println!("[Composite FX] ✅ FX state cleared");
                             }
 
                             println!("[Composite FX] ✅ EOS Auto-cleanup complete - memory freed, ready for next FX");
+                        } else {
+                            println!("[Composite FX] ⚠️ EOS cleanup: Some weak references were dropped, cleanup may have already happened");
                         }
                     });
                 }
@@ -894,19 +1000,43 @@ impl GStreamerComposite {
                     println!("[Composite FX] ❌ Safe cleanup failed during manual stop: {}", e);
                 }
 
-                // Set bin to NULL state (non-blocking)
-                let _ = fx_bin.set_state(gst::State::Null);
-
-                // Set all child elements to NULL (non-blocking)
-                let iterator = fx_bin.iterate_elements();
-                for item in iterator {
-                    if let Ok(element) = item {
-                        let _ = element.set_state(gst::State::Null);
-                    }
+                // Set bin to NULL state (non-blocking) - with panic protection
+                let set_state_result = std::panic::catch_unwind(|| {
+                    fx_bin.set_state(gst::State::Null)
+                });
+                match set_state_result {
+                    Ok(_) => println!("[Composite FX] ✅ FX bin set to NULL state"),
+                    Err(e) => println!("[Composite FX] ⚠️ FX bin set_state panicked: {:?}", e),
                 }
 
-                // Remove bin from pipeline
-                pipeline.remove(&fx_bin).ok();
+                // Set all child elements to NULL (non-blocking) - with panic protection
+                let iterator_result = std::panic::catch_unwind(|| {
+                    fx_bin.iterate_elements()
+                });
+                if let Ok(iterator) = iterator_result {
+                    for item in iterator {
+                        if let Ok(element) = item {
+                            let _ = element.set_state(gst::State::Null);
+                        }
+                    }
+                } else {
+                    println!("[Composite FX] ⚠️ FX bin iterate_elements panicked");
+                }
+
+                // Remove bin from pipeline - with panic protection
+                let remove_result = std::panic::catch_unwind(|| {
+                    pipeline.remove(&fx_bin)
+                });
+                match remove_result {
+                    Ok(result) => {
+                        if result.is_ok() {
+                            println!("[Composite FX] ✅ FX bin removed from pipeline during manual stop");
+                        } else {
+                            println!("[Composite FX] ⚠️ FX bin removal failed during manual stop");
+                        }
+                    }
+                    Err(e) => println!("[Composite FX] ⚠️ Pipeline removal panicked during manual stop: {:?}", e),
+                }
 
                 println!("[Composite FX] ✅ FX branch removed and memory freed");
             }
@@ -916,6 +1046,7 @@ impl GStreamerComposite {
         
         // Clear FX state after cleanup complete
         *self.fx_state.write() = None;
+        println!("[Composite FX] ✅ FX state cleared after manual stop");
         
         Ok(())
     }
