@@ -10,18 +10,260 @@ use parking_lot::RwLock;
 // Global counter for unique FX playback IDs
 static FX_PLAYBACK_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+// ============================================================================
+// GPU-ACCELERATED FX SOURCE BIN (GL Memory, Ultra-Low Latency)
+// ============================================================================
+
+pub struct FxKeyBin {
+    pub bin: gst::Bin,
+    decode: gst::Element,         // decodebin3
+    vconv: gst::Element,          // videoconvert (only once, before GL)
+    caps_rgba: gst::Element,      // capsfilter to RGBA
+    glupload: gst::Element,
+    glconv: gst::Element,         // glcolorconvert
+    tee: gst::Element,
+
+    // Branch A (keyed)
+    q_key: gst::Element,
+    glalpha: gst::Element,
+
+    // Branch B (clean)
+    q_clean: gst::Element,
+
+    selector: gst::Element,       // inputselector
+    out_glconv: gst::Element,     // glcolorconvert (normalize after selector)
+    out_caps: gst::Element,       // caps to GL RGBA for the mixer
+}
+
+impl FxKeyBin {
+    pub fn new(name: &str) -> Result<Self, String> {
+        let bin = gst::Bin::builder().name(name).build();
+
+        // Use decodebin3 for better preroll/low-latency behavior
+        let decode = gst::ElementFactory::make("decodebin3")
+            .name(&format!("{}_decode", name))
+            .build()
+            .map_err(|e| format!("Failed to create decodebin3: {}", e))?;
+        
+        // Prefer hardware video decoders when available
+        decode.connect_autoplug_select(|_dbin, _pad, _caps, factory| {
+            let fname = factory.name();
+            if fname.starts_with("d3d11") || fname.starts_with("nv") || fname.starts_with("vaapi") {
+                gst::AutoplugSelectResult::Try
+            } else {
+                gst::AutoplugSelectResult::Try
+            }
+        });
+
+        let vconv = gst::ElementFactory::make("videoconvert")
+            .name(&format!("{}_vconv", name))
+            .build()
+            .map_err(|e| format!("Failed to create videoconvert: {}", e))?;
+        
+        let caps_rgba = gst::ElementFactory::make("capsfilter")
+            .name(&format!("{}_capsrgba", name))
+            .build()
+            .map_err(|e| format!("Failed to create capsfilter: {}", e))?;
+        caps_rgba.set_property("caps", &gst::Caps::builder("video/x-raw")
+            .field("format", "RGBA")
+            .build());
+
+        let glupload = gst::ElementFactory::make("glupload")
+            .name(&format!("{}_glup", name))
+            .build()
+            .map_err(|e| format!("Failed to create glupload: {}", e))?;
+        
+        let glconv = gst::ElementFactory::make("glcolorconvert")
+            .name(&format!("{}_glconv", name))
+            .build()
+            .map_err(|e| format!("Failed to create glcolorconvert: {}", e))?;
+        
+        let tee = gst::ElementFactory::make("tee")
+            .name(&format!("{}_tee", name))
+            .build()
+            .map_err(|e| format!("Failed to create tee: {}", e))?;
+
+        // Tiny, leaky queues cut latency and avoid buildup
+        let q_key = Self::make_leaky_queue(&format!("{}_q_key", name))?;
+        
+        let glalpha = gst::ElementFactory::make("glalpha")
+            .name(&format!("{}_glalpha", name))
+            .build()
+            .map_err(|e| format!("Failed to create glalpha: {}", e))?;
+        glalpha.set_property_from_str("method", "green");
+        glalpha.set_property("angle", 18i32);
+        glalpha.set_property("noise-level", 1i32);
+        glalpha.set_property("black-sensitivity", 80i32);
+        glalpha.set_property("white-sensitivity", 80i32);
+
+        let q_clean = Self::make_leaky_queue(&format!("{}_q_clean", name))?;
+
+        let selector = gst::ElementFactory::make("input-selector")
+            .name(&format!("{}_sel", name))
+            .build()
+            .map_err(|e| format!("Failed to create input-selector: {}", e))?;
+        
+        let out_glconv = gst::ElementFactory::make("glcolorconvert")
+            .name(&format!("{}_outgl", name))
+            .build()
+            .map_err(|e| format!("Failed to create out glcolorconvert: {}", e))?;
+        
+        let out_caps = gst::ElementFactory::make("capsfilter")
+            .name(&format!("{}_outcaps", name))
+            .build()
+            .map_err(|e| format!("Failed to create out capsfilter: {}", e))?;
+        
+        // Keep it in GL memory & RGBA for glvideomixer
+        let gl_caps = gst::Caps::builder("video/x-raw")
+            .features(gst::CapsFeatures::new(&["memory:GLMemory"]))
+            .field("format", "RGBA")
+            .build();
+        out_caps.set_property("caps", &gl_caps);
+
+        bin.add_many(&[
+            &decode, &vconv, &caps_rgba, &glupload, &glconv, &tee,
+            &q_key, &glalpha, &q_clean, &selector, &out_glconv, &out_caps,
+        ]).map_err(|e| format!("Failed to add elements to bin: {}", e))?;
+
+        // Shared pre-branch: CPU RGBA → GL
+        gst::Element::link_many(&[&vconv, &caps_rgba, &glupload, &glconv, &tee])
+            .map_err(|e| format!("Failed to link pre-branch: {}", e))?;
+
+        // Request tee pads and link branches
+        let tee_key = tee.request_pad_simple("src_%u")
+            .ok_or_else(|| "Failed to request tee src pad A".to_string())?;
+        let tee_clean = tee.request_pad_simple("src_%u")
+            .ok_or_else(|| "Failed to request tee src pad B".to_string())?;
+        
+        tee_key.link(&q_key.static_pad("sink").unwrap())
+            .map_err(|e| format!("Failed to link tee to q_key: {:?}", e))?;
+        tee_clean.link(&q_clean.static_pad("sink").unwrap())
+            .map_err(|e| format!("Failed to link tee to q_clean: {:?}", e))?;
+
+        // Branch A (keyed): q_key → glalpha → selector
+        gst::Element::link_many(&[&q_key, &glalpha])
+            .map_err(|e| format!("Failed to link keyed branch: {}", e))?;
+        glalpha.link(&selector)
+            .map_err(|e| format!("Failed to link glalpha to selector: {}", e))?;
+        
+        // Branch B (clean): q_clean → selector
+        q_clean.link(&selector)
+            .map_err(|e| format!("Failed to link clean branch: {}", e))?;
+
+        // Selector → out_gl → out_caps → (ghost src pad)
+        gst::Element::link_many(&[&selector, &out_glconv, &out_caps])
+            .map_err(|e| format!("Failed to link output chain: {}", e))?;
+
+        // Ghost pad (src) that you'll link to glvideomixer.sink_1
+        let src_pad = out_caps.static_pad("src")
+            .ok_or_else(|| "Failed to get src pad from out_caps".to_string())?;
+        let ghost_src = gst::GhostPad::with_target(&src_pad)
+            .map_err(|_| "Failed to create ghost pad".to_string())?;
+        ghost_src.set_active(true).ok();
+        bin.add_pad(&ghost_src)
+            .map_err(|e| format!("Failed to add ghost pad: {}", e))?;
+
+        // Dynamic link: decodebin3 video pad → vconv.sink
+        let vconv_sink = vconv.static_pad("sink").unwrap();
+        decode.connect_pad_added(move |_dbin, src_pad| {
+            let is_video = src_pad
+                .current_caps()
+                .and_then(|c| c.structure(0).map(|s| s.name().starts_with("video/")))
+                .unwrap_or(false);
+            if is_video && !vconv_sink.is_linked() {
+                let _ = src_pad.link(&vconv_sink);
+                println!("[FX GL] ✅ Video pad linked to converter");
+            }
+        });
+
+        Ok(Self {
+            bin, decode, vconv, caps_rgba, glupload, glconv, tee,
+            q_key, glalpha, q_clean, selector, out_glconv, out_caps,
+        })
+    }
+
+    /// Point to a new file. Call `flush()` before/after to reset timing.
+    pub fn set_uri(&self, uri: &str) -> Result<(), String> {
+        self.decode.set_property("uri", uri);
+        Ok(())
+    }
+
+    /// Choose keyed (true) or clean (false) **before** preroll (and you can live-switch if needed).
+    pub fn set_key_enabled(&self, enabled: bool) -> Result<(), String> {
+        let pads: Vec<gst::Pad> = self.selector.iterate_sink_pads()
+            .into_iter()
+            .filter_map(|p| p.ok())
+            .collect();
+        
+        if pads.len() != 2 {
+            return Err(format!("selector expects 2 sink pads, got {}", pads.len()));
+        }
+        
+        // First added is keyed (glalpha), second is clean (q_clean)
+        let target = if enabled { &pads[0] } else { &pads[1] };
+        self.selector.set_property("active-pad", target);
+        
+        println!("[FX GL] 🎨 Chroma key mode: {}", if enabled { "ENABLED" } else { "DISABLED" });
+        Ok(())
+    }
+
+    /// Your NO-LAG ritual: flush downstream of the selector output (out_glconv sink pad).
+    pub fn flush(&self) -> Result<(), String> {
+        let sink_pad = self.out_glconv.static_pad("sink")
+            .ok_or_else(|| "no out_glconv sink".to_string())?;
+        
+        if !sink_pad.send_event(gst::event::FlushStart::new()) {
+            return Err("FlushStart not accepted".to_string());
+        }
+        
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        
+        if !sink_pad.send_event(gst::event::FlushStop::new(true)) {
+            return Err("FlushStop not accepted".to_string());
+        }
+        
+        println!("[FX GL] 🔄 Flush complete - timing reset");
+        Ok(())
+    }
+
+    /// Optional: tweak chroma at runtime like OBS
+    pub fn set_key_params(&self, method: &str, angle: i32, noise: i32, black: i32, white: i32) -> Result<(), String> {
+        self.glalpha.set_property_from_str("method", method);
+        self.glalpha.set_property("angle", angle);
+        self.glalpha.set_property("noise-level", noise);
+        self.glalpha.set_property("black-sensitivity", black);
+        self.glalpha.set_property("white-sensitivity", white);
+        
+        println!("[FX GL] 🎨 Key params: method={}, angle={}, noise={}, black={}, white={}",
+                 method, angle, noise, black, white);
+        Ok(())
+    }
+
+    fn make_leaky_queue(name: &str) -> Result<gst::Element, String> {
+        let q = gst::ElementFactory::make("queue")
+            .name(name)
+            .build()
+            .map_err(|e| format!("Failed to create queue: {}", e))?;
+        
+        q.set_property("leaky", 2i32);              // downstream
+        q.set_property("max-size-buffers", 2u32);
+        q.set_property("max-size-bytes", 0u32);
+        q.set_property("max-size-time", 0u64);
+        q.set_property("silent", true);
+        Ok(q)
+    }
+}
+
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
     frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     is_running: Arc<RwLock<bool>>,
     output_format: Arc<RwLock<OutputFormat>>,
     layers: Arc<RwLock<LayerSettings>>,
-    fx_state: Arc<RwLock<Option<FxPlaybackState>>>,
+    fx_bin: Arc<RwLock<Option<FxKeyBin>>>,
     pipeline_fps: Arc<RwLock<u32>>,
     pipeline_width: Arc<RwLock<u32>>,
     pipeline_height: Arc<RwLock<u32>>,
-    // Add mutex for pad operations to prevent race conditions
-    pad_operation_mutex: Arc<parking_lot::Mutex<()>>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,18 +279,6 @@ pub struct LayerSettings {
     pub camera_opacity: f64,
     pub overlay_enabled: bool,
     pub overlay_opacity: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct FxPlaybackState {
-    pub file_url: String,
-    pub keycolor: String,      // Hex color like "#00ff00"
-    pub tolerance: f64,        // 0.0 - 1.0
-    pub similarity: f64,       // 0.0 - 1.0
-    pub use_chroma_key: bool,
-    pub compositor_sink_pad: Option<gst::Pad>, // Store sink pad for proper cleanup
-    pub cleanup_in_progress: Arc<parking_lot::Mutex<bool>>, // Prevent double cleanup
-    pub playback_id: u64, // Unique ID to prevent old EOS probes from interfering
 }
 
 impl Default for LayerSettings {
@@ -67,7 +297,7 @@ impl GStreamerComposite {
         // Initialize GStreamer
         gst::init().map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
         
-        println!("[Composite] Initialized successfully");
+        println!("[Composite] Initialized successfully with GPU acceleration");
         
         Ok(Self {
             pipeline: None,
@@ -75,11 +305,10 @@ impl GStreamerComposite {
             is_running: Arc::new(RwLock::new(false)),
             output_format: Arc::new(RwLock::new(OutputFormat::Preview)),
             layers: Arc::new(RwLock::new(LayerSettings::default())),
-            fx_state: Arc::new(RwLock::new(None)),
+            fx_bin: Arc::new(RwLock::new(None)),
             pipeline_fps: Arc::new(RwLock::new(30)),
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
-            pad_operation_mutex: Arc::new(parking_lot::Mutex::new(())),
         })
     }
     
@@ -99,7 +328,7 @@ impl GStreamerComposite {
     }
     
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
-        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+        println!("[Composite] Starting GPU composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
         
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -117,7 +346,6 @@ impl GStreamerComposite {
             .map_err(|_| "Invalid camera device ID")?;
         
         // Map rotation degrees to videoflip method
-        // 0 = none, 1 = 90° clockwise, 2 = 180°, 3 = 90° counter-clockwise
         let videoflip_method = match rotation {
             90 => "clockwise",
             180 => "rotate-180",
@@ -125,16 +353,16 @@ impl GStreamerComposite {
             _ => "none",
         };
         
-        // Build GStreamer composite pipeline with compositor element
-        // The compositor element combines multiple video streams with alpha blending
-        // See: https://gstreamer.freedesktop.org/documentation/compositor/index.html
-        
+        // Build GPU-accelerated composite pipeline with glvideomixer
+        // All processing stays in GL memory for zero CPU copies
         #[cfg(target_os = "windows")]
         let pipeline_str = if videoflip_method != "none" {
             format!(
-                "compositor name=comp background=black \
+                "glvideomixer name=mix background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
-                   sink_1::zorder=1 sink_1::alpha={} ! \
+                   sink_1::zorder=1 sink_1::alpha={} \
+                   start-time-selection=first ! \
+                 glcolorconvert ! gldownload ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
@@ -143,30 +371,28 @@ impl GStreamerComposite {
                    appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue leaky=downstream max-size-buffers=2 ! {} \
                  mfvideosrc device-index={} ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
+                 queue leaky=downstream max-size-buffers=2 ! \
                  videoflip method={} ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
                  videoconvert ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 videoscale ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0",
+                 video/x-raw,format=RGBA ! \
+                 glupload ! glcolorconvert ! \
+                 video/x-raw(memory:GLMemory),format=RGBA ! \
+                 mix.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
                 self.get_output_branch(),
                 device_index,
-                videoflip_method,
-                width,
-                height
+                videoflip_method
             )
         } else {
             format!(
-                "compositor name=comp background=black \
+                "glvideomixer name=mix background=black \
                    sink_0::zorder=0 sink_0::alpha={} \
-                   sink_1::zorder=1 sink_1::alpha={} ! \
+                   sink_1::zorder=1 sink_1::alpha={} \
+                   start-time-selection=first ! \
+                 glcolorconvert ! gldownload ! \
                  videoconvert ! \
                  video/x-raw,format=BGRx,width={},height={} ! \
                  tee name=t \
@@ -175,29 +401,28 @@ impl GStreamerComposite {
                    appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
                  t. ! queue leaky=downstream max-size-buffers=2 ! {} \
                  mfvideosrc device-index={} ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
+                 queue leaky=downstream max-size-buffers=2 ! \
                  videoconvert ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 videoscale ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 video/x-raw,width={},height={},format=BGRA ! \
-                 comp.sink_0",
+                 video/x-raw,format=RGBA ! \
+                 glupload ! glcolorconvert ! \
+                 video/x-raw(memory:GLMemory),format=RGBA ! \
+                 mix.sink_0",
                 self.layers.read().camera_opacity,
                 self.layers.read().overlay_opacity,
                 width,
                 height,
                 self.get_output_branch(),
-                device_index,
-                width,
-                height
+                device_index
             )
         };
         
         #[cfg(target_os = "linux")]
         let pipeline_str = format!(
-            "compositor name=comp background=black \
-               sink_0::zorder=0 sink_0::alpha={} sink_0::sync=true \
-               sink_1::zorder=1 sink_1::alpha={} sink_1::sync=true ! \
+            "glvideomixer name=mix background=black \
+               sink_0::zorder=0 sink_0::alpha={} \
+               sink_1::zorder=1 sink_1::alpha={} \
+               start-time-selection=first ! \
+             glcolorconvert ! gldownload ! \
              videoconvert ! \
              video/x-raw,format=BGRx,width={},height={} ! \
              tee name=t \
@@ -206,24 +431,21 @@ impl GStreamerComposite {
                appsink name=preview emit-signals=true sync=false max-buffers=2 drop=true \
              t. ! queue leaky=downstream max-size-buffers=2 ! {} \
              v4l2src device=/dev/video{} ! \
-             queue leaky=downstream max-size-buffers=3 ! \
+             queue leaky=downstream max-size-buffers=2 ! \
              videoconvert ! \
-             queue leaky=downstream max-size-buffers=3 ! \
-             videoscale ! \
-             queue leaky=downstream max-size-buffers=3 ! \
-             video/x-raw,width={},height={},format=BGRA ! \
-             comp.sink_0",
+             video/x-raw,format=RGBA ! \
+             glupload ! glcolorconvert ! \
+             video/x-raw(memory:GLMemory),format=RGBA ! \
+             mix.sink_0",
             self.layers.read().camera_opacity,
             self.layers.read().overlay_opacity,
             width,
             height,
             self.get_output_branch(),
-            device_index,
-            width,
-            height
+            device_index
         );
         
-        println!("[Composite] ⚡ Raw composite pipeline (professional low-latency): {}", pipeline_str);
+        println!("[Composite] ⚡ GPU pipeline (zero CPU copies): {}", pipeline_str);
         
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
@@ -237,22 +459,9 @@ impl GStreamerComposite {
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
         
-        // Set up callbacks for preview frames with comprehensive debugging
+        // Set up callbacks for preview frames
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::time::Instant;
-
-        let frame_count = Arc::new(AtomicU64::new(0));
-        let start_time = Arc::new(Instant::now());
-        let last_log_time = Arc::new(RwLock::new(Instant::now()));
-        let last_frame_count = Arc::new(AtomicU64::new(0));
-
-        let frame_count_clone = frame_count.clone();
-        let start_time_clone = start_time.clone();
-        let last_log_time_clone = last_log_time.clone();
-        let last_frame_count_clone = last_frame_count.clone();
 
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -268,8 +477,6 @@ impl GStreamerComposite {
                     let jpeg_data = map.as_slice();
 
                     if jpeg_data.len() > 100 {
-                        let _count = frame_count_clone.fetch_add(1, Ordering::Relaxed);
-
                         if let Some(sender) = frame_sender.read().as_ref() {
                             let _ = sender.send(jpeg_data.to_vec());
                         }
@@ -285,7 +492,7 @@ impl GStreamerComposite {
             .set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start pipeline: {}", e))?;
         
-        println!("[Composite] ✅ Composite pipeline started successfully!");
+        println!("[Composite] ✅ GPU composite pipeline started successfully!");
         
         self.pipeline = Some(pipeline);
         Ok(())
