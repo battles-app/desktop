@@ -567,10 +567,16 @@ impl GStreamerComposite {
         *self.frame_sender.write() = Some(sender);
     }
 
-    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32) -> Result<(), String> {
+    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
         println!("[Composite] Starting WGPU-powered composite pipeline: {}x{} @ {}fps (rotation: {}°)",
                  width, height, fps, rotation);
         println!("[Composite] Camera device ID: {}", camera_device_id);
+
+        // Parse camera device ID more robustly
+        let device_index = camera_device_id.parse::<u32>().unwrap_or_else(|_| {
+            println!("[Composite] ⚠️ Invalid camera device ID format: {}, using 0", camera_device_id);
+            0
+        });
 
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -592,24 +598,67 @@ impl GStreamerComposite {
             String::new()
         };
 
-        let pipeline_str = format!(
-            "mfvideosrc device-index={} ! \
-             queue leaky=downstream max-size-buffers=3 ! \
-             videoconvert ! \
-             queue leaky=downstream max-size-buffers=3 ! \
-             {} \
-             video/x-raw,width={},height={},framerate={}/1 ! \
-             queue leaky=downstream max-size-buffers=2 ! \
-             compositor name=mixer sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=0 sink_1::ypos=0 ! \
-             queue leaky=downstream max-size-buffers=2 ! \
-             videoconvert ! \
-             queue leaky=downstream max-size-buffers=2 ! \
-             jpegenc quality=90 ! \
-             appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-            camera_device_id.parse::<u32>().unwrap_or(0), rotation_part, width, height, fps
-        );
+        // Create pipeline based on whether camera is available
+        // Try to use compositor, but fall back to simple pipeline if not available
+        let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
+            // Camera + FX pipeline - try compositor first, fallback to simple
+            let compositor_pipeline = format!(
+                "mfvideosrc device-index={} ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
+                 videoconvert ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
+                 {} \
+                 video/x-raw,width={},height={},framerate={}/1 ! \
+                 queue leaky=downstream max-size-buffers=2 ! \
+                 compositor name=mixer sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=0 sink_1::ypos=0 ! \
+                 queue leaky=downstream max-size-buffers=2 ! \
+                 videoconvert ! \
+                 queue leaky=downstream max-size-buffers=2 ! \
+                 jpegenc quality=90 ! \
+                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                device_index, rotation_part, width, height, fps
+            );
+
+            // Test if compositor pipeline can be parsed, otherwise use simple pipeline
+            match gst::parse::launch(&compositor_pipeline) {
+                Ok(_) => {
+                    println!("[Composite] Using compositor pipeline");
+                    compositor_pipeline
+                }
+                Err(_) => {
+                    println!("[Composite] Compositor not available, using simple camera pipeline");
+                    format!(
+                        "mfvideosrc device-index={} ! \
+                         queue leaky=downstream max-size-buffers=3 ! \
+                         videoconvert ! \
+                         queue leaky=downstream max-size-buffers=3 ! \
+                         {} \
+                         video/x-raw,width={},height={},framerate={}/1 ! \
+                         queue leaky=downstream max-size-buffers=2 ! \
+                         videoconvert ! \
+                         queue leaky=downstream max-size-buffers=2 ! \
+                         jpegenc quality=90 ! \
+                         appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                        device_index, rotation_part, width, height, fps
+                    )
+                }
+            }
+        } else {
+            // FX-only pipeline (for when no camera is selected)
+            format!(
+                "videotestsrc pattern=black ! \
+                 video/x-raw,width={},height={},framerate={}/1 ! \
+                 queue leaky=downstream max-size-buffers=2 ! \
+                 videoconvert ! \
+                 queue leaky=downstream max-size-buffers=2 ! \
+                 jpegenc quality=90 ! \
+                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                width, height, fps
+            )
+        };
 
         println!("[Composite] Pipeline with rotation: {}°", rotation);
+        println!("[Composite] Pipeline mode: {}", if has_camera && !camera_device_id.is_empty() { "Camera + FX" } else { "FX Only" });
         println!("[Composite] 🚀 Creating pipeline: {}", pipeline_str);
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| {
@@ -622,12 +671,22 @@ impl GStreamerComposite {
                 "Failed to cast to Pipeline".to_string()
             })?;
 
-        // Get the compositor element
-        let _compositor = pipeline
-            .by_name("mixer")
-            .ok_or("Failed to get compositor")?
-            .dynamic_cast::<Element>()
-            .map_err(|_| "Failed to cast to Element")?;
+        // Get the compositor element (try to get it, but don't fail if not available)
+        let _compositor = match pipeline.by_name("mixer") {
+            Some(element) => {
+                match element.dynamic_cast::<Element>() {
+                    Ok(elem) => Some(elem),
+                    Err(_) => {
+                        println!("[Composite] ⚠️ Could not cast compositor to Element, but continuing");
+                        None
+                    }
+                }
+            }
+            None => {
+                println!("[Composite] ⚠️ Compositor element not found, but continuing");
+                None
+            }
+        };
 
         // Get the output appsink
         let appsink = pipeline
@@ -686,6 +745,12 @@ impl GStreamerComposite {
 
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite] 🎬 Playing FX with WGPU chroma key: {} (chroma: {})", file_path, use_chroma_key);
+
+        // Check if pipeline is running
+        if !self.is_running() {
+            println!("[Composite] ❌ Pipeline not initialized - cannot play FX");
+            return Err("Pipeline not initialized".to_string());
+        }
 
         if let Some(pipeline) = &self.pipeline {
             // Stop any existing FX

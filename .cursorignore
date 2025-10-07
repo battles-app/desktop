@@ -19,6 +19,5 @@ bun.lockb
 */*dist
 */*node_modules
 */*public
-*/*src
 */*test
 target
