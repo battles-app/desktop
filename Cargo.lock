@@ -187,6 +187,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "glib 0.20.12",
+ "gst-plugin-hsv",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-audio",
@@ -295,6 +296,12 @@ name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
+
+[[package]]
+name = "byte-slice-cast"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
 
 [[package]]
 name = "bytemuck"
@@ -1535,6 +1542,31 @@ dependencies = [
  "glib-sys 0.21.2",
  "libc",
  "system-deps 7.0.5",
+]
+
+[[package]]
+name = "gst-plugin-hsv"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1429acf7076fc5890d358f0def4d89b072f273be814a43c0990d17da37bef764"
+dependencies = [
+ "byte-slice-cast",
+ "gst-plugin-version-helper",
+ "gstreamer",
+ "gstreamer-audio",
+ "gstreamer-base",
+ "gstreamer-video",
+ "num-traits",
+]
+
+[[package]]
+name = "gst-plugin-version-helper"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a68a894ef2d738054b950e1dbef5d9012b63fd968d4d32dbccd31bd8d8d4b219"
+dependencies = [
+ "chrono",
+ "toml_edit 0.23.6",
 ]
 
 [[package]]
