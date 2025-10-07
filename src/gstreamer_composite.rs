@@ -709,11 +709,13 @@ impl GStreamerComposite {
         fx_bin.add_pad(&ghost_pad).map_err(|_| "Failed to add ghost pad to bin")?;
         
         // Add EOS (End-of-Stream) probe to detect when video finishes naturally
+        println!("[Composite FX] 📡 Adding EOS probe for auto-cleanup (playback_id: {})...", playback_id);
         let fx_bin_weak = fx_bin.downgrade();
         let pipeline_weak = pipeline.downgrade();
         let compositor_weak = compositor.downgrade();
         let fx_state_weak = Arc::downgrade(&self.fx_state);
         let pad_mutex_weak = Arc::downgrade(&self.pad_operation_mutex);
+        let eos_playback_id = playback_id; // Capture current playback ID
 
         ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
             if let Some(gst::PadProbeData::Event(ref event)) = info.data {
@@ -731,6 +733,28 @@ impl GStreamerComposite {
                         // Add timeout to prevent hanging cleanup threads
                         let start_time = std::time::Instant::now();
                         let timeout_duration = std::time::Duration::from_secs(5); // 5 second timeout
+
+                        // Check if this EOS event is for the current FX playback
+                        let is_current_fx = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
+                            let fx_state = fx_state_arc.read();
+                            if let Some(state) = fx_state.as_ref() {
+                                if state.playback_id != eos_playback_id {
+                                    println!("[Composite FX] ⚠️ EOS cleanup skipped - this is for old FX playback (got {}, current {})",
+                                             eos_playback_id, state.playback_id);
+                                    return;
+                                }
+                                true
+                            } else {
+                                false // No current FX state
+                            }
+                        } else {
+                            false // State was dropped
+                        };
+
+                        if !is_current_fx {
+                            println!("[Composite FX] ⚠️ EOS cleanup skipped - no current FX state");
+                            return;
+                        }
 
                         // Check if cleanup is already in progress to prevent double cleanup
                         let cleanup_already_started = if let Some(fx_state_arc) = fx_state_weak_clone.upgrade() {
@@ -757,6 +781,14 @@ impl GStreamerComposite {
 
                         if let (Some(fx_bin), Some(pipeline), Some(compositor), Some(pad_mutex)) =
                             (fx_bin_weak_clone.upgrade(), pipeline_weak_clone.upgrade(), compositor_weak_clone.upgrade(), pad_mutex_weak_clone.upgrade()) {
+
+                            // Check if this bin is still actually in the pipeline (might have been manually cleaned up)
+                            let bin_still_in_pipeline = fx_bin.parent().is_some();
+
+                            if !bin_still_in_pipeline {
+                                println!("[Composite FX] ⚠️ EOS cleanup skipped - bin already removed from pipeline");
+                                return;
+                            }
 
                             println!("[Composite FX] 🧹 EOS Auto-cleanup: Starting defensive cleanup...");
 
@@ -925,20 +957,24 @@ impl GStreamerComposite {
         // Get pipeline dimensions
         let comp_width = *self.pipeline_width.read() as i32;
         let comp_height = *self.pipeline_height.read() as i32;
-        
-        // Calculate FX positioning: center and fill height
+
+        // Calculate FX positioning: fit within compositor while maintaining aspect ratio
         // Assume 16:9 FX aspect ratio for horizontal videos
         let fx_aspect = 16.0 / 9.0;
         let comp_aspect = comp_width as f64 / comp_height as f64;
-        
-        let (fx_width, fx_height, fx_xpos, fx_ypos) = if comp_aspect > 1.0 {
-            // Horizontal compositor (16:9): Fill full width and height
-            (comp_width, comp_height, 0, 0)
-        } else {
-            // Vertical compositor (9:16): Fill height, center horizontally and crop edges
+
+        let (fx_width, fx_height, fx_xpos, fx_ypos) = if comp_aspect > fx_aspect {
+            // Compositor is wider than FX aspect ratio: fit to height, center horizontally
+            let fx_height = comp_height;
             let fx_width = (comp_height as f64 * fx_aspect) as i32;
-            let fx_xpos = (comp_width - fx_width) / 2; // Center horizontally (will crop edges)
-            (fx_width, comp_height, fx_xpos, 0)
+            let fx_xpos = (comp_width - fx_width) / 2;
+            (fx_width, fx_height, fx_xpos, 0)
+        } else {
+            // Compositor is taller than FX aspect ratio: fit to width, center vertically
+            let fx_width = comp_width;
+            let fx_height = (comp_width as f64 / fx_aspect) as i32;
+            let fx_ypos = (comp_height - fx_height) / 2;
+            (fx_width, fx_height, 0, fx_ypos)
         };
         
         println!("[Composite FX] 📐 Positioning: {}x{} at ({}, {}) in {}x{} compositor", 
