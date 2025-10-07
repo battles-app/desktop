@@ -18,9 +18,6 @@ pub struct GStreamerComposite {
     pipeline_height: Arc<RwLock<u32>>,
     // Add mutex for pad operations to prevent race conditions
     pad_operation_mutex: Arc<parking_lot::Mutex<()>>,
-    // Track FX playback to prevent infinite loops
-    fx_playback_tracker: Arc<RwLock<std::collections::HashMap<String, u32>>>,
-    fx_tracker_last_reset: Arc<RwLock<std::time::Instant>>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,8 +75,6 @@ impl GStreamerComposite {
             pipeline_width: Arc::new(RwLock::new(1280)),
             pipeline_height: Arc::new(RwLock::new(720)),
             pad_operation_mutex: Arc::new(parking_lot::Mutex::new(())),
-            fx_playback_tracker: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            fx_tracker_last_reset: Arc::new(RwLock::new(std::time::Instant::now())),
         })
     }
     
@@ -1168,48 +1163,7 @@ impl GStreamerComposite {
         Ok(())
     }
 
-    /// Check if we should allow FX playback (prevent excessive repeated plays)
-    fn should_allow_fx_playback(&self, file_path: &str) -> bool {
-        // Simple check: if we've played this exact file more than 5 times recently, block it
-        // This prevents the infinite loop we saw in the logs
-        let mut tracker = self.fx_playback_tracker.write();
-        let mut last_reset = self.fx_tracker_last_reset.write();
 
-        // Reset counter every 30 seconds
-        if last_reset.elapsed().as_secs() > 30 {
-            tracker.clear();
-            *last_reset = std::time::Instant::now();
-        }
-
-        let count = tracker.entry(file_path.to_string()).or_insert(0);
-        *count += 1;
-
-        if *count > 5 {
-            println!("[Composite FX] 🚫 Blocking repeated FX playback of {} (played {} times)", file_path, count);
-            false
-        } else {
-            println!("[Composite FX] ✅ Allowing FX playback of {} (play count: {})", file_path, count);
-            true
-        }
-    }
-
-    /// Convert hex color to RGB tuple
-    fn hex_to_rgb(hex: &str) -> Result<(u8, u8, u8), String> {
-        let hex = hex.trim_start_matches('#');
-        
-        if hex.len() != 6 {
-            return Err(format!("Invalid hex color: {}", hex));
-        }
-        
-        let r = u8::from_str_radix(&hex[0..2], 16)
-            .map_err(|_| format!("Invalid hex color: {}", hex))?;
-        let g = u8::from_str_radix(&hex[2..4], 16)
-            .map_err(|_| format!("Invalid hex color: {}", hex))?;
-        let b = u8::from_str_radix(&hex[4..6], 16)
-            .map_err(|_| format!("Invalid hex color: {}", hex))?;
-        
-        Ok((r, g, b))
-    }
 }
 
 
