@@ -716,21 +716,27 @@ impl GStreamerComposite {
             
             // Parse hex color (e.g., "#00ff00" -> RGB values)
             let color_hex = keycolor.trim_start_matches('#');
-            let r = u8::from_str_radix(&color_hex[0..2], 16).unwrap_or(0) as f64 / 255.0;
-            let g = u8::from_str_radix(&color_hex[2..4], 16).unwrap_or(255) as f64 / 255.0;
-            let b = u8::from_str_radix(&color_hex[4..6], 16).unwrap_or(0) as f64 / 255.0;
+            let r = u8::from_str_radix(&color_hex[0..2], 16).unwrap_or(0) as i32;
+            let g = u8::from_str_radix(&color_hex[2..4], 16).unwrap_or(255) as i32;
+            let b = u8::from_str_radix(&color_hex[4..6], 16).unwrap_or(0) as i32;
             
-            println!("[Composite FX] 🎨 Parsed RGB: R={:.3}, G={:.3}, B={:.3}", r, g, b);
+            println!("[Composite FX] 🎨 Parsed RGB: R={}, G={}, B={}", r, g, b);
+            
+            // Calculate angle and noise level
+            let angle = (tolerance * 180.0) as i32;  // Convert to i32
+            let noise_level = ((1.0 - similarity) * 100.0) as i32;  // Convert to i32
+            
+            println!("[Composite FX] 🎨 Chroma settings: angle={}, noise_level={}", angle, noise_level);
             
             // Create alpha element with chroma key method
             let alpha = ElementFactory::make("alpha")
                 .name("fxalpha")
                 .property("method", "green")  // green method for chroma keying
-                .property("target-r", r as i32 * 255)  // Target red component (0-255)
-                .property("target-g", g as i32 * 255)  // Target green component (0-255)
-                .property("target-b", b as i32 * 255)  // Target blue component (0-255)
-                .property("angle", tolerance * 180.0)  // Angle tolerance in degrees (0-180)
-                .property("noise-level", (1.0 - similarity) * 100.0 as i32)  // Noise level (inverted from similarity)
+                .property("target-r", r)  // Target red component (0-255)
+                .property("target-g", g)  // Target green component (0-255)
+                .property("target-b", b)  // Target blue component (0-255)
+                .property("angle", angle)  // Angle tolerance in degrees (0-180)
+                .property("noise-level", noise_level)  // Noise level (0-100)
                 .build()
                 .map_err(|e| format!("Failed to create alpha element: {}", e))?;
             
@@ -1147,7 +1153,12 @@ impl GStreamerComposite {
 
         println!("[Composite FX] ✅ FX added to pipeline - playing from file");
         println!("[Composite FX] ⏰ Pipeline ready time: {:?}", std::time::Instant::now());
-        println!("[Composite FX] 🔍 Natural pipeline: uridecodebin → videoconvert → videoscale → capsfilter");
+        
+        if use_chroma_key {
+            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → identity_sync → videoconvert → alpha (chroma key) → videoscale → capsfilter → compositor");
+        } else {
+            println!("[Composite FX] 🔍 Pipeline: uridecodebin → videorate → identity_sync → videoconvert → videoscale → capsfilter → compositor");
+        }
         
         Ok(())
     }
