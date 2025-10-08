@@ -18,6 +18,10 @@ use gstreamer_composite::GStreamerComposite;
 // WGPU surface renderer (direct window rendering)
 mod wgpu_surface_renderer;
 
+// Screen capture for monitor previews
+mod screen_capture;
+use screen_capture::ScreenCaptureMonitor;
+
 use shared_memory::{Shmem, ShmemConf};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -44,10 +48,15 @@ lazy_static::lazy_static! {
     
     // Latest frame for direct access (no WebSocket overhead)
     static ref LATEST_COMPOSITE_FRAME: Arc<parking_lot::RwLock<Option<Vec<u8>>>> = Arc::new(parking_lot::RwLock::new(None));
+    
+    // Screen capture monitors (for monitor preview in selection modal)
+    static ref SCREEN_CAPTURES: Arc<parking_lot::RwLock<Vec<Option<ScreenCaptureMonitor>>>> = Arc::new(parking_lot::RwLock::new(Vec::new()));
+    static ref SCREEN_CAPTURE_SENDERS: Arc<parking_lot::RwLock<Vec<Option<broadcast::Sender<Vec<u8>>>>>> = Arc::new(parking_lot::RwLock::new(Vec::new()));
 }
 
 const CAMERA_WS_PORT: u16 = 9876;
 const COMPOSITE_WS_PORT: u16 = 9877;
+const SCREEN_CAPTURE_BASE_PORT: u16 = 9880; // 9880, 9881, 9882... for each monitor
 
 // Monitor info structure
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -286,6 +295,184 @@ async fn set_modal_open(is_open: bool) {
         *modal_state = is_open;
         println!("Monitor selection modal state set to: {}", is_open);
     }
+}
+
+// Start GStreamer screen capture for monitor previews (NEW - replaces screenshots)
+#[command]
+async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
+    println!("[Monitor Preview] Starting GStreamer screen captures...");
+    
+    // Stop any existing captures first
+    stop_monitor_previews().await?;
+    
+    // Get available monitors
+    let monitors = app.available_monitors().map_err(|e| format!("Failed to get monitors: {}", e))?;
+    let monitor_count = monitors.len();
+    
+    println!("[Monitor Preview] Found {} monitors", monitor_count);
+    
+    // Initialize storage
+    {
+        let mut captures = SCREEN_CAPTURES.write();
+        let mut senders = SCREEN_CAPTURE_SENDERS.write();
+        captures.clear();
+        senders.clear();
+        // Pre-allocate with None values
+        for _ in 0..monitor_count {
+            captures.push(None);
+            senders.push(None);
+        }
+    }
+    
+    // Start capture for each monitor
+    for (index, monitor) in monitors.iter().enumerate() {
+        let position = monitor.position();
+        let size = monitor.size();
+        
+        println!("[Monitor Preview {}] Starting capture: {}x{} at ({}, {})", 
+            index, size.width, size.height, position.x, position.y);
+        
+        // Create screen capture
+        let mut capture = ScreenCaptureMonitor::new(index)
+            .map_err(|e| format!("Failed to create capture {}: {}", index, e))?;
+        
+        // Create broadcast channel for this monitor
+        let (tx, _rx) = broadcast::channel::<Vec<u8>>(4);
+        capture.set_frame_sender(tx.clone());
+        
+        // Start the capture pipeline
+        capture.start(position.x, position.y, size.width, size.height)
+            .map_err(|e| format!("Failed to start capture {}: {}", index, e))?;
+        
+        // Store in global state
+        {
+            let mut captures = SCREEN_CAPTURES.write();
+            let mut senders = SCREEN_CAPTURE_SENDERS.write();
+            captures[index] = Some(capture);
+            senders[index] = Some(tx.clone());
+        }
+        
+        // Start WebSocket server for this monitor
+        let port = SCREEN_CAPTURE_BASE_PORT + index as u16;
+        start_monitor_preview_websocket(index, port).await;
+    }
+    
+    println!("[Monitor Preview] ✅ All {} monitors started", monitor_count);
+    Ok(())
+}
+
+// Stop all monitor preview captures
+#[command]
+async fn stop_monitor_previews() -> Result<(), String> {
+    println!("[Monitor Preview] Stopping all captures...");
+    
+    let mut captures = SCREEN_CAPTURES.write();
+    let mut senders = SCREEN_CAPTURE_SENDERS.write();
+    
+    // Stop all captures
+    for (index, capture_opt) in captures.iter_mut().enumerate() {
+        if let Some(mut capture) = capture_opt.take() {
+            capture.stop().map_err(|e| format!("Failed to stop capture {}: {}", index, e))?;
+        }
+    }
+    
+    captures.clear();
+    senders.clear();
+    
+    println!("[Monitor Preview] ✅ All captures stopped");
+    Ok(())
+}
+
+// WebSocket server for monitor preview streaming
+async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
+    tokio::spawn(async move {
+        let addr = format!("127.0.0.1:{}", port);
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                println!("[Monitor Preview {}] ❌ Failed to bind to {}: {}", monitor_index, addr, e);
+                return;
+            }
+        };
+        
+        println!("[Monitor Preview {}] ✅ WebSocket server listening on {}", monitor_index, addr);
+        
+        while let Ok((stream, _)) = listener.accept().await {
+            // Get sender for this monitor
+            let tx = {
+                let senders = SCREEN_CAPTURE_SENDERS.read();
+                match &senders.get(monitor_index) {
+                    Some(Some(sender)) => sender.clone(),
+                    _ => {
+                        println!("[Monitor Preview {}] ❌ No sender available", monitor_index);
+                        continue;
+                    }
+                }
+            };
+            
+            tokio::spawn(async move {
+                let ws_stream = match accept_async(stream).await {
+                    Ok(ws) => ws,
+                    Err(e) => {
+                        println!("[Monitor Preview {}] Error during handshake: {}", monitor_index, e);
+                        return;
+                    }
+                };
+                
+                println!("[Monitor Preview {}] ✅ Client connected", monitor_index);
+                
+                use tokio_tungstenite::tungstenite::protocol::Message;
+                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+                
+                // Subscribe to frames
+                let mut rx = tx.subscribe();
+                let mut frame_count = 0u64;
+                let start_time = std::time::Instant::now();
+                
+                loop {
+                    tokio::select! {
+                        recv_result = rx.recv() => {
+                            match recv_result {
+                                Ok(frame_data) => {
+                                    frame_count += 1;
+                                    
+                                    // Log every 60 frames
+                                    if frame_count % 60 == 0 {
+                                        let elapsed = start_time.elapsed().as_secs_f64();
+                                        let fps = frame_count as f64 / elapsed;
+                                        println!("[Monitor Preview {}] 📡 Frame {} sent ({} bytes) | FPS: {:.1}", 
+                                            monitor_index, frame_count, frame_data.len(), fps);
+                                    }
+                                    
+                                    // Send frame
+                                    if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
+                                        println!("[Monitor Preview {}] ❌ Client disconnected after {} frames", monitor_index, frame_count);
+                                        break;
+                                    }
+                                },
+                                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                    println!("[Monitor Preview {}] ⚠️ Lagged behind, skipped {} frames", monitor_index, skipped);
+                                    continue;
+                                },
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    println!("[Monitor Preview {}] ℹ️ Broadcast channel closed", monitor_index);
+                                    break;
+                                }
+                            }
+                        }
+                        ws_msg = ws_receiver.next() => {
+                            if ws_msg.is_none() {
+                                println!("[Monitor Preview {}] 🔌 Client disconnected gracefully", monitor_index);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                println!("[Monitor Preview {}] 🔌 Client disconnected (sent {} frames)", monitor_index, frame_count);
+            });
+        }
+    });
 }
 
 // Start real-time monitor capture (called when modal opens)
@@ -1463,6 +1650,8 @@ fn main() {
             create_monitor_window,
             create_regular_window,
             set_modal_open,
+            start_monitor_previews,
+            stop_monitor_previews,
             start_realtime_capture,
             initialize_camera_system,
             initialize_composite_system,
