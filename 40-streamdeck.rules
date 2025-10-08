@@ -1,0 +1,34 @@
+# Elgato Stream Deck udev rules
+# Copy this file to /etc/udev/rules.d/40-streamdeck.rules
+# Then run: sudo udevadm control --reload-rules
+
+# Stream Deck Original
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0060", MODE="0666", GROUP="plugdev"
+
+# Stream Deck Original V2
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="006d", MODE="0666", GROUP="plugdev"
+
+# Stream Deck Mini
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0063", MODE="0666", GROUP="plugdev"
+
+# Stream Deck Mini Mk2
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0090", MODE="0666", GROUP="plugdev"
+
+# Stream Deck XL
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="006c", MODE="0666", GROUP="plugdev"
+
+# Stream Deck XL V2
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="008f", MODE="0666", GROUP="plugdev"
+
+# Stream Deck Mk2
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0080", MODE="0666", GROUP="plugdev"
+
+# Stream Deck Pedal
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0086", MODE="0666", GROUP="plugdev"
+
+# Stream Deck Plus
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0084", MODE="0666", GROUP="plugdev"
+
+# Stream Deck Neo
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="009a", MODE="0666", GROUP="plugdev"
+

@@ -22,6 +22,10 @@ mod wgpu_surface_renderer;
 mod screen_capture;
 use screen_capture::ScreenCaptureMonitor;
 
+// Stream Deck integration
+mod streamdeck_manager;
+use streamdeck_manager::{StreamDeckManager, FxButton, STREAMDECK_MANAGER};
+
 use shared_memory::{Shmem, ShmemConf};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -1761,6 +1765,195 @@ async fn get_virtual_camera_status() -> Result<VirtualCamInfo, String> {
     })
 }
 
+// ========================================
+// STREAM DECK COMMANDS
+// ========================================
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StreamDeckInfo {
+    connected: bool,
+    device_name: String,
+    button_count: usize,
+    serial_number: Option<String>,
+}
+
+#[command]
+async fn streamdeck_init() -> Result<(), String> {
+    println!("[Stream Deck] Initializing Stream Deck system");
+    
+    let manager = StreamDeckManager::new()?;
+    *STREAMDECK_MANAGER.write() = Some(manager);
+    
+    println!("[Stream Deck] ✅ Initialized");
+    Ok(())
+}
+
+#[command]
+async fn streamdeck_scan() -> Result<Vec<String>, String> {
+    println!("[Stream Deck] Scanning for devices...");
+    
+    let mut manager_lock = STREAMDECK_MANAGER.write();
+    
+    if let Some(ref mut manager) = *manager_lock {
+        let devices = manager.scan_devices()?;
+        let device_names: Vec<String> = devices
+            .iter()
+            .map(|(kind, serial)| format!("{:?} ({})", kind, serial))
+            .collect();
+        
+        println!("[Stream Deck] Found {} devices", device_names.len());
+        Ok(device_names)
+    } else {
+        Err("Stream Deck not initialized".to_string())
+    }
+}
+
+#[command]
+async fn streamdeck_connect() -> Result<String, String> {
+    println!("[Stream Deck] Connecting to device...");
+    
+    let mut manager_lock = STREAMDECK_MANAGER.write();
+    
+    if let Some(ref mut manager) = *manager_lock {
+        let result = manager.connect()?;
+        println!("[Stream Deck] ✅ {}", result);
+        Ok(result)
+    } else {
+        Err("Stream Deck not initialized".to_string())
+    }
+}
+
+#[command]
+async fn streamdeck_disconnect() -> Result<(), String> {
+    println!("[Stream Deck] Disconnecting...");
+    
+    let mut manager_lock = STREAMDECK_MANAGER.write();
+    
+    if let Some(ref mut manager) = *manager_lock {
+        manager.disconnect();
+        println!("[Stream Deck] ✅ Disconnected");
+    }
+    
+    Ok(())
+}
+
+#[command]
+async fn streamdeck_get_info() -> Result<StreamDeckInfo, String> {
+    let manager_lock = STREAMDECK_MANAGER.read();
+    
+    if let Some(ref manager) = *manager_lock {
+        let serial = manager.get_serial_number().ok();
+        
+        Ok(StreamDeckInfo {
+            connected: manager.is_connected(),
+            device_name: manager.device_kind_name(),
+            button_count: manager.button_count(),
+            serial_number: serial,
+        })
+    } else {
+        Ok(StreamDeckInfo {
+            connected: false,
+            device_name: "Not initialized".to_string(),
+            button_count: 0,
+            serial_number: None,
+        })
+    }
+}
+
+#[command]
+async fn streamdeck_update_layout(
+    battle_board: Vec<FxButton>,
+    user_fx: Vec<FxButton>
+) -> Result<(), String> {
+    println!("[Stream Deck] Updating layout: {} battle board, {} user FX", 
+        battle_board.len(), user_fx.len());
+    
+    let mut manager_lock = STREAMDECK_MANAGER.write();
+    
+    if let Some(ref mut manager) = *manager_lock {
+        manager.update_layout(battle_board, user_fx)?;
+        println!("[Stream Deck] ✅ Layout updated");
+        Ok(())
+    } else {
+        Err("Stream Deck not initialized".to_string())
+    }
+}
+
+#[command]
+async fn streamdeck_set_button_state(fx_id: String, is_playing: bool) -> Result<(), String> {
+    let mut manager_lock = STREAMDECK_MANAGER.write();
+    
+    if let Some(ref mut manager) = *manager_lock {
+        manager.set_button_state(&fx_id, is_playing)?;
+    }
+    
+    Ok(())
+}
+
+// Start Stream Deck watcher thread
+fn start_streamdeck_watcher(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut was_connected = false;
+        
+        loop {
+            check_interval.tick().await;
+            
+            // Check if device is connected
+            let is_connected = {
+                let manager_lock = STREAMDECK_MANAGER.read();
+                manager_lock.as_ref().map(|m| m.is_connected()).unwrap_or(false)
+            };
+            
+            // If connection state changed, notify frontend
+            if is_connected != was_connected {
+                was_connected = is_connected;
+                
+                if is_connected {
+                    println!("[Stream Deck Watcher] Device connected");
+                    let _ = app.emit("streamdeck://connected", ());
+                } else {
+                    println!("[Stream Deck Watcher] Device disconnected");
+                    let _ = app.emit("streamdeck://disconnected", ());
+                    
+                    // Try to reconnect
+                    let mut manager_lock = STREAMDECK_MANAGER.write();
+                    if let Some(ref mut manager) = *manager_lock {
+                        println!("[Stream Deck Watcher] Attempting to reconnect...");
+                        if let Ok(info) = manager.connect() {
+                            println!("[Stream Deck Watcher] ✅ Reconnected: {}", info);
+                            let _ = app.emit("streamdeck://connected", ());
+                        }
+                    }
+                }
+            }
+            
+            // Read button presses
+            if is_connected {
+                let mut manager_lock = STREAMDECK_MANAGER.write();
+                if let Some(ref mut manager) = *manager_lock {
+                    let app_clone = app.clone();
+                    let _ = manager.read_buttons(|button_idx, is_pressed| {
+                        if is_pressed {
+                            // Button was pressed, handle it
+                            if let Some((fx_id, should_play)) = manager.handle_button_press(button_idx) {
+                                println!("[Stream Deck] Button {} pressed: {} (play: {})", button_idx, fx_id, should_play);
+                                
+                                // Emit event to frontend
+                                let _ = app_clone.emit("streamdeck://button-press", serde_json::json!({
+                                    "button_idx": button_idx,
+                                    "fx_id": fx_id,
+                                    "should_play": should_play
+                                }));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    });
+}
+
 fn main() {
     // Configure cache plugin for FX files
     let cache_config = tauri_plugin_cache::CacheConfig {
@@ -1777,7 +1970,12 @@ fn main() {
         .plugin(tauri_plugin_cache::init_with_config(cache_config))
         .setup(|app| {
             let app_handle = app.handle().clone();
-            start_monitor_broadcast(app_handle);
+            start_monitor_broadcast(app_handle.clone());
+            
+            // Start Stream Deck watcher
+            start_streamdeck_watcher(app_handle.clone());
+            println!("[Stream Deck] Watcher started");
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1807,7 +2005,14 @@ fn main() {
             start_virtual_camera,
             stop_virtual_camera,
             send_frame_to_virtual_camera,
-            get_virtual_camera_status
+            get_virtual_camera_status,
+            streamdeck_init,
+            streamdeck_scan,
+            streamdeck_connect,
+            streamdeck_disconnect,
+            streamdeck_get_info,
+            streamdeck_update_layout,
+            streamdeck_set_button_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
