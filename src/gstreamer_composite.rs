@@ -1187,19 +1187,21 @@ impl GStreamerComposite {
     }
     
     /// Rebuild pipeline with video FX compositor
-    fn rebuild_pipeline_with_fx(&mut self, fx_video_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
+    fn rebuild_pipeline_with_fx(&mut self, fx_video_path: String, _keycolor: String, _tolerance: f64, _similarity: f64, _use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite] 🔄 Rebuilding pipeline with FX video compositor...");
         
-        // Stop existing pipeline
+        // IMPORTANT: Keep is_running=true to maintain WebSocket connection!
+        // Just stop the pipeline, not the entire system
+        
+        // Stop existing pipeline WITHOUT setting is_running to false
         if let Some(pipeline) = &self.pipeline {
-            *self.is_running.write() = false;
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            println!("[Compositor] ⏸️  Pausing current pipeline for rebuild...");
             
             pipeline.set_state(gst::State::Null)
                 .map_err(|e| format!("Failed to stop pipeline: {:?}", e))?;
             
             // Wait for NULL state
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::thread::sleep(std::time::Duration::from_millis(300));
         }
         
         self.pipeline = None;
@@ -1219,7 +1221,6 @@ impl GStreamerComposite {
             height,
             fps,
             rotation,
-            use_chroma_key,
         )?;
         
         println!("[Compositor] Creating pipeline: {}", pipeline_str);
@@ -1229,19 +1230,30 @@ impl GStreamerComposite {
             .dynamic_cast::<Pipeline>()
             .map_err(|_| "Failed to cast to Pipeline".to_string())?;
         
-        // Set up appsink callback
+        // Set up appsink callback (reuses existing frame_sender)
         self.setup_appsink_callback(&pipeline)?;
         
-        // Start pipeline
+        // Start compositor pipeline
+        println!("[Compositor] 🎬 Starting compositor pipeline...");
+        
+        pipeline.set_state(gst::State::Ready)
+            .map_err(|e| format!("Failed to set READY: {:?}", e))?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        
+        pipeline.set_state(gst::State::Paused)
+            .map_err(|e| format!("Failed to set PAUSED: {:?}", e))?;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        
         pipeline.set_state(gst::State::Playing)
             .map_err(|e| format!("Failed to start compositor pipeline: {:?}", e))?;
         
         std::thread::sleep(std::time::Duration::from_millis(500));
         
         self.pipeline = Some(pipeline);
-        *self.is_running.write() = true;
+        // Keep is_running=true throughout (never set to false)
         
-        println!("[Compositor] ✅ Compositor pipeline active with FX video overlay");
+        println!("[Compositor] ✅ Compositor pipeline active - frames now include FX overlay!");
+        println!("[Compositor] 💡 WebSocket connection maintained - frontend will receive composited frames");
         Ok(())
     }
     
@@ -1254,7 +1266,6 @@ impl GStreamerComposite {
         height: u32,
         fps: u32,
         rotation: u32,
-        _use_chroma_key: bool,
     ) -> Result<String, String> {
         let escaped_device = camera_device.replace("\\", "\\\\");
         let escaped_fx_path = fx_video_path.replace("\\", "\\\\");
@@ -1291,13 +1302,14 @@ impl GStreamerComposite {
                  decodebin ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
+                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                 alpha method=custom target-r=0 target-g=255 target-b=0 angle=20 noise-level=2 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
                 width, height, fps,
                 escaped_fx_path,
-                width, height
+                width, height, fps
             )
         } else if rotation == 0 {
             format!(
@@ -1317,14 +1329,15 @@ impl GStreamerComposite {
                  decodebin ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
+                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                 alpha method=custom target-r=0 target-g=255 target-b=0 angle=20 noise-level=2 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
                 escaped_device,
                 width, height,
                 escaped_fx_path,
-                width, height
+                width, height, fps
             )
         } else {
             format!(
@@ -1347,7 +1360,8 @@ impl GStreamerComposite {
                  decodebin ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
+                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                 alpha method=custom target-r=0 target-g=255 target-b=0 angle=20 noise-level=2 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
@@ -1355,7 +1369,7 @@ impl GStreamerComposite {
                 pre_rotation_width, pre_rotation_height,
                 flip_method,
                 escaped_fx_path,
-                width, height
+                width, height, fps
             )
         };
         
