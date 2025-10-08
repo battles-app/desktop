@@ -567,7 +567,7 @@ impl GStreamerComposite {
         *self.frame_sender.write() = Some(sender);
     }
 
-    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
+    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<String, String> {
         println!("[Composite] Starting WGPU-powered composite pipeline: {}x{} @ {}fps (rotation: {}°)",
                  width, height, fps, rotation);
         println!("[Composite] Camera device ID: '{}', has_camera: {}", camera_device_id, has_camera);
@@ -644,8 +644,7 @@ impl GStreamerComposite {
                     Ok(_) => {
                         println!("[Composite] ✅ Camera configuration {} succeeded", i + 1);
                         // Use this pipeline configuration
-                        pipeline_str = test_pipeline;
-                        break;
+                        return Ok(test_pipeline);
                     }
                     Err(e) => {
                         println!("[Composite] ❌ Camera configuration {} failed: {}", i + 1, e);
@@ -896,7 +895,7 @@ impl GStreamerComposite {
         }
 
         self.pipeline = Some(pipeline);
-        Ok(())
+        Ok(pipeline_str)
     }
 
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
