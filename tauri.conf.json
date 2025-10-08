@@ -43,17 +43,6 @@
         },
         "x": 0,
         "y": 0
-      },
-      {
-        "label": "tv-monitor",
-        "title": "TV Monitor",
-        "url": "https://local.battles.app:3000/stream/tv-monitor/loading",
-        "decorations": false,
-        "resizable": false,
-        "fullscreen": false,
-        "alwaysOnTop": true,
-        "visible": false,
-        "transparent": false
       }
     ],
     "withGlobalTauri": true

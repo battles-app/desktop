@@ -35,16 +35,15 @@ impl ScreenCaptureMonitor {
         let preview_height = ((preview_width as f64 / monitor_width as f64) * monitor_height as f64) as u32;
 
         // Build GStreamer pipeline for screen capture
-        // Using dx11screencapturesrc (Windows) or d3d11screencapturesrc
+        // Using d3d11screencapturesrc (Windows) - need to download from GPU memory first
         let pipeline_str = format!(
             "d3d11screencapturesrc monitor-index={} ! \
              video/x-raw(memory:D3D11Memory),format=BGRA ! \
-             d3d11convert ! \
+             d3d11download ! \
+             videoconvert ! \
              video/x-raw,format=RGBA ! \
              videoscale ! \
              video/x-raw,width={},height={} ! \
-             videoconvert ! \
-             video/x-raw,format=RGBA ! \
              appsink name=sink",
             self.monitor_index,
             preview_width,
