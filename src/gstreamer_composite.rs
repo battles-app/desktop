@@ -102,9 +102,10 @@ struct Uniforms {
 // Readback buffer state machine
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ReadbackState {
-    Free,       // Ready for new copy
-    InFlight,   // Copy submitted, GPU writing
-    Mapped,     // CPU reading, must unmap before reuse
+    Free,           // Ready for new copy
+    InFlight,       // Copy submitted, GPU writing (map not started)
+    MappingPending, // map_async called, waiting for GPU
+    Mapped,         // CPU reading, must unmap before reuse
 }
 
 // Readback buffer for async GPU→CPU transfer
@@ -114,6 +115,7 @@ struct ReadbackBuffer {
     height: u32,
     state: ReadbackState,
     frame_number: u64,
+    map_receiver: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 // WGPU-based chroma key renderer with triple-buffered async readback
@@ -340,6 +342,7 @@ impl WgpuChromaRenderer {
                 height,
                 state: ReadbackState::Free,
                 frame_number: 0,
+                map_receiver: None,
             });
         }
 
@@ -595,67 +598,80 @@ impl WgpuChromaRenderer {
     }
 
     pub fn poll_readback(&mut self) -> Option<Vec<u8>> {
-        // Look for oldest InFlight buffer and try to read it
+        // Look for buffers that need processing
         let num_buffers = self.readback_ring.len();
         
-        // Check all buffers for any that are InFlight
+        // First pass: Start mapping on InFlight buffers (not yet mapped)
         for i in 0..num_buffers {
             let rb = &mut self.readback_ring[i];
             
-            if rb.state != ReadbackState::InFlight {
-                continue; // Skip Free or Mapped buffers
+            if rb.state == ReadbackState::InFlight {
+                // Start map_async with channel (only called once per buffer!)
+                let (tx, rx) = std::sync::mpsc::channel();
+                let buffer_slice = rb.buffer.slice(..);
+                buffer_slice.map_async(MapMode::Read, move |result| {
+                    tx.send(result).ok();
+                });
+                rb.map_receiver = Some(rx);
+                rb.state = ReadbackState::MappingPending;
+            }
+        }
+        
+        // Second pass: Check MappingPending buffers to see if ready
+        for i in 0..num_buffers {
+            let rb = &mut self.readback_ring[i];
+            
+            if rb.state != ReadbackState::MappingPending {
+                continue;
             }
 
-            let buffer_slice = rb.buffer.slice(..);
-            
-            // Try non-blocking map (only once per buffer)
-            let (tx, rx) = std::sync::mpsc::channel();
-            buffer_slice.map_async(MapMode::Read, move |result| {
-                tx.send(result).ok();
-            });
-
-            // Non-blocking check - is mapping done?
-            match rx.try_recv() {
-                Ok(Ok(_)) => {
-                    // Success! GPU finished, buffer is now mapped
-                    rb.state = ReadbackState::Mapped;
-                    
-                    let buffer_data = buffer_slice.get_mapped_range();
-                    
-                    let width = rb.width;
-                    let height = rb.height;
-                    let unpadded_bytes_per_row = width * 4;
-                    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-                    let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
-                    
-                    // Remove padding
-                    let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
-                    if padded_bytes_per_row != unpadded_bytes_per_row {
-                        for row in 0..height {
-                            let row_start = (row * padded_bytes_per_row) as usize;
-                            let row_end = row_start + unpadded_bytes_per_row as usize;
-                            rgba_data.extend_from_slice(&buffer_data[row_start..row_end]);
-                        }
-                    } else {
-                        rgba_data.extend_from_slice(&buffer_data);
+            // Check if mapping completed via channel (non-blocking)
+            if let Some(ref rx) = rb.map_receiver {
+                match rx.try_recv() {
+                    Ok(Ok(())) => {
+                        // Mapping complete! Now we can get the data
+                        let buffer_slice = rb.buffer.slice(..);
+                        
+                        let width = rb.width;
+                        let height = rb.height;
+                        let unpadded_bytes_per_row = width * 4;
+                        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+                        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+                        
+                        // Read data in a scope to ensure BufferView is dropped
+                        let rgba_data = {
+                            let buffer_data = buffer_slice.get_mapped_range();
+                            
+                            // Remove padding and copy
+                            let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+                            if padded_bytes_per_row != unpadded_bytes_per_row {
+                                for row in 0..height {
+                                    let row_start = (row * padded_bytes_per_row) as usize;
+                                    let row_end = row_start + unpadded_bytes_per_row as usize;
+                                    rgba_data.extend_from_slice(&buffer_data[row_start..row_end]);
+                                }
+                            } else {
+                                rgba_data.extend_from_slice(&buffer_data);
+                            }
+                            
+                            rgba_data
+                        }; // buffer_data (BufferView) dropped HERE
+                        
+                        // CRITICAL: Unmap AFTER BufferView is dropped!
+                        rb.buffer.unmap();
+                        rb.state = ReadbackState::Free;
+                        rb.map_receiver = None;
+                        
+                        return Some(rgba_data);
+                    },
+                    Ok(Err(_)) => {
+                        // Mapping failed, mark as free to retry
+                        rb.state = ReadbackState::Free;
+                        rb.map_receiver = None;
+                    },
+                    Err(_) => {
+                        // Not ready yet (WouldBlock), leave as MappingPending
                     }
-                    
-                    drop(buffer_data);
-                    
-                    // CRITICAL: Unmap before next use!
-                    rb.buffer.unmap();
-                    rb.state = ReadbackState::Free;
-                    
-                    return Some(rgba_data);
-                },
-                Ok(Err(_)) => {
-                    // Mapping failed, mark as free to retry
-                    rb.state = ReadbackState::Free;
-                    return None;
-                },
-                Err(_) => {
-                    // Not ready yet (WouldBlock), leave as InFlight
-                    // Don't return, check other buffers
                 }
             }
         }
