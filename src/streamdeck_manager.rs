@@ -160,52 +160,33 @@ impl StreamDeckManager {
     
     /// Update button layout with FX buttons
     /// Battle board effects go on left side, user FX on right side
-    /// Download and cache an image from Directus via Nuxt proxy
-    fn download_and_cache_image(&self, image_url: &str) -> Result<PathBuf, String> {
-        // Create cache directory
-        let cache_dir = std::env::temp_dir().join("battles_streamdeck_cache");
-        std::fs::create_dir_all(&cache_dir)
-            .map_err(|e| format!("Failed to create cache directory: {}", e))?;
-        
+    /// Find cached image from frontend cache (NO downloading - images are pre-cached by frontend!)
+    fn find_cached_image(&self, image_url: &str) -> Option<PathBuf> {
         // Extract file ID from URL (e.g., "/directus-assets/f1bd0750-f531-4712-9fda-8c12085cd63e")
         let file_id = image_url.trim_start_matches("/directus-assets/");
-        let cached_path = cache_dir.join(format!("{}.jpg", file_id));
         
-        // Return cached file if exists
-        if cached_path.exists() {
-            return Ok(cached_path);
+        // Check multiple possible cache locations (frontend might cache them anywhere)
+        let possible_caches = vec![
+            std::env::temp_dir().join("battles_fx_cache").join(file_id),
+            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.jpg", file_id)),
+            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.png", file_id)),
+            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.mp4", file_id)),
+            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.webm", file_id)),
+        ];
+        
+        for path in possible_caches {
+            if path.exists() {
+                // Check if it's an image file (not video)
+                if let Some(ext) = path.extension() {
+                    let ext_str = ext.to_string_lossy().to_lowercase();
+                    if ext_str == "jpg" || ext_str == "jpeg" || ext_str == "png" || ext_str == "webp" {
+                        return Some(path);
+                    }
+                }
+            }
         }
         
-        println!("[Stream Deck] Downloading image: {}", image_url);
-        
-        // Download from Nuxt proxy (handles authentication)
-        let full_url = format!("https://local.battles.app:3000{}", image_url);
-        
-        // Use reqwest blocking client with danger_accept_invalid_certs for local dev
-        let client = reqwest::blocking::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-        
-        let response = client
-            .get(&full_url)
-            .send()
-            .map_err(|e| format!("Failed to download image: {}", e))?;
-        
-        if !response.status().is_success() {
-            return Err(format!("HTTP error: {}", response.status()));
-        }
-        
-        let bytes = response.bytes()
-            .map_err(|e| format!("Failed to read response: {}", e))?;
-        
-        // Write to cache
-        std::fs::write(&cached_path, &bytes)
-            .map_err(|e| format!("Failed to write cache file: {}", e))?;
-        
-        println!("[Stream Deck] ✅ Cached image: {:?}", cached_path.file_name());
-        Ok(cached_path)
+        None
     }
     
     pub fn update_layout(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {
@@ -214,18 +195,8 @@ impl StreamDeckManager {
             return Err("No device connected".to_string());
         }
         
-        // Download and cache all images first
-        println!("[Stream Deck] Downloading {} battle board + {} user FX images...", battle_board.len(), user_fx.len());
-        for fx in battle_board.iter().chain(user_fx.iter()) {
-            if let Some(ref image_url) = fx.image_url {
-                // Attempt to download, but don't fail if it doesn't work
-                match self.download_and_cache_image(image_url) {
-                    Ok(_) => {},
-                    Err(e) => println!("[Stream Deck] ⚠️ Failed to cache image for {}: {}", fx.name, e),
-                }
-            }
-        }
-        println!("[Stream Deck] ✅ Image caching complete");
+        // Don't download images here - do it lazily in create_button_image to avoid blocking IPC
+        println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
         
         // Initialize layout with None
         self.button_layout = vec![None; button_count];
@@ -324,13 +295,9 @@ impl StreamDeckManager {
         // Get button size
         let size = self.get_button_size();
         
-        // Try to load cached image if available
+        // Try to load cached image from frontend cache (NO downloading!)
         let cached_image = if let Some(ref image_url) = fx_button.image_url {
-            let cache_dir = std::env::temp_dir().join("battles_streamdeck_cache");
-            let file_id = image_url.trim_start_matches("/directus-assets/");
-            let cached_path = cache_dir.join(format!("{}.jpg", file_id));
-            
-            if cached_path.exists() {
+            if let Some(cached_path) = self.find_cached_image(image_url) {
                 image::open(&cached_path).ok()
             } else {
                 None
