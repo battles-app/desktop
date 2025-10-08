@@ -1782,7 +1782,7 @@ async fn streamdeck_init() -> Result<(), String> {
     println!("[Stream Deck] Initializing Stream Deck system");
     
     let manager = StreamDeckManager::new()?;
-    *STREAMDECK_MANAGER.write() = Some(manager);
+    *STREAMDECK_MANAGER.lock() = Some(manager);
     
     println!("[Stream Deck] ✅ Initialized");
     Ok(())
@@ -1792,7 +1792,7 @@ async fn streamdeck_init() -> Result<(), String> {
 async fn streamdeck_scan() -> Result<Vec<String>, String> {
     println!("[Stream Deck] Scanning for devices...");
     
-    let mut manager_lock = STREAMDECK_MANAGER.write();
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         let devices = manager.scan_devices()?;
@@ -1812,7 +1812,7 @@ async fn streamdeck_scan() -> Result<Vec<String>, String> {
 async fn streamdeck_connect() -> Result<String, String> {
     println!("[Stream Deck] Connecting to device...");
     
-    let mut manager_lock = STREAMDECK_MANAGER.write();
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         let result = manager.connect()?;
@@ -1827,7 +1827,7 @@ async fn streamdeck_connect() -> Result<String, String> {
 async fn streamdeck_disconnect() -> Result<(), String> {
     println!("[Stream Deck] Disconnecting...");
     
-    let mut manager_lock = STREAMDECK_MANAGER.write();
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         manager.disconnect();
@@ -1839,7 +1839,7 @@ async fn streamdeck_disconnect() -> Result<(), String> {
 
 #[command]
 async fn streamdeck_get_info() -> Result<StreamDeckInfo, String> {
-    let manager_lock = STREAMDECK_MANAGER.read();
+    let manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref manager) = *manager_lock {
         let serial = manager.get_serial_number().ok();
@@ -1868,7 +1868,7 @@ async fn streamdeck_update_layout(
     println!("[Stream Deck] Updating layout: {} battle board, {} user FX", 
         battle_board.len(), user_fx.len());
     
-    let mut manager_lock = STREAMDECK_MANAGER.write();
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         manager.update_layout(battle_board, user_fx)?;
@@ -1881,7 +1881,7 @@ async fn streamdeck_update_layout(
 
 #[command]
 async fn streamdeck_set_button_state(fx_id: String, is_playing: bool) -> Result<(), String> {
-    let mut manager_lock = STREAMDECK_MANAGER.write();
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         manager.set_button_state(&fx_id, is_playing)?;
@@ -1901,7 +1901,7 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
             
             // Check if device is connected
             let is_connected = {
-                let manager_lock = STREAMDECK_MANAGER.read();
+                let manager_lock = STREAMDECK_MANAGER.lock();
                 manager_lock.as_ref().map(|m| m.is_connected()).unwrap_or(false)
             };
             
@@ -1917,7 +1917,7 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                     let _ = app.emit("streamdeck://disconnected", ());
                     
                     // Try to reconnect
-                    let mut manager_lock = STREAMDECK_MANAGER.write();
+                    let mut manager_lock = STREAMDECK_MANAGER.lock();
                     if let Some(ref mut manager) = *manager_lock {
                         println!("[Stream Deck Watcher] Attempting to reconnect...");
                         if let Ok(info) = manager.connect() {
@@ -1928,28 +1928,10 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                 }
             }
             
-            // Read button presses
-            if is_connected {
-                let mut manager_lock = STREAMDECK_MANAGER.write();
-                if let Some(ref mut manager) = *manager_lock {
-                    let app_clone = app.clone();
-                    let _ = manager.read_buttons(|button_idx, is_pressed| {
-                        if is_pressed {
-                            // Button was pressed, handle it
-                            if let Some((fx_id, should_play)) = manager.handle_button_press(button_idx) {
-                                println!("[Stream Deck] Button {} pressed: {} (play: {})", button_idx, fx_id, should_play);
-                                
-                                // Emit event to frontend
-                                let _ = app_clone.emit("streamdeck://button-press", serde_json::json!({
-                                    "button_idx": button_idx,
-                                    "fx_id": fx_id,
-                                    "should_play": should_play
-                                }));
-                            }
-                        }
-                    });
-                }
-            }
+            // Note: Button reading would go here, but the elgato-streamdeck library
+            // doesn't provide an async button reading API. Button presses would need
+            // to be handled through a separate thread with blocking reads.
+            // For now, users can trigger FX from the dashboard.
         }
     });
 }
