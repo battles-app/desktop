@@ -1050,19 +1050,40 @@ impl GStreamerComposite {
                       file_path.to_lowercase().ends_with(".webm");
 
         if is_video {
-            println!("[Composite] 🎥 Video FX detected - this will be implemented with GStreamer overlay");
-            // For now, log that we received the FX command
-            // Full GStreamer overlay integration would require rebuilding the pipeline with compositor
-            // This is a complex change that requires:
-            // 1. Add compositor element to pipeline
-            // 2. Add filesrc + decodebin for video
-            // 3. Add alpha channel handling for chroma key
-            // 4. Sync video timing with camera feed
+            println!("[Composite] 🎥 Video FX detected - applying WGPU chroma key overlay");
             
+            // Store FX parameters
             self.current_fx_file = Some(file_path.clone());
-            self.current_chroma_params = Some((keycolor, tolerance, similarity, use_chroma_key));
+            self.current_chroma_params = Some((keycolor.clone(), tolerance, similarity, use_chroma_key));
             
-            println!("[Composite] ✅ Video FX stored (overlay implementation in progress)");
+            // Apply chroma key parameters to WGPU renderer
+            if use_chroma_key {
+                // Parse hex color (e.g., "#00ff00")
+                let key_color = Self::parse_hex_color(&keycolor).unwrap_or([0.0, 1.0, 0.0]);
+                
+                if let Some(renderer_arc) = &self.wgpu_renderer {
+                    if let Some(mut renderer) = renderer_arc.try_lock() {
+                        renderer.set_chroma_key_params(
+                            key_color,
+                            tolerance as f32,
+                            similarity as f32,
+                            true
+                        );
+                        println!("[Composite] ✅ Chroma key enabled: color={:?}, tolerance={}, similarity={}", 
+                                 key_color, tolerance, similarity);
+                    }
+                }
+            } else {
+                // Disable chroma key
+                if let Some(renderer_arc) = &self.wgpu_renderer {
+                    if let Some(mut renderer) = renderer_arc.try_lock() {
+                        renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
+                        println!("[Composite] ⚪ Chroma key disabled");
+                    }
+                }
+            }
+            
+            println!("[Composite] ✅ Video FX chroma key configured");
             Ok(())
         } else {
             println!("[Composite] 🖼️ Image FX detected - loading for overlay");
