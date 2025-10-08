@@ -336,8 +336,9 @@ async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
         let mut capture = ScreenCaptureMonitor::new(index)
             .map_err(|e| format!("Failed to create capture {}: {}", index, e))?;
         
-        // Create broadcast channel for this monitor
-        let (tx, _rx) = broadcast::channel::<Vec<u8>>(4);
+        // Create broadcast channel for this monitor with larger buffer
+        // 60 frames = 2 seconds of buffer at 30fps (prevents lag spikes during preview)
+        let (tx, _rx) = broadcast::channel::<Vec<u8>>(60);
         capture.set_frame_sender(tx.clone());
         
         // Start the capture pipeline
@@ -427,24 +428,37 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
                 // Subscribe to frames
                 let mut rx = tx.subscribe();
                 let mut frame_count = 0u64;
+                // Lower FPS for monitor previews (they're just thumbnails)
+                let target_fps = 15.0;
+                let frame_interval = std::time::Duration::from_secs_f64(1.0 / target_fps);
+                let mut last_send_time = std::time::Instant::now();
                 
                 loop {
                     tokio::select! {
                         recv_result = rx.recv() => {
                             match recv_result {
                                 Ok(frame_data) => {
-                                    frame_count += 1;
+                                    // Frame rate limiting: Only send at 15fps for previews
+                                    let now = std::time::Instant::now();
+                                    let elapsed = now.duration_since(last_send_time);
                                     
-                                    // Removed excessive frame logging
-                                    
-                                    // Send frame
-                                    if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                                        println!("[Monitor Preview {}] ❌ Client disconnected after {} frames", monitor_index, frame_count);
-                                        break;
+                                    if elapsed >= frame_interval {
+                                        frame_count += 1;
+                                        last_send_time = now;
+                                        
+                                        // Send frame
+                                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
+                                            println!("[Monitor Preview {}] ❌ Client disconnected after {} frames", monitor_index, frame_count);
+                                            break;
+                                        }
                                     }
+                                    // Else: Drop frame silently (preview doesn't need full framerate)
                                 },
                                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                                    println!("[Monitor Preview {}] ⚠️ Lagged behind, skipped {} frames", monitor_index, skipped);
+                                    // Should rarely happen with 60-frame buffer + rate limiting
+                                    if skipped > 10 {
+                                        println!("[Monitor Preview {}] ⚠️ Severe lag: skipped {} frames", monitor_index, skipped);
+                                    }
                                     continue;
                                 },
                                 Err(broadcast::error::RecvError::Closed) => {
@@ -947,8 +961,9 @@ async fn initialize_camera_system() -> Result<String, String> {
     
     *GSTREAMER_CAMERA.write() = Some(camera);
     
-    // Create broadcast channel for camera frames (capacity: 2 frames, drops old frames if full)
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
+    // Create broadcast channel for camera frames with larger buffer
+    // 60 frames = 2 seconds of buffer at 30fps (prevents lag spikes)
+    let (tx, _rx) = broadcast::channel::<Vec<u8>>(60);
     
     // Set frame sender in camera
     if let Some(cam) = GSTREAMER_CAMERA.read().as_ref() {
@@ -1055,8 +1070,9 @@ async fn initialize_composite_system() -> Result<String, String> {
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
     
-    // Create broadcast channel for FX commands (NOT video frames!)
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
+    // Create broadcast channel for composite frames with larger buffer
+    // 60 frames = 2 seconds of buffer at 30fps (prevents lag spikes)
+    let (tx, _rx) = broadcast::channel::<Vec<u8>>(60);
     
     // Set frame sender in composite (for FX only)
     if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
@@ -1118,6 +1134,9 @@ async fn start_composite_websocket_server() {
                 // Subscribe to composite frames (receiver stays alive for entire connection)
                 let mut rx = tx.subscribe();
                 let mut frame_count = 0u64;
+                let target_fps = 30.0;
+                let frame_interval = std::time::Duration::from_secs_f64(1.0 / target_fps);
+                let mut last_send_time = std::time::Instant::now();
 
                 loop {
                     // Non-blocking check for client messages (for graceful disconnect)
@@ -1126,20 +1145,27 @@ async fn start_composite_websocket_server() {
                         recv_result = rx.recv() => {
                             match recv_result {
                                 Ok(frame_data) => {
-                                    frame_count += 1;
+                                    // Frame rate limiting: Only send at 30fps max
+                                    let now = std::time::Instant::now();
+                                    let elapsed = now.duration_since(last_send_time);
                                     
-                                    // Send EVERY frame (no throttling!)
-                                    // Removed excessive frame logging
-                                    
-                                    // Send immediately (WebSocket handles backpressure)
-                                    if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                                        println!("[Composite WS] ❌ Client disconnected after {} frames", frame_count);
-                                        break;
+                                    if elapsed >= frame_interval {
+                                        frame_count += 1;
+                                        last_send_time = now;
+                                        
+                                        // Send frame (WebSocket handles backpressure)
+                                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
+                                            println!("[Composite WS] ❌ Client disconnected after {} frames", frame_count);
+                                            break;
+                                        }
                                     }
+                                    // Else: Drop frame silently (frontend can't handle more than 30fps)
                                 },
                                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                                    // Only warn if significant lag (shouldn't happen without throttling)
-                                    println!("[Composite WS] ⚠️ Lagged behind, skipped {} frames (backend producing too fast!)", skipped);
+                                    // This should rarely happen now with 60-frame buffer + rate limiting
+                                    if skipped > 10 {
+                                        println!("[Composite WS] ⚠️ Severe lag: skipped {} frames (check system resources)", skipped);
+                                    }
                                     continue;
                                 },
                                 Err(broadcast::error::RecvError::Closed) => {

@@ -54,7 +54,8 @@
     "category": null,
     "copyright": "BATTLES.app™ ©2025",
     "icon": [
-      "favicon.ico"
+      "favicon.ico",
+      "logo.svg"
     ],
     "longDescription": "Pro TikTok Tools",
     "macOS": {
@@ -89,7 +90,9 @@
     "createUpdaterArtifacts": false,
     "resources": [
       "assets/sounds",
-      "src"
+      "src",
+      "loading.html",
+      "logo.svg"
     ]
   },
   "identifier": "io.battles.app",
