@@ -1948,8 +1948,27 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
         }
         println!("[Stream Deck Watcher] === END DIAGNOSTICS ===");
         
+        // Try to connect immediately if device was found
+        let devices_found = initial_diagnostics.devices_found;
+        
         // Emit diagnostics to frontend
         let _ = app.emit("streamdeck://diagnostics", initial_diagnostics);
+        
+        if devices_found > 0 {
+            let mut manager_lock = STREAMDECK_MANAGER.lock();
+            if let Some(ref mut manager) = *manager_lock {
+                println!("[Stream Deck Watcher] Attempting initial connection...");
+                match manager.connect() {
+                    Ok(info) => {
+                        println!("[Stream Deck Watcher] ✅ Initial connection successful: {}", info);
+                        let _ = app.emit("streamdeck://connected", ());
+                    }
+                    Err(e) => {
+                        println!("[Stream Deck Watcher] ❌ Initial connection failed: {}", e);
+                    }
+                }
+            }
+        }
         
         let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let mut was_connected = false;
