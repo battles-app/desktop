@@ -799,7 +799,7 @@ async fn create_monitor_window(
         Ok(true) => println!("✅ Window is visible"),
         Ok(false) => {
             println!("⚠️  Window reports as NOT visible after show(), trying again...");
-            window.show()?;
+            window.show().map_err(|e| format!("Failed to show window (retry): {}", e))?;
         }
         Err(e) => println!("⚠️  Could not check visibility: {}", e)
     }
