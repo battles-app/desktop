@@ -26,6 +26,9 @@ use screen_capture::ScreenCaptureMonitor;
 mod streamdeck_manager;
 use streamdeck_manager::{StreamDeckManager, FxButton, STREAMDECK_MANAGER};
 
+mod streamdeck_diagnostics;
+use streamdeck_diagnostics::{run_diagnostics, get_driver_download_info, StreamDeckDiagnostics, DriverDownloadInfo};
+
 use shared_memory::{Shmem, ShmemConf};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -1890,9 +1893,64 @@ async fn streamdeck_set_button_state(fx_id: String, is_playing: bool) -> Result<
     Ok(())
 }
 
+#[command]
+async fn streamdeck_run_diagnostics() -> StreamDeckDiagnostics {
+    println!("[Stream Deck] Running diagnostics...");
+    let diagnostics = run_diagnostics();
+    
+    println!("[Stream Deck] Diagnostics Results:");
+    println!("  HidAPI Initialized: {}", diagnostics.hidapi_initialized);
+    println!("  Devices Found: {}", diagnostics.devices_found);
+    
+    for (i, device) in diagnostics.device_details.iter().enumerate() {
+        println!("  Device {}: {} (VID: 0x{:04x}, PID: 0x{:04x}, Serial: {})",
+            i + 1, device.kind, device.vendor_id, device.product_id, device.serial);
+    }
+    
+    println!("  Recommendations:");
+    for rec in &diagnostics.recommendations {
+        println!("    {}", rec);
+    }
+    
+    diagnostics
+}
+
+#[command]
+async fn streamdeck_get_driver_info() -> DriverDownloadInfo {
+    get_driver_download_info()
+}
+
 // Start Stream Deck watcher thread
 fn start_streamdeck_watcher(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
+        // Run diagnostics on startup
+        println!("[Stream Deck Watcher] Running initial diagnostics...");
+        let initial_diagnostics = run_diagnostics();
+        
+        println!("[Stream Deck Watcher] === DIAGNOSTIC RESULTS ===");
+        println!("[Stream Deck Watcher] HID API Initialized: {}", initial_diagnostics.hidapi_initialized);
+        println!("[Stream Deck Watcher] Devices Found: {}", initial_diagnostics.devices_found);
+        
+        if !initial_diagnostics.device_details.is_empty() {
+            println!("[Stream Deck Watcher] Detected Devices:");
+            for (i, device) in initial_diagnostics.device_details.iter().enumerate() {
+                println!("[Stream Deck Watcher]   {}. {} (VID: 0x{:04x}, PID: 0x{:04x})",
+                    i + 1, device.kind, device.vendor_id, device.product_id);
+                println!("[Stream Deck Watcher]      Serial: {}", device.serial);
+            }
+        }
+        
+        if !initial_diagnostics.recommendations.is_empty() {
+            println!("[Stream Deck Watcher] Recommendations:");
+            for rec in &initial_diagnostics.recommendations {
+                println!("[Stream Deck Watcher]   {}", rec);
+            }
+        }
+        println!("[Stream Deck Watcher] === END DIAGNOSTICS ===");
+        
+        // Emit diagnostics to frontend
+        let _ = app.emit("streamdeck://diagnostics", initial_diagnostics);
+        
         let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let mut was_connected = false;
         
@@ -1994,7 +2052,9 @@ fn main() {
             streamdeck_disconnect,
             streamdeck_get_info,
             streamdeck_update_layout,
-            streamdeck_set_button_state
+            streamdeck_set_button_state,
+            streamdeck_run_diagnostics,
+            streamdeck_get_driver_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

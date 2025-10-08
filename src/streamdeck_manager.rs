@@ -56,7 +56,7 @@ impl StreamDeckManager {
         
         let (kind, serial) = &devices[0];
         
-        let mut device = StreamDeck::connect(&hid, *kind, serial)
+        let device = StreamDeck::connect(&hid, *kind, serial)
             .map_err(|e| format!("Failed to connect to Stream Deck: {}", e))?;
         
         self.device_kind = Some(*kind);
@@ -166,7 +166,7 @@ impl StreamDeckManager {
         
         // Get device dimensions for layout calculation
         let (cols, rows) = match self.device_kind {
-            Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) => (5, 3),
+            Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) | Some(Kind::Mk2Scissor) => (5, 3),
             Some(Kind::Mini) | Some(Kind::MiniMk2) => (3, 2),
             Some(Kind::Xl) | Some(Kind::XlV2) => (8, 4),
             Some(Kind::Plus) => (4, 2), // 8 buttons in 4x2 grid
