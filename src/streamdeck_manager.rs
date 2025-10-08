@@ -1,4 +1,4 @@
-use elgato_streamdeck::{new_hidapi, StreamDeck, Kind};
+use elgato_streamdeck::{new_hidapi, list_devices, StreamDeck, info::Kind};
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use parking_lot::Mutex;
@@ -41,14 +41,14 @@ impl StreamDeckManager {
     /// Scan for connected Stream Deck devices
     pub fn scan_devices(&mut self) -> Result<Vec<(Kind, String)>, String> {
         let hid = new_hidapi().map_err(|e| format!("Failed to initialize HidApi: {}", e))?;
-        let devices = StreamDeck::list_devices(&hid);
+        let devices = list_devices(&hid);
         Ok(devices)
     }
     
     /// Connect to the first available Stream Deck device
     pub fn connect(&mut self) -> Result<String, String> {
         let hid = new_hidapi().map_err(|e| format!("Failed to initialize HidApi: {}", e))?;
-        let devices = StreamDeck::list_devices(&hid);
+        let devices = list_devices(&hid);
         
         if devices.is_empty() {
             return Err("No Stream Deck devices found".to_string());
@@ -128,6 +128,7 @@ impl StreamDeckManager {
             Some(Kind::Original) => 15,
             Some(Kind::OriginalV2) => 15,
             Some(Kind::Mk2) => 15,
+            Some(Kind::Mk2Scissor) => 15,
             Some(Kind::Mini) => 6,
             Some(Kind::MiniMk2) => 6,
             Some(Kind::Xl) => 32,
@@ -143,7 +144,8 @@ impl StreamDeckManager {
     fn get_button_size(&self) -> u32 {
         match self.device_kind {
             Some(Kind::Original) | Some(Kind::OriginalV2) |
-            Some(Kind::Mk2) | Some(Kind::Mini) | Some(Kind::MiniMk2) => 72,
+            Some(Kind::Mk2) | Some(Kind::Mk2Scissor) | 
+            Some(Kind::Mini) | Some(Kind::MiniMk2) => 72,
             Some(Kind::Xl) | Some(Kind::XlV2) => 96,
             Some(Kind::Plus) | Some(Kind::Neo) => 200,
             Some(Kind::Pedal) => 0,
@@ -212,37 +214,41 @@ impl StreamDeckManager {
     
     /// Render all buttons based on current layout
     fn render_all_buttons(&mut self) -> Result<(), String> {
+        if self.device.is_none() {
+            return Ok(());
+        }
+        
+        // Collect all button images first
+        let mut button_images: Vec<(u8, Option<image::DynamicImage>)> = Vec::new();
+        
+        for (idx, button_opt) in self.button_layout.iter().enumerate() {
+            let image = if let Some(button) = button_opt {
+                let is_playing = self.button_states
+                    .get(&(idx as u8))
+                    .map(|s| s.is_playing)
+                    .unwrap_or(false);
+                Some(self.create_button_image(button, is_playing)?)
+            } else {
+                // Empty button
+                let size = self.get_button_size();
+                let img = image::RgbaImage::new(size, size);
+                Some(image::DynamicImage::ImageRgba8(img))
+            };
+            button_images.push((idx as u8, image));
+        }
+        
+        // Now set all button images
         if let Some(ref mut device) = self.device {
-            for (idx, button_opt) in self.button_layout.iter().enumerate() {
-                if let Some(button) = button_opt {
-                    self.render_button(device, idx as u8, button)?;
-                } else {
-                    // Clear empty button
-                    self.clear_button(device, idx as u8)?;
+            for (idx, image_opt) in button_images {
+                if let Some(image) = image_opt {
+                    device.set_button_image(idx, image)
+                        .map_err(|e| format!("Failed to set button image: {}", e))?;
                 }
             }
             
             // Flush changes to device
             device.flush().map_err(|e| format!("Failed to flush device: {}", e))?;
         }
-        
-        Ok(())
-    }
-    
-    /// Render a single button with text and optional image
-    fn render_button(&mut self, device: &mut StreamDeck, button_idx: u8, fx_button: &FxButton) -> Result<(), String> {
-        // Get button state
-        let is_playing = self.button_states
-            .get(&button_idx)
-            .map(|s| s.is_playing)
-            .unwrap_or(false);
-        
-        // Create button image with text
-        let image = self.create_button_image(fx_button, is_playing)?;
-        
-        // Set button image
-        device.set_button_image(button_idx, image)
-            .map_err(|e| format!("Failed to set button image: {}", e))?;
         
         Ok(())
     }
@@ -280,23 +286,27 @@ impl StreamDeckManager {
         Ok(image::DynamicImage::ImageRgba8(img))
     }
     
-    /// Clear a single button
-    fn clear_button(&mut self, device: &mut StreamDeck, button_idx: u8) -> Result<(), String> {
-        let size = self.get_button_size();
-        let img = image::RgbaImage::new(size, size);
-        let dynamic_img = image::DynamicImage::ImageRgba8(img);
-        
-        device.set_button_image(button_idx, dynamic_img)
-            .map_err(|e| format!("Failed to clear button: {}", e))?;
-        
-        Ok(())
-    }
-    
     /// Clear all buttons
     pub fn clear_all_buttons(&mut self) -> Result<(), String> {
+        if self.device.is_none() {
+            return Ok(());
+        }
+        
+        let size = self.get_button_size();
+        let button_count = self.button_count();
+        
+        // Create empty images for all buttons
+        let mut button_images: Vec<(u8, image::DynamicImage)> = Vec::new();
+        for i in 0..button_count as u8 {
+            let img = image::RgbaImage::new(size, size);
+            button_images.push((i, image::DynamicImage::ImageRgba8(img)));
+        }
+        
+        // Now set all buttons
         if let Some(ref mut device) = self.device {
-            for i in 0..self.button_count() as u8 {
-                self.clear_button(device, i)?;
+            for (idx, image) in button_images {
+                device.set_button_image(idx, image)
+                    .map_err(|e| format!("Failed to clear button: {}", e))?;
             }
             
             device.flush().map_err(|e| format!("Failed to flush: {}", e))?;
@@ -316,54 +326,67 @@ impl StreamDeckManager {
     /// Handle button press (toggle play/stop)
     pub fn handle_button_press(&mut self, button_idx: u8) -> Option<(String, bool)> {
         // Get the FX button at this position
-        if let Some(Some(fx_button)) = self.button_layout.get(button_idx as usize) {
-            // Toggle playing state
-            let entry = self.button_states
-                .entry(button_idx)
-                .or_insert(ButtonState {
-                    is_playing: false,
-                    button: Some(fx_button.clone()),
-                });
-            
-            entry.is_playing = !entry.is_playing;
-            let new_state = entry.is_playing;
-            let fx_id = fx_button.id.clone();
-            
-            // Update button visual
-            if let Some(ref mut device) = self.device {
-                let _ = self.render_button(device, button_idx, fx_button);
-                let _ = device.flush();
+        let fx_button = self.button_layout.get(button_idx as usize)?.as_ref()?.clone();
+        
+        // Toggle playing state
+        let entry = self.button_states
+            .entry(button_idx)
+            .or_insert(ButtonState {
+                is_playing: false,
+                button: Some(fx_button.clone()),
+            });
+        
+        entry.is_playing = !entry.is_playing;
+        let new_state = entry.is_playing;
+        let fx_id = fx_button.id.clone();
+        
+        // Update button visual
+        if self.device.is_some() {
+            let is_playing = new_state;
+            if let Ok(image) = self.create_button_image(&fx_button, is_playing) {
+                if let Some(ref mut device) = self.device {
+                    let _ = device.set_button_image(button_idx, image);
+                    let _ = device.flush();
+                }
             }
-            
-            // Return (fx_id, is_playing)
-            return Some((fx_id, new_state));
         }
         
-        None
+        // Return (fx_id, is_playing)
+        Some((fx_id, new_state))
     }
     
     /// Update button state (called when FX stops playing)
     pub fn set_button_state(&mut self, fx_id: &str, is_playing: bool) -> Result<(), String> {
-        // Find button with this FX ID
+        // Find button with this FX ID and update state
+        let mut button_to_update: Option<(u8, FxButton)> = None;
+        
         for (idx, button_opt) in self.button_layout.iter().enumerate() {
             if let Some(fx_button) = button_opt {
                 if fx_button.id == fx_id {
-                    // Update state
-                    self.button_states
-                        .entry(idx as u8)
-                        .and_modify(|s| s.is_playing = is_playing)
-                        .or_insert(ButtonState {
-                            is_playing,
-                            button: Some(fx_button.clone()),
-                        });
-                    
-                    // Update visual
+                    button_to_update = Some((idx as u8, fx_button.clone()));
+                    break;
+                }
+            }
+        }
+        
+        if let Some((idx, fx_button)) = button_to_update {
+            // Update state
+            self.button_states
+                .entry(idx)
+                .and_modify(|s| s.is_playing = is_playing)
+                .or_insert(ButtonState {
+                    is_playing,
+                    button: Some(fx_button.clone()),
+                });
+            
+            // Update visual
+            if self.device.is_some() {
+                if let Ok(image) = self.create_button_image(&fx_button, is_playing) {
                     if let Some(ref mut device) = self.device {
-                        self.render_button(device, idx as u8, fx_button)?;
+                        device.set_button_image(idx, image)
+                            .map_err(|e| format!("Failed to set button image: {}", e))?;
                         device.flush().map_err(|e| format!("Failed to flush: {}", e))?;
                     }
-                    
-                    return Ok(());
                 }
             }
         }

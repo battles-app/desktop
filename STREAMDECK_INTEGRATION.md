@@ -9,8 +9,8 @@ The Battles.app desktop application now includes full Elgato Stream Deck integra
 - ✅ **Auto-detection**: Automatically detects and connects to Stream Deck devices when the app starts
 - ✅ **Auto-reconnect**: Watches for device disconnection and automatically reconnects
 - ✅ **Smart Layout**: Battle board effects on the left, user FX on the right
-- ✅ **Visual Feedback**: Buttons change color based on state (purple for battle board, blue for user FX, green when playing)
-- ✅ **Toggle Control**: Press once to play, press again to stop
+- ✅ **Visual Feedback**: Buttons display FX and change color based on state (purple for battle board, blue for user FX, green when playing)
+- ⚠️ **Button Input**: Currently display-only (button press detection coming in future update)
 - ✅ **Real-time Sync**: Updates instantly when FX are added or removed from dashboard
 
 ## Supported Devices
@@ -57,15 +57,17 @@ When the Battles.app desktop application starts, it automatically:
 ### 2. Load FX Layout
 The app automatically loads your battle board effects and user FX from the API and syncs them to the Stream Deck buttons.
 
-### 3. Press Buttons to Control FX
-- **First Press**: Plays the FX (button turns green)
-- **Second Press**: Stops the FX (button returns to original color)
-- **Auto-sync**: When FX finishes playing, button automatically returns to stopped state
+### 3. Visual Status Display
+The Stream Deck displays your current FX layout with real-time status updates:
+- **Purple buttons**: Battle board effects (idle)
+- **Blue buttons**: User FX effects (idle)
+- **Green buttons**: Currently playing effects
+- **Empty buttons**: No FX assigned to this slot
 
-### 4. Visual Feedback
-- **Purple**: Battle board effect (not playing)
-- **Blue**: User FX effect (not playing)
-- **Green**: Effect is currently playing
+### 4. Control FX from Dashboard
+Currently, FX are triggered from the web dashboard. When you play an effect from the dashboard, the corresponding Stream Deck button turns green. When it stops, the button returns to its original color.
+
+> **Note**: Physical button press detection is coming in a future update. The current version provides visual feedback and status display.
 
 ## Tauri Commands
 
@@ -272,10 +274,21 @@ sudo usermod -aG plugdev $USER
 
 ## Future Enhancements
 
+- [ ] **Button press detection** - Enable physical button presses to trigger FX (requires additional threading implementation)
 - [ ] Add custom button images from uploaded FX thumbnails
-- [ ] Add text rendering with FX names on buttons
+- [ ] Add text rendering with FX names on buttons (requires font rendering library)
 - [ ] Support for Stream Deck + (LCD screen and knobs)
 - [ ] Brightness control from dashboard
 - [ ] Button remapping/customization
 - [ ] Multi-page support for >15 effects
+
+### Why Button Presses Aren't Implemented Yet
+
+The `elgato-streamdeck` library provides button state reading, but it requires blocking I/O operations. To implement button press detection properly, we need to:
+
+1. Create a separate dedicated thread for blocking button reads
+2. Implement proper synchronization between the button reading thread and the main app
+3. Handle race conditions when updating button states
+
+This is technically feasible but requires additional complexity. The current implementation focuses on providing a reliable visual display that syncs with dashboard actions.
 
