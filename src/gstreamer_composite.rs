@@ -910,9 +910,8 @@ impl GStreamerComposite {
                     
                     if *count == 1 {
                         println!("[Composite] 🎬 FIRST FRAME! Processing with WGPU ({}x{})", frame_width, frame_height);
-                    } else if *count % 90 == 0 {
-                        println!("[Composite] 📡 Frame {} - WGPU rendering", *count);
                     }
+                    // Removed excessive frame logging (was spamming console every 90 frames)
 
                     // DIRECT SURFACE RENDERING (zero-latency!)
                     if let Some(renderer_arc) = &surface_renderer {

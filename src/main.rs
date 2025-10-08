@@ -427,7 +427,6 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
                 // Subscribe to frames
                 let mut rx = tx.subscribe();
                 let mut frame_count = 0u64;
-                let start_time = std::time::Instant::now();
                 
                 loop {
                     tokio::select! {
@@ -436,13 +435,7 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
                                 Ok(frame_data) => {
                                     frame_count += 1;
                                     
-                                    // Log every 60 frames
-                                    if frame_count % 60 == 0 {
-                                        let elapsed = start_time.elapsed().as_secs_f64();
-                                        let fps = frame_count as f64 / elapsed;
-                                        println!("[Monitor Preview {}] 📡 Frame {} sent ({} bytes) | FPS: {:.1}", 
-                                            monitor_index, frame_count, frame_data.len(), fps);
-                                    }
+                                    // Removed excessive frame logging
                                     
                                     // Send frame
                                     if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
@@ -1125,7 +1118,6 @@ async fn start_composite_websocket_server() {
                 // Subscribe to composite frames (receiver stays alive for entire connection)
                 let mut rx = tx.subscribe();
                 let mut frame_count = 0u64;
-                let start_time = std::time::Instant::now();
 
                 loop {
                     // Non-blocking check for client messages (for graceful disconnect)
@@ -1137,13 +1129,7 @@ async fn start_composite_websocket_server() {
                                     frame_count += 1;
                                     
                                     // Send EVERY frame (no throttling!)
-                                    // Log every 60 frames (2 seconds at 30fps)
-                                    if frame_count % 60 == 0 {
-                                        let elapsed = start_time.elapsed().as_secs_f64();
-                                        let fps = frame_count as f64 / elapsed;
-                                        println!("[Composite WS] 📡 Frame {} sent ({} bytes) | FPS: {:.1}", 
-                                            frame_count, frame_data.len(), fps);
-                                    }
+                                    // Removed excessive frame logging
                                     
                                     // Send immediately (WebSocket handles backpressure)
                                     if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
