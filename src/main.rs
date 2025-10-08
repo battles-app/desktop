@@ -686,22 +686,37 @@ async fn create_monitor_window(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    // Create a borderless window that fills the entire monitor
-    println!("Creating borderless monitor-filling window");
+    // Create a borderless fullscreen window on the selected monitor
+    println!("Creating borderless fullscreen window");
     println!("Monitor window URL: {}", url);
+    println!("Window configuration: {}x{} at ({}, {}), always_on_top=true, decorations=false",
+             logical_width, logical_height, logical_x, logical_y);
+
+    // Parse URL safely
+    let parsed_url = url.parse()
+        .map_err(|e| format!("Failed to parse URL '{}': {}", url, e))?;
+    
+    println!("Successfully parsed URL");
 
     // Use WebviewWindowBuilder which supports URL in Tauri v2
-    // Pass the authenticated URL directly - no loading page needed
-    let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(url.parse().unwrap()))
-        .title("TV Monitor")
+    let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(parsed_url))
+        .title("TV Monitor - Battles.app")
         .inner_size(logical_width, logical_height)
         .position(logical_x, logical_y)
-        .decorations(false) // No borders for fullscreen-like appearance
-        .resizable(false)
-        .always_on_top(true)
-        .fullscreen(false) // Use borderless window instead of true fullscreen
+        .decorations(false) // Borderless
+        .resizable(false)   // Fixed size
+        .always_on_top(true) // Above all other windows
+        .visible(false)      // Start hidden, will show after setup
+        .fullscreen(false)   // Use borderless window (not true fullscreen)
+        .skip_taskbar(false) // Show in taskbar for easy access
         .build()
-        .map_err(|e| format!("Failed to create monitor window: {}", e))?;
+        .map_err(|e| {
+            let error_msg = format!("Failed to create monitor window: {}", e);
+            println!("❌ {}", error_msg);
+            error_msg
+        })?;
+    
+    println!("✅ Window object created successfully");
 
     // Listen for window close events to notify the main window
     let app_handle = app.clone();
@@ -713,14 +728,37 @@ async fn create_monitor_window(
         }
     });
 
-    // Show and focus the window
+    // Configure window to be maximized and always on top
+    println!("Showing window...");
     window.show()
-        .map_err(|e| format!("Failed to show monitor window: {}", e))?;
+        .map_err(|e| {
+            let error_msg = format!("Failed to show window: {}", e);
+            println!("❌ {}", error_msg);
+            error_msg
+        })?;
+    
+    println!("Setting focus...");
     window.set_focus()
-        .map_err(|e| format!("Failed to focus monitor window: {}", e))?;
+        .map_err(|e| {
+            let error_msg = format!("Failed to focus window: {}", e);
+            println!("❌ {}", error_msg);
+            error_msg
+        })?;
+    
+    // Ensure it's on top
+    println!("Setting always on top...");
+    window.set_always_on_top(true)
+        .map_err(|e| {
+            let error_msg = format!("Failed to set always on top: {}", e);
+            println!("❌ {}", error_msg);
+            error_msg
+        })?;
 
-    println!("Monitor window created successfully on monitor {} at logical position ({}, {}) with size {}x{}",
-             monitor_index, logical_x, logical_y, logical_width, logical_height);
+    println!("✅ Monitor window created and shown successfully!");
+    println!("   Monitor: {}", monitor_index);
+    println!("   Position: ({}, {})", logical_x, logical_y);
+    println!("   Size: {}x{}", logical_width, logical_height);
+    println!("   URL: {}", url);
     Ok(())
 }
 
