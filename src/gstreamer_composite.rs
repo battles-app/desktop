@@ -713,8 +713,8 @@ impl GStreamerComposite {
         *self.frame_sender.write() = Some(sender);
     }
 
-    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, _rotation: u32, has_camera: bool) -> Result<(), String> {
-        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps", width, height, fps);
+    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
+        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
 
         // CRITICAL: Properly stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -753,23 +753,50 @@ impl GStreamerComposite {
 
         *self.is_running.write() = true;
 
+        // Map rotation degrees to videoflip method
+        let flip_method = match rotation {
+            90 => 1,   // clockwise 90
+            180 => 2,  // rotate 180
+            270 => 3,  // counterclockwise 90 (clockwise 270)
+            _ => 0,    // identity (no rotation)
+        };
+        
         // Create simple pipeline - use camera if available, otherwise use test pattern
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
             // Escape backslashes in Windows device path
             let escaped_path = camera_device_id.replace("\\", "\\\\");
             
             // Use camera with device path (Windows format)
+            // Add videoflip for rotation support
             // Output RGBA for direct GPU texture upload (no JPEG encoding!)
-            format!(
-                "mfvideosrc device-path=\"{}\" ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                escaped_path, width, height
-            )
+            if flip_method == 0 {
+                // No rotation needed
+                format!(
+                    "mfvideosrc device-path=\"{}\" ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
+                     videoconvert ! \
+                     videoscale ! \
+                     video/x-raw,format=RGBA,width={},height={} ! \
+                     queue leaky=downstream max-size-buffers=2 ! \
+                     appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
+                    escaped_path, width, height
+                )
+            } else {
+                // Apply rotation with videoflip
+                format!(
+                    "mfvideosrc device-path=\"{}\" ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
+                     videoconvert ! \
+                     videoscale ! \
+                     video/x-raw,width={},height={} ! \
+                     videoflip method={} ! \
+                     videoconvert ! \
+                     video/x-raw,format=RGBA ! \
+                     queue leaky=downstream max-size-buffers=2 ! \
+                     appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
+                    escaped_path, width, height, flip_method
+                )
+            }
         } else {
             // Use test pattern - also output RGBA
             format!(
