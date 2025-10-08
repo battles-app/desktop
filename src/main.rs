@@ -730,10 +730,10 @@ async fn start_camera_websocket_server() {
     });
 }
 
-// Initialize composite system with window handle for direct rendering
+// Initialize composite system
 #[command]
-async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: u32) -> Result<String, String> {
-    println!("[Composite] 🚀 Initializing composite system with DIRECT SURFACE RENDERING");
+async fn initialize_composite_system() -> Result<String, String> {
+    println!("[Composite] Initializing composite system");
     
     // Only initialize once - check if already done
     {
@@ -745,14 +745,8 @@ async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: 
     } // Release lock before async operations
     
     // Initialize composite pipeline
-    let mut composite = GStreamerComposite::new()
+    let composite = GStreamerComposite::new()
         .map_err(|e| format!("Failed to initialize composite: {}", e))?;
-    
-    // Initialize WGPU renderer (no surface - use canvas path)
-    // Note: Direct surface rendering doesn't work with Tauri's WebView
-    // This approach still gives us GPU-accelerated chroma key + fast canvas rendering
-    composite.initialize_renderer(width, height)
-        .map_err(|e| format!("Failed to initialize renderer: {}", e))?;
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
     

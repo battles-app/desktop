@@ -890,27 +890,39 @@ impl GStreamerComposite {
                         println!("[Composite] 📡 Frame {} - WGPU rendering", *count);
                     }
 
-                    // DIRECT SURFACE RENDERING - ZERO CPU/GPU READBACK!
-                    if let Some(renderer_arc) = &surface_renderer {
+                    // WGPU processing with async triple-buffered readback
+                    let processed_frame = if let Some(renderer_arc) = &wgpu_renderer {
                         if let Some(mut renderer) = renderer_arc.try_lock() {
-                            // Upload texture and render DIRECTLY to window surface
+                            // Upload and render (non-blocking)
                             if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
-                                if let Err(e) = renderer.render_to_surface() {
-                                    if *count % 90 == 0 {
-                                        println!("[Composite] ⚠️  Frame {} render failed: {}", *count, e);
+                                if let Ok(()) = renderer.render_frame_async() {
+                                    // Success! Now poll for old frame (~3 frames ago)
+                                    if let Some(gpu_frame) = renderer.poll_readback() {
+                                        if *count % 90 == 0 {
+                                            println!("[Composite] ✅ Frame {} GPU-processed (async)", *count);
+                                        }
+                                        gpu_frame
+                                    } else {
+                                        // No readback ready yet (first 3 frames), send raw
+                                        rgba_data.to_vec()
                                     }
                                 } else {
-                                    // SUCCESS! Frame is now on screen!
-                                    if *count % 90 == 0 {
-                                        println!("[Composite] ✅ Frame {} → DIRECT TO SCREEN (zero-latency)", *count);
-                                    }
+                                    rgba_data.to_vec()
                                 }
+                            } else {
+                                rgba_data.to_vec()
                             }
+                        } else {
+                            rgba_data.to_vec()
                         }
-                    }
+                    } else {
+                        rgba_data.to_vec()
+                    };
 
-                    // No more WebSocket broadcasting! Video renders directly to window surface.
-                    // Keep frame_sender for FX commands only (not video frames)
+                    // Broadcast GPU-processed frames
+                    if let Some(sender) = &*frame_sender.read() {
+                        let _ = sender.send(processed_frame);
+                    }
 
                     Ok(gst::FlowSuccess::Ok)
                 })
@@ -1085,7 +1097,7 @@ impl GStreamerComposite {
 
     fn stop_fx_internal(&mut self) -> Result<(), String> {
         // Reset chroma key parameters
-        if let Some(renderer_arc) = &self.surface_renderer {
+        if let Some(renderer_arc) = &self.wgpu_renderer {
             if let Some(mut renderer) = renderer_arc.try_lock() {
                 renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
             }
@@ -1129,7 +1141,7 @@ impl GStreamerComposite {
         }
 
         self.pipeline = None;
-        self.surface_renderer = None;
+        self.wgpu_renderer = None;
         self.fx_appsrc = None;
 
         println!("[Composite] Composite pipeline stopped");
