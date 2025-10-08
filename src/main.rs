@@ -15,6 +15,9 @@ use gstreamer_camera::GStreamerCamera;
 mod gstreamer_composite;
 use gstreamer_composite::GStreamerComposite;
 
+// WGPU surface renderer (direct window rendering)
+mod wgpu_surface_renderer;
+
 use shared_memory::{Shmem, ShmemConf};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;

@@ -4,7 +4,8 @@
 use wgpu::*;
 use wgpu::util::DeviceExt;
 use bytemuck::{Pod, Zeroable};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -50,29 +51,31 @@ pub struct WgpuSurfaceRenderer {
 
 impl WgpuSurfaceRenderer {
     pub async fn new(
-        window: impl HasWindowHandle + Send + Sync + 'static,
+        window: Arc<tauri::Window>,
         width: u32,
         height: u32
     ) -> Result<Self, String> {
         println!("[WGPU Surface] 🚀 Initializing direct surface renderer ({}x{})", width, height);
 
         let instance = Instance::new(&InstanceDescriptor {
-            backends: Backends::all(),
+            backends: Backends::PRIMARY,
             ..Default::default()
         });
 
-        // Create surface from window handle
-        let surface = instance.create_surface(window)
+        // Create surface from Tauri window
+        let surface = instance.create_surface(window.as_ref())
             .map_err(|e| format!("Failed to create surface: {}", e))?;
 
-        let adapter = instance
+        let adapter = match instance
             .request_adapter(&RequestAdapterOptions {
                 power_preference: PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
-            .await
-            .ok_or("Failed to find suitable GPU adapter")?;
+            .await {
+                Ok(adapter) => adapter,
+                Err(e) => return Err(format!("Failed to find suitable GPU adapter: {:?}", e)),
+            };
 
         let (device, queue) = adapter
             .request_device(
@@ -81,6 +84,8 @@ impl WgpuSurfaceRenderer {
                     required_features: Features::empty(),
                     required_limits: Limits::default(),
                     memory_hints: MemoryHints::Performance,
+                    experimental_features: Default::default(),
+                    trace: None,
                 },
                 None,
             )
