@@ -787,10 +787,11 @@ impl GStreamerComposite {
             let escaped_path = camera_device_id.replace("\\", "\\\\");
             
             if flip_method == 0 {
-                // No rotation - compositor pipeline
+                // No rotation - compositor pipeline with fixed output size
                 format!(
                     "compositor name=comp sink_0::zorder=0 background=black ! \
-                     videoconvert ! video/x-raw,format=RGBA ! \
+                     videoconvert ! videoscale ! \
+                     video/x-raw,format=RGBA,width={},height={} ! \
                      tee name=t \
                         t. ! queue leaky=downstream max-size-buffers=2 ! \
                            appsink name=preview emit-signals=true sync=false async=false max-buffers=2 drop=true \
@@ -801,13 +802,14 @@ impl GStreamerComposite {
                      video/x-raw,format=RGBA,width={},height={} ! \
                      queue leaky=downstream max-size-buffers=1 ! \
                      comp.sink_0",
-                    escaped_path, width, height
+                    width, height, escaped_path, width, height
                 )
             } else {
-                // With rotation - compositor pipeline
+                // With rotation - compositor pipeline with fixed output size
                 format!(
                     "compositor name=comp sink_0::zorder=0 background=black ! \
-                     videoconvert ! video/x-raw,format=RGBA ! \
+                     videoconvert ! videoscale ! \
+                     video/x-raw,format=RGBA,width={},height={} ! \
                      tee name=t \
                         t. ! queue leaky=downstream max-size-buffers=2 ! \
                            appsink name=preview emit-signals=true sync=false async=false max-buffers=2 drop=true \
@@ -820,14 +822,15 @@ impl GStreamerComposite {
                      videoconvert ! video/x-raw,format=RGBA ! \
                      queue leaky=downstream max-size-buffers=1 ! \
                      comp.sink_0",
-                    escaped_path, pre_rotation_width, pre_rotation_height, flip_method
+                    width, height, escaped_path, pre_rotation_width, pre_rotation_height, flip_method
                 )
             }
         } else {
-            // Test pattern - also with compositor
+            // Test pattern - also with compositor and fixed output size
             format!(
                 "compositor name=comp sink_0::zorder=0 background=black ! \
-                 videoconvert ! video/x-raw,format=RGBA ! \
+                 videoconvert ! videoscale ! \
+                 video/x-raw,format=RGBA,width={},height={} ! \
                  tee name=t \
                     t. ! queue leaky=downstream max-size-buffers=2 ! \
                        appsink name=preview emit-signals=true sync=false async=false max-buffers=2 drop=true \
@@ -835,7 +838,7 @@ impl GStreamerComposite {
                  videotestsrc pattern=ball is-live=true ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
                  queue ! comp.sink_0",
-                width, height, fps
+                width, height, width, height, fps
             )
         };
 
@@ -1158,10 +1161,10 @@ impl GStreamerComposite {
         let queue_src = queue.static_pad("src").ok_or("No src pad on queue")?;
         let comp_sink = compositor.request_pad_simple("sink_%u").ok_or("Failed to request compositor sink pad")?;
         
-        // Set compositor pad properties (zorder=1 for foreground)
-        comp_sink.set_property("zorder", 1i32);
-        comp_sink.set_property("xpos", 0i32);
-        comp_sink.set_property("ypos", 0i32);
+        // Set compositor pad properties
+        comp_sink.set_property("zorder", 1u32);   // guint: layer order (1=foreground)
+        comp_sink.set_property("xpos", 0i32);     // gint: X position (can be negative)
+        comp_sink.set_property("ypos", 0i32);     // gint: Y position (can be negative)
         
         queue_src.link(&comp_sink).map_err(|e| format!("Failed to link queue → compositor: {:?}", e))?;
 
