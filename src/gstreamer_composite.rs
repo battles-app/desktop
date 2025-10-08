@@ -607,46 +607,31 @@ impl GStreamerComposite {
         println!("[Composite] Using rotation: {}", use_rotation);
 
         // Create pipeline based on whether camera is available and rotation
-        let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
-            // Try to determine if camera_device_id is a device index or path
-            let camera_element = if camera_device_id.parse::<u32>().is_ok() {
-                // It's a numeric device index
-                format!("mfvideosrc device-index={} ", camera_device_id)
-            } else {
-                // It's likely a device path
-                format!("mfvideosrc device-path=\"{}\" ", camera_device_id)
-            };
+        let mut pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
+            // Try different camera pipeline configurations
+            let mut pipeline_configs = vec![];
 
-            // Camera pipeline
-            if use_rotation {
-                // With rotation
-                format!(
-                    "{}! \
-                     queue leaky=downstream max-size-buffers=3 ! \
-                     videoconvert ! \
-                     queue leaky=downstream max-size-buffers=3 ! \
-                     videorotate rotation={} ! \
-                     queue leaky=downstream max-size-buffers=3 ! \
-                     video/x-raw,width={},height={},framerate={}/1 ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     compositor name=mixer sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=0 sink_1::ypos=0 ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     videoconvert ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     jpegenc quality=90 ! \
-                     appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                    camera_element, rotation, width, height, fps
-                )
-            } else {
-                // Without rotation - try compositor first, fallback to simple
-                let compositor_pipeline = format!(
+            // Try device index first
+            if camera_device_id.parse::<u32>().is_ok() {
+                pipeline_configs.push(format!("mfvideosrc device-index={} ", camera_device_id));
+            }
+
+            // Try device path
+            pipeline_configs.push(format!("mfvideosrc device-path=\"{}\" ", camera_device_id));
+
+            // Try device name
+            pipeline_configs.push(format!("mfvideosrc device-name=\"{}\" ", camera_device_id));
+
+            // Try each configuration
+            for (i, camera_element) in pipeline_configs.iter().enumerate() {
+                println!("[Composite] Trying camera configuration {}: {}", i + 1, camera_element);
+
+                let test_pipeline = format!(
                     "{}! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      video/x-raw,width={},height={},framerate={}/1 ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     compositor name=mixer sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=0 sink_1::ypos=0 ! \
                      queue leaky=downstream max-size-buffers=2 ! \
                      videoconvert ! \
                      queue leaky=downstream max-size-buffers=2 ! \
@@ -655,54 +640,31 @@ impl GStreamerComposite {
                     camera_element, width, height, fps
                 );
 
-                // Test if compositor pipeline can be parsed
-                println!("[Composite] Testing compositor pipeline with camera: {}", camera_element);
-                match gst::parse::launch(&compositor_pipeline) {
+                match gst::parse::launch(&test_pipeline) {
                     Ok(_) => {
-                        println!("[Composite] ✅ Compositor camera pipeline created successfully");
-                        compositor_pipeline
+                        println!("[Composite] ✅ Camera configuration {} succeeded", i + 1);
+                        // Use this pipeline configuration
+                        pipeline_str = test_pipeline;
+                        break;
                     }
                     Err(e) => {
-                        println!("[Composite] ❌ Compositor pipeline failed: {}, trying simple camera pipeline", e);
-                        // Try simpler pipeline without compositor
-                        let simple_pipeline = format!(
-                            "{}! \
-                             queue leaky=downstream max-size-buffers=3 ! \
-                             videoconvert ! \
-                             queue leaky=downstream max-size-buffers=3 ! \
-                             video/x-raw,width={},height={},framerate={}/1 ! \
-                             queue leaky=downstream max-size-buffers=2 ! \
-                             videoconvert ! \
-                             queue leaky=downstream max-size-buffers=2 ! \
-                             jpegenc quality=90 ! \
-                             appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                            camera_element, width, height, fps
-                        );
-                        println!("[Composite] Testing simple pipeline: {}", simple_pipeline);
-                        match gst::parse::launch(&simple_pipeline) {
-                            Ok(_) => {
-                                println!("[Composite] ✅ Simple camera pipeline created successfully");
-                                simple_pipeline
-                            }
-                            Err(e2) => {
-                                println!("[Composite] ❌ Simple pipeline also failed: {}", e2);
-                                // Last resort - just use videotestsrc
-                                println!("[Composite] Using fallback videotestsrc pipeline");
-                                format!(
-                                    "videotestsrc pattern=ball ! \
-                                     video/x-raw,width={},height={},framerate={}/1 ! \
-                                     jpegenc quality=90 ! \
-                                     appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                                    width, height, fps
-                                )
-                            }
-                        }
+                        println!("[Composite] ❌ Camera configuration {} failed: {}", i + 1, e);
                     }
                 }
             }
+
+            // If all camera configurations failed, fall back to test pattern
+            println!("[Composite] ❌ All camera configurations failed, using test pattern");
+            pipeline_str = format!(
+                "videotestsrc pattern=ball ! \
+                 video/x-raw,width={},height={},framerate={}/1 ! \
+                 jpegenc quality=90 ! \
+                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                width, height, fps
+            );
         } else {
             // FX-only pipeline (for when no camera is selected)
-            format!(
+            pipeline_str = format!(
                 "videotestsrc pattern=black ! \
                  video/x-raw,width={},height={},framerate={}/1 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
@@ -711,7 +673,8 @@ impl GStreamerComposite {
                  jpegenc quality=90 ! \
                  appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
                 width, height, fps
-            )
+            );
+        }
         };
 
         println!("[Composite] Pipeline with rotation: {}°", rotation);
@@ -1111,7 +1074,8 @@ impl GStreamerComposite {
 
     pub fn get_pipeline_state(&self) -> Option<gst::State> {
         if let Some(pipeline) = &self.pipeline {
-            Some(pipeline.state(Some(gst::ClockTime::from_seconds(1))).1)
+            let state_result = pipeline.state(Some(gst::ClockTime::from_seconds(1)));
+            Some(state_result.1)
         } else {
             None
         }
