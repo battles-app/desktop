@@ -570,12 +570,30 @@ impl GStreamerComposite {
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, _rotation: u32, has_camera: bool) -> Result<(), String> {
         println!("[Composite] Starting composite pipeline: {}x{} @ {}fps", width, height, fps);
 
-        // Stop existing pipeline if any
+        // CRITICAL: Properly stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
+            println!("[Composite] ⚠️ Stopping existing pipeline before starting new one...");
+            *self.is_running.write() = false;
+            
+            // Set to NULL state and wait for it to complete
             let _ = pipeline.set_state(gst::State::Null);
-            // Wait a bit for cleanup
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            
+            // Wait for state change to complete (up to 2 seconds)
+            match pipeline.state(Some(gst::ClockTime::from_seconds(2))).1 {
+                gst::State::Null => {
+                    println!("[Composite] ✅ Previous pipeline stopped cleanly");
+                }
+                state => {
+                    println!("[Composite] ⚠️ Previous pipeline in state: {:?} (forcing cleanup)", state);
+                }
+            }
+            
+            // Longer wait to ensure camera is released
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
+        
+        // Clear the old pipeline reference
+        self.pipeline = None;
 
         *self.is_running.write() = true;
 

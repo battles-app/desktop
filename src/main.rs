@@ -758,8 +758,8 @@ async fn initialize_composite_system() -> Result<String, String> {
     // Start WebSocket server (only if not already running)
     start_composite_websocket_server().await;
 
-    // Start system monitoring
-    start_system_monitor().await;
+    // NOTE: System monitor disabled - it was calling emergency_cleanup() which killed pipelines
+    // start_system_monitor().await;
 
     println!("[Composite] ✅ Composite system initialized on port {}", COMPOSITE_WS_PORT);
     Ok(format!("Composite initialized - WebSocket on port {}", COMPOSITE_WS_PORT))
@@ -854,59 +854,14 @@ async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
     Ok(cameras)
 }
 
-// System monitoring task for comprehensive logging
+// System monitoring task - DISABLED because emergency_cleanup() was killing pipelines
+// The monitor was calling emergency_cleanup() every 10 seconds which set pipeline to Null state
+#[allow(dead_code)]
 async fn start_system_monitor() {
-    tokio::spawn(async {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
-
-        loop {
-            interval.tick().await;
-
-            // Log system status
-            println!("[System] 🔍 Status Check:");
-
-            // Check camera status
-            if let Some(camera) = GSTREAMER_CAMERA.read().as_ref() {
-                if camera.is_running() {
-                    println!("  📹 Camera: Running");
-                } else {
-                    println!("  📹 Camera: Stopped");
-                }
-            } else {
-                println!("  📹 Camera: Not initialized");
-            }
-
-            // Check composite status
-            if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
-                if composite.is_running() {
-                    println!("  🎬 Composite: Running");
-                } else {
-                    println!("  🎬 Composite: Stopped");
-                }
-            } else {
-                println!("  🎬 Composite: Not initialized");
-            }
-
-            // Check WebSocket connections (basic status)
-            println!("  🌐 WebSocket: Active");
-
-            // Pipeline state details
-            if let Some(composite) = GSTREAMER_COMPOSITE.read().as_ref() {
-                if let Some(state) = composite.get_pipeline_state() {
-                    println!("  🔧 Pipeline State: {:?}", state);
-                } else {
-                    println!("  🔧 Pipeline State: No pipeline");
-                }
-
-                // Perform emergency cleanup check
-                if let Err(e) = composite.emergency_cleanup() {
-                    println!("  🚨 Emergency cleanup failed: {}", e);
-                }
-            }
-
-            println!("  💾 System: Monitoring active");
-        }
-    });
+    // DISABLED - This was causing pipeline to stop every 10 seconds
+    // The emergency_cleanup() call was setting pipeline state to Null
+    // If you need monitoring, remove the emergency_cleanup() call
+    println!("[System] ⚠️ System monitor disabled to prevent pipeline interference");
 }
 
 #[command]
