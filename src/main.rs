@@ -785,8 +785,14 @@ async fn start_composite_websocket_server() {
         println!("[Composite WS] ✅ WebSocket server listening on {}", addr);
         
         while let Ok((stream, _)) = listener.accept().await {
-            // Clone the sender before spawning
-            let tx_opt = COMPOSITE_FRAME_SENDER.read().as_ref().cloned();
+            // Clone the sender before spawning (keeps it alive)
+            let tx = match COMPOSITE_FRAME_SENDER.read().as_ref() {
+                Some(sender) => sender.clone(),
+                None => {
+                    println!("[Composite WS] ❌ No frame sender available");
+                    continue;
+                }
+            };
             
             tokio::spawn(async move {
                 let ws_stream = match accept_async(stream).await {
@@ -799,37 +805,45 @@ async fn start_composite_websocket_server() {
                 
                 println!("[Composite WS] ✅ Client connected");
                 
+                use futures_util::SinkExt;
+                use tokio_tungstenite::tungstenite::protocol::Message;
+                
                 let (mut ws_sender, _ws_receiver) = ws_stream.split();
                 
-                // Subscribe to composite frames
-                if let Some(tx) = tx_opt {
-                    let mut rx = tx.subscribe();
-                    let mut frame_count = 0u64;
-                    let start_time = std::time::Instant::now();
+                // Subscribe to composite frames (receiver stays alive for entire connection)
+                let mut rx = tx.subscribe();
+                let mut frame_count = 0u64;
+                let start_time = std::time::Instant::now();
 
-                    while let Ok(frame_data) = rx.recv().await {
-                        use futures_util::SinkExt;
-                        use tokio_tungstenite::tungstenite::protocol::Message;
-
-                        frame_count += 1;
-                        
-                        // Log every 30 frames instead of every frame to reduce spam
-                        if frame_count % 30 == 0 {
-                            let elapsed = start_time.elapsed().as_secs_f64();
-                            let fps = frame_count as f64 / elapsed;
-                            println!("[Composite WS] 📡 Sending frame {} ({} bytes, {:.1} fps)", frame_count, frame_data.len(), fps);
-                        }
-                        
-                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                            println!("[Composite WS] ❌ Client disconnected after {} frames", frame_count);
+                loop {
+                    match rx.recv().await {
+                        Ok(frame_data) => {
+                            frame_count += 1;
+                            
+                            // Log every 30 frames instead of every frame to reduce spam
+                            if frame_count % 30 == 0 {
+                                let elapsed = start_time.elapsed().as_secs_f64();
+                                let fps = frame_count as f64 / elapsed;
+                                println!("[Composite WS] 📡 Sending frame {} ({} bytes, {:.1} fps)", frame_count, frame_data.len(), fps);
+                            }
+                            
+                            if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
+                                println!("[Composite WS] ❌ Client disconnected after {} frames", frame_count);
+                                break;
+                            }
+                        },
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            println!("[Composite WS] ⚠️ Lagged behind, skipped {} frames", skipped);
+                            continue;
+                        },
+                        Err(broadcast::error::RecvError::Closed) => {
+                            println!("[Composite WS] ℹ️ Broadcast channel closed");
                             break;
                         }
                     }
-                    
-                    println!("[Composite WS] ℹ️ Broadcast channel closed");
-                } else {
-                    println!("[Composite WS] ❌ No broadcast channel available for client");
                 }
+                
+                println!("[Composite WS] 🔌 Client disconnected (total frames: {})", frame_count);
             });
         }
     });
