@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use image::RgbaImage;
+use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut};
+use imageproc::rect::Rect;
+use ab_glyph::{FontRef, PxScale};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FxButton {
@@ -258,30 +262,61 @@ impl StreamDeckManager {
         // Get button size
         let size = self.get_button_size();
         
-        // Create a simple colored button image
-        // In a production app, you would render text and icons here
-        let mut img = image::RgbaImage::new(size, size);
+        // Create button image with colored background
+        let mut img = RgbaImage::new(size, size);
         
         // Set background color based on state
-        let color = if is_playing {
-            // Green when playing
-            image::Rgba([0, 255, 0, 255])
+        let bg_color = if is_playing {
+            // Bright green when playing
+            image::Rgba([50, 205, 50, 255])
         } else if fx_button.is_global {
             // Purple for battle board
-            image::Rgba([128, 0, 255, 255])
+            image::Rgba([138, 43, 226, 255])
         } else {
             // Blue for user FX
-            image::Rgba([0, 128, 255, 255])
+            image::Rgba([30, 144, 255, 255])
         };
         
-        // Fill with color
-        for pixel in img.pixels_mut() {
-            *pixel = color;
+        // Fill with background color
+        draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
+        
+        // Add a border for better visual separation
+        let border_color = if is_playing {
+            image::Rgba([255, 255, 255, 255]) // White border when playing
+        } else {
+            image::Rgba([0, 0, 0, 128]) // Semi-transparent black border
+        };
+        
+        // Draw border (4px thick)
+        for i in 0..4 {
+            let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
+            imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
         }
         
-        // TODO: Add text rendering for button name
-        // This would require a font rendering library like rusttype
-        // For now, just return the colored image
+        // Render text with FX name
+        // Use embedded font data
+        let font_data = include_bytes!("../assets/DejaVuSans.ttf");
+        let font = FontRef::try_from_slice(font_data)
+            .map_err(|e| format!("Failed to load font: {:?}", e))?;
+        
+        // Calculate font size based on button size
+        let font_scale = PxScale::from((size as f32 * 0.15).max(12.0));
+        
+        // Prepare text (truncate if too long)
+        let display_name = if fx_button.name.len() > 12 {
+            format!("{}...", &fx_button.name[..9])
+        } else {
+            fx_button.name.clone()
+        };
+        
+        // Calculate text position (centered - approximate)
+        let text_color = image::Rgba([255, 255, 255, 255]); // White text
+        let text_x = (size as i32 / 2) - ((display_name.len() as i32 * font_scale.x as i32) / 4);
+        let text_y = (size as i32 / 2) + (font_scale.y as i32 / 4);
+        
+        // Draw text with shadow for better readability
+        draw_text_mut(&mut img, image::Rgba([0, 0, 0, 200]), text_x + 2, text_y + 2, font_scale, &font, &display_name);
+        draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
         
         Ok(image::DynamicImage::ImageRgba8(img))
     }
