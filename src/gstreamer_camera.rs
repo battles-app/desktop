@@ -69,15 +69,30 @@ impl GStreamerCamera {
                     let has_valid_path = device.properties()
                         .and_then(|props| props.get::<String>("device.path").ok())
                         .is_some();
-                    
+
+                    // Try to get the actual device index or path for GStreamer
+                    let device_id = if let Some(path) = device.properties()
+                        .and_then(|props| props.get::<String>("device.path").ok()) {
+                        // Use device path if available
+                        path
+                    } else if let Some(index) = device.properties()
+                        .and_then(|props| props.get::<u32>("device.index").ok()) {
+                        // Use device index if available
+                        index.to_string()
+                    } else {
+                        // Fallback to sequential index
+                        device_index.to_string()
+                    };
+
                     // Only add cameras with valid device paths (skip virtual/unknown devices)
                     if has_valid_path {
-                        println!("[GStreamer] Found: {} (device-index: {})", display_name, device_index);
-                        
+                        println!("[GStreamer] Found: {} (device-id: {}, enum-index: {})",
+                                 display_name, device_id, device_index);
+
                         cameras.push(CameraInfo {
-                            id: device_index.to_string(),
+                            id: device_id.clone(), // Use actual device index or path
                             name: display_name.to_string(),
-                            description: "Active Camera".to_string(),
+                            description: format!("Active Camera (id: {})", device_id),
                         });
                         device_index += 1;
                     } else {
