@@ -99,7 +99,24 @@ struct Uniforms {
     _padding2: f32,        // Padding to align to 32 bytes total
 }
 
-// WGPU-based chroma key renderer
+// Readback buffer state machine
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ReadbackState {
+    Free,       // Ready for new copy
+    InFlight,   // Copy submitted, GPU writing
+    Mapped,     // CPU reading, must unmap before reuse
+}
+
+// Readback buffer for async GPU→CPU transfer
+struct ReadbackBuffer {
+    buffer: Buffer,
+    width: u32,
+    height: u32,
+    state: ReadbackState,
+    frame_number: u64,
+}
+
+// WGPU-based chroma key renderer with triple-buffered async readback
 pub struct WgpuChromaRenderer {
     device: Device,
     queue: Queue,
@@ -115,6 +132,9 @@ pub struct WgpuChromaRenderer {
     frame_count: u64,
     output_texture: Option<Texture>,
     output_texture_view: Option<TextureView>,
+    // Triple-buffer ring for async readback
+    readback_ring: Vec<ReadbackBuffer>,
+    readback_index: usize,
 }
 
 impl WgpuChromaRenderer {
@@ -299,6 +319,30 @@ impl WgpuChromaRenderer {
             cache: None,
         });
 
+        // Create triple-buffer ring for async readback (3 frame latency)
+        const NUM_READBACK_BUFFERS: usize = 3;
+        let unpadded_bytes_per_row = width * 4;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * height) as u64;
+
+        let mut readback_ring = Vec::with_capacity(NUM_READBACK_BUFFERS);
+        for i in 0..NUM_READBACK_BUFFERS {
+            let buffer = device.create_buffer(&BufferDescriptor {
+                label: Some(&format!("Readback Buffer {}", i)),
+                size: buffer_size,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            readback_ring.push(ReadbackBuffer {
+                buffer,
+                width,
+                height,
+                state: ReadbackState::Free,
+                frame_number: 0,
+            });
+        }
+
         Ok(Self {
             device,
             queue,
@@ -321,6 +365,8 @@ impl WgpuChromaRenderer {
             frame_count: 0,
             output_texture: Some(output_texture),
             output_texture_view: Some(output_texture_view),
+            readback_ring,
+            readback_index: 0,
         })
     }
 
@@ -452,7 +498,9 @@ impl WgpuChromaRenderer {
         Ok(())
     }
 
-    pub fn render_frame(&mut self) -> Result<Vec<u8>, String> {
+    pub fn render_frame_async(&mut self) -> Result<(), String> {
+        // Async render: submit GPU work without blocking
+        // Readback happens ~3 frames later via poll_readback()
         if let (Some(bind_group), Some(output_texture), Some(output_texture_view)) = (
             &self.current_bind_group,
             &self.output_texture,
@@ -487,22 +535,24 @@ impl WgpuChromaRenderer {
 
             self.queue.submit([encoder.finish()]);
 
-            // Read back the rendered frame from output texture
-            // IMPORTANT: bytes_per_row MUST be aligned to COPY_BYTES_PER_ROW_ALIGNMENT (256)
+            // Copy to next readback buffer in ring (non-blocking!)
             let width = output_texture.width();
             let height = output_texture.height();
             let unpadded_bytes_per_row = width * 4;
             let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
             let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
-            
-            let buffer_size = (padded_bytes_per_row * height) as u64;
-            let buffer = self.device.create_buffer(&BufferDescriptor {
-                label: Some("Readback Buffer"),
-                size: buffer_size,
-                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
 
+            // Find next FREE buffer in ring (skip mapped/in-flight)
+            let rb_index = self.readback_index % self.readback_ring.len();
+            let rb = &mut self.readback_ring[rb_index];
+            
+            // CRITICAL: Buffer must be FREE (not mapped!) before copy
+            if rb.state != ReadbackState::Free {
+                // Buffer not ready, skip this frame's GPU processing
+                // This shouldn't happen with triple buffering, but safety first
+                return Err(format!("Readback buffer {} not free (state: {:?})", rb_index, rb.state));
+            }
+            
             let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("Readback Encoder"),
             });
@@ -515,7 +565,7 @@ impl WgpuChromaRenderer {
                     aspect: TextureAspect::All,
                 },
                 TexelCopyBufferInfo {
-                    buffer: &buffer,
+                    buffer: &rb.buffer,
                     layout: TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(padded_bytes_per_row),
@@ -529,54 +579,88 @@ impl WgpuChromaRenderer {
                 },
             );
 
+            // Submit BEFORE mapping (buffer must be unmapped at submit time)
             self.queue.submit([encoder.finish()]);
-
-            // Map buffer and read data
-            let buffer_slice = buffer.slice(..);
             
-            // Submit map request and wait synchronously
+            // Mark as in-flight AFTER submit
+            rb.state = ReadbackState::InFlight;
+            rb.frame_number = self.frame_count;
+            self.readback_index += 1;
+            self.frame_count += 1;
+
+            Ok(())
+        } else {
+            Err("Renderer not properly initialized".to_string())
+        }
+    }
+
+    pub fn poll_readback(&mut self) -> Option<Vec<u8>> {
+        // Look for oldest InFlight buffer and try to read it
+        let num_buffers = self.readback_ring.len();
+        
+        // Check all buffers for any that are InFlight
+        for i in 0..num_buffers {
+            let rb = &mut self.readback_ring[i];
+            
+            if rb.state != ReadbackState::InFlight {
+                continue; // Skip Free or Mapped buffers
+            }
+
+            let buffer_slice = rb.buffer.slice(..);
+            
+            // Try non-blocking map (only once per buffer)
             let (tx, rx) = std::sync::mpsc::channel();
             buffer_slice.map_async(MapMode::Read, move |result| {
                 tx.send(result).ok();
             });
-            
-            // Wait for mapping to complete (device will automatically poll)
-            match rx.recv_timeout(std::time::Duration::from_secs(1)) {
-                Ok(Ok(_)) => {},  // Success
-                Ok(Err(e)) => {
-                    println!("[WGPU] Failed to map buffer: {:?}", e);
-                    return Err(format!("Buffer mapping failed: {:?}", e));
+
+            // Non-blocking check - is mapping done?
+            match rx.try_recv() {
+                Ok(Ok(_)) => {
+                    // Success! GPU finished, buffer is now mapped
+                    rb.state = ReadbackState::Mapped;
+                    
+                    let buffer_data = buffer_slice.get_mapped_range();
+                    
+                    let width = rb.width;
+                    let height = rb.height;
+                    let unpadded_bytes_per_row = width * 4;
+                    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+                    let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+                    
+                    // Remove padding
+                    let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+                    if padded_bytes_per_row != unpadded_bytes_per_row {
+                        for row in 0..height {
+                            let row_start = (row * padded_bytes_per_row) as usize;
+                            let row_end = row_start + unpadded_bytes_per_row as usize;
+                            rgba_data.extend_from_slice(&buffer_data[row_start..row_end]);
+                        }
+                    } else {
+                        rgba_data.extend_from_slice(&buffer_data);
+                    }
+                    
+                    drop(buffer_data);
+                    
+                    // CRITICAL: Unmap before next use!
+                    rb.buffer.unmap();
+                    rb.state = ReadbackState::Free;
+                    
+                    return Some(rgba_data);
+                },
+                Ok(Err(_)) => {
+                    // Mapping failed, mark as free to retry
+                    rb.state = ReadbackState::Free;
+                    return None;
                 },
                 Err(_) => {
-                    println!("[WGPU] Buffer mapping timed out");
-                    return Err("Buffer mapping timeout".to_string());
+                    // Not ready yet (WouldBlock), leave as InFlight
+                    // Don't return, check other buffers
                 }
             }
-
-            let buffer_data = buffer_slice.get_mapped_range();
-            
-            // Remove padding from each row if present
-            let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
-            if padded_bytes_per_row != unpadded_bytes_per_row {
-                // Data has padding, need to remove it
-                for row in 0..height {
-                    let row_start = (row * padded_bytes_per_row) as usize;
-                    let row_end = row_start + unpadded_bytes_per_row as usize;
-                    rgba_data.extend_from_slice(&buffer_data[row_start..row_end]);
-                }
-            } else {
-                // No padding, copy directly
-                rgba_data.extend_from_slice(&buffer_data);
-            }
-            
-            drop(buffer_data);
-            buffer.unmap();
-
-            self.frame_count += 1;
-            Ok(rgba_data)
-        } else {
-            Err("Renderer not properly initialized".to_string())
         }
+        
+        None // No buffer ready
     }
 }
 
@@ -697,7 +781,7 @@ impl GStreamerComposite {
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let _wgpu_renderer = self.wgpu_renderer.clone();
+        let wgpu_renderer = self.wgpu_renderer.clone();
 
         // Use Arc<Mutex<>> instead of closure mutation for thread safety
         let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
@@ -753,10 +837,34 @@ impl GStreamerComposite {
                         println!("[Composite] 📡 Frame {} - WGPU rendering", *count);
                     }
 
-                    // TODO: GPU readback is too slow for real-time (1fps due to sync CPU-GPU transfer)
-                    // Skip WGPU processing for now - send raw frames for 30fps performance
-                    // Future: Render WGPU directly to window surface (no readback!)
-                    let processed_frame = rgba_data.to_vec();
+                    // WGPU processing with async triple-buffered readback
+                    let processed_frame = if let Some(renderer_arc) = &wgpu_renderer {
+                        if let Some(mut renderer) = renderer_arc.try_lock() {
+                            // Upload and render (non-blocking)
+                            if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
+                                if let Ok(()) = renderer.render_frame_async() {
+                                    // Success! Now poll for old frame (~3 frames ago)
+                                    if let Some(gpu_frame) = renderer.poll_readback() {
+                                        if *count % 90 == 0 {
+                                            println!("[Composite] ✅ Frame {} GPU-processed (async)", *count);
+                                        }
+                                        gpu_frame
+                                    } else {
+                                        // No readback ready yet (first 3 frames), send raw
+                                        rgba_data.to_vec()
+                                    }
+                                } else {
+                                    rgba_data.to_vec()
+                                }
+                            } else {
+                                rgba_data.to_vec()
+                            }
+                        } else {
+                            rgba_data.to_vec()
+                        }
+                    } else {
+                        rgba_data.to_vec()
+                    };
 
                     // Broadcast GPU-processed frames
                     if let Some(sender) = &*frame_sender.read() {
