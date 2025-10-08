@@ -727,6 +727,7 @@ async fn create_monitor_window(
     println!("Successfully parsed URL");
 
     // Use WebviewWindowBuilder which supports URL in Tauri v2
+    println!("🔨 Building WebviewWindow with label 'tv-monitor'...");
     let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(parsed_url))
         .title("TV Monitor - Battles.app")
         .inner_size(logical_width, logical_height)
@@ -734,17 +735,32 @@ async fn create_monitor_window(
         .decorations(false) // Borderless
         .resizable(false)   // Fixed size
         .always_on_top(true) // Above all other windows
-        .visible(false)      // Start hidden, will show after setup
+        .visible(true)      // ✅ Start VISIBLE (was false)
         .fullscreen(false)   // Use borderless window (not true fullscreen)
         .skip_taskbar(false) // Show in taskbar for easy access
         .build()
         .map_err(|e| {
-            let error_msg = format!("Failed to create monitor window: {}", e);
-            println!("❌ {}", error_msg);
+            let error_msg = format!("❌ Failed to build monitor window: {}", e);
+            println!("{}", error_msg);
             error_msg
         })?;
     
-    println!("✅ Window object created successfully");
+    println!("✅ WebviewWindow build() completed successfully");
+    
+    // CRITICAL: Wait for window to be registered in Tauri's window manager
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    
+    // Verify the window was actually created and registered
+    match app.get_webview_window("tv-monitor") {
+        Some(_) => println!("✅ Window VERIFIED in app.get_webview_window()"),
+        None => {
+            let err = "❌ CRITICAL: Window was built but NOT found in app.get_webview_window()! This is a Tauri registration issue.";
+            println!("{}", err);
+            return Err(err.to_string());
+        }
+    }
+    
+    println!("✅ Window object created and verified");
 
     // Listen for window close events to notify the main window
     let app_handle = app.clone();
@@ -756,19 +772,21 @@ async fn create_monitor_window(
         }
     });
 
-    // Make window visible and bring to front
-    println!("Making window visible...");
+    // Window was created with visible(true), now just ensure it's on top and focused
+    println!("🎯 Configuring window visibility and focus...");
     
-    // Step 1: Show the window
-    window.show()
-        .map_err(|e| {
-            let error_msg = format!("Failed to show window: {}", e);
-            println!("❌ {}", error_msg);
-            error_msg
-        })?;
-    println!("✅ Window shown");
+    // Verify initial visibility
+    match window.is_visible() {
+        Ok(true) => println!("✅ Window is already visible (as expected)"),
+        Ok(false) => {
+            println!("⚠️  Window reports as NOT visible even though created with visible(true)!");
+            println!("    Calling show() explicitly...");
+            window.show().map_err(|e| format!("Failed to show window: {}", e))?;
+        }
+        Err(e) => println!("⚠️  Could not check visibility: {}", e)
+    }
     
-    // Step 2: Unminimize if minimized (important!)
+    // Unminimize if somehow minimized
     if let Ok(is_minimized) = window.is_minimized() {
         if is_minimized {
             println!("⚠️  Window is minimized, unminimizing...");
@@ -776,16 +794,8 @@ async fn create_monitor_window(
         }
     }
     
-    // Step 3: Set always on top BEFORE focusing (important for Windows)
-    window.set_always_on_top(true)
-        .map_err(|e| {
-            let error_msg = format!("Failed to set always on top: {}", e);
-            println!("❌ {}", error_msg);
-            error_msg
-        })?;
-    println!("✅ Always on top enabled");
-    
-    // Step 4: Set focus to bring window to front
+    // Set focus to bring window to front
+    println!("🎯 Setting window focus...");
     window.set_focus()
         .map_err(|e| {
             let error_msg = format!("Failed to focus window: {}", e);
@@ -794,14 +804,16 @@ async fn create_monitor_window(
         })?;
     println!("✅ Window focused");
     
-    // Step 5: Verify window is visible
+    // Final visibility check
     match window.is_visible() {
-        Ok(true) => println!("✅ Window is visible"),
+        Ok(true) => println!("✅ Final check: Window IS visible"),
         Ok(false) => {
-            println!("⚠️  Window reports as NOT visible after show(), trying again...");
-            window.show().map_err(|e| format!("Failed to show window (retry): {}", e))?;
+            println!("❌ CRITICAL: Window still reports as NOT visible!");
+            println!("   This means the window exists but Tauri thinks it's hidden.");
+            println!("   Attempting one more show() call...");
+            window.show().map_err(|e| format!("Failed to show window (final): {}", e))?;
         }
-        Err(e) => println!("⚠️  Could not check visibility: {}", e)
+        Err(e) => println!("⚠️  Could not check final visibility: {}", e)
     }
 
     println!("✅ Monitor window created and shown successfully!");

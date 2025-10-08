@@ -11,7 +11,6 @@
         "useHttpsScheme": true,
         "label": "main",
         "acceptFirstMouse": true,
-        // "additionalBrowserArgs": "--disable-accelerate-3d",
         "alwaysOnTop": false,
         "contentProtected": false,
         "decorations": true,
@@ -28,7 +27,7 @@
         "resizable": true,
         "shadow": true,
         "theme": "Dark",
-        "title": "Battles",
+        "title": "Battles.app",
         "titleBarStyle": "Overlay",
         "transparent": true,
         "url": "https://local.battles.app:3000/",
@@ -36,7 +35,6 @@
         "windowEffects": {
           "effects": [
             "hudWindow",
-            "acrylic",
             "mica"
           ],
           "state": "active"
@@ -54,7 +52,7 @@
   "bundle": {
     "active": true,
     "category": null,
-    "copyright": "BATTLES™ ©2025",
+    "copyright": "BATTLES.app™ ©2025",
     "icon": [
       "favicon.ico"
     ],
@@ -94,9 +92,9 @@
       "src"
     ]
   },
-  "identifier": "io.cliqer",
-  "productName": "cliqer",
-    "plugins": {
+  "identifier": "io.battles.app",
+  "productName": "battles.app",
+  "plugins": {
       "deep-link": {
       "mobile": [
         {
@@ -111,7 +109,7 @@
       ],
       "desktop": {
         "schemes": [
-          "cliqer"
+          "battles.app"
         ]
       }
     },
