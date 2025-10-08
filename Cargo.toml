@@ -27,6 +27,7 @@ shared_memory = "0.12"
 chrono = "0.4"
 ureq = { version = "2.10", features = ["native-tls"] }
 reqwest = { version = "0.12", features = ["blocking"] }
+elgato-streamdeck = "0.11.1"
 
 # GStreamer - Professional video pipeline with static features (no pkg-config needed)
 gstreamer = { version = "0.24", features = ["v1_20"] }
@@ -35,7 +36,7 @@ gstreamer-video = { version = "0.24", features = ["v1_20"] }
 gstreamer-audio = { version = "0.24", features = ["v1_20"] }
 gstreamer-sys = { version = "0.24", features = ["v1_20"] }
 glib = "0.20"
-image = { version = "0.25", features = ["png"] }
+image = { version = "0.25", features = ["png", "jpeg"] }
 tauri-plugin-cache = "0.1"
 
 # WGPU - Modern graphics API for hardware-accelerated chroma key and compositing
