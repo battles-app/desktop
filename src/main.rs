@@ -676,17 +676,42 @@ async fn create_monitor_window(
 
     // Close any existing TV monitor window first (Tauri v2 API)
     if let Some(existing_window) = app.get_webview_window("tv-monitor") {
-        println!("Destroying existing TV monitor window before creating new one");
-        let destroy_result = existing_window.destroy();
-        match destroy_result {
-            Ok(_) => println!("✅ Existing window destroyed successfully"),
-            Err(e) => println!("❌ Failed to destroy window: {}", e),
+        println!("⚠️  Found existing TV monitor window, destroying it first...");
+        
+        // Try to close the window first (more graceful than destroy)
+        match existing_window.close() {
+            Ok(_) => println!("✅ Window close() called successfully"),
+            Err(e) => println!("⚠️  Window close() failed: {}, trying destroy()...", e),
         }
-        // Add a delay to ensure destruction completes before creating new window
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        println!("Proceeding to create new window...");
+        
+        // Wait longer to ensure window is fully closed/destroyed
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        
+        // Check if window still exists, if so, force destroy
+        if let Some(still_exists) = app.get_webview_window("tv-monitor") {
+            println!("⚠️  Window still exists after close(), forcing destroy()...");
+            match still_exists.destroy() {
+                Ok(_) => println!("✅ Window destroy() completed"),
+                Err(e) => {
+                    let err_msg = format!("❌ CRITICAL: Cannot destroy window: {}. Cannot proceed.", e);
+                    println!("{}", err_msg);
+                    return Err(err_msg);
+                }
+            }
+            // Extra wait after forced destroy
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        
+        // Final verification - window MUST be gone before proceeding
+        if app.get_webview_window("tv-monitor").is_some() {
+            let err_msg = "❌ CRITICAL: Window still exists after multiple destroy attempts. Cannot proceed.".to_string();
+            println!("{}", err_msg);
+            return Err(err_msg);
+        }
+        
+        println!("✅ Window fully destroyed and verified gone, proceeding with creation...");
     } else {
-        println!("No existing tv-monitor window found, proceeding with creation");
+        println!("✅ No existing tv-monitor window found, safe to create new one");
     }
 
     // Create a borderless fullscreen window on the selected monitor
@@ -731,37 +756,62 @@ async fn create_monitor_window(
         }
     });
 
-    // Configure window to be maximized and always on top
-    println!("Showing window...");
+    // Make window visible and bring to front
+    println!("Making window visible...");
+    
+    // Step 1: Show the window
     window.show()
         .map_err(|e| {
             let error_msg = format!("Failed to show window: {}", e);
             println!("❌ {}", error_msg);
             error_msg
         })?;
+    println!("✅ Window shown");
     
-    println!("Setting focus...");
-    window.set_focus()
-        .map_err(|e| {
-            let error_msg = format!("Failed to focus window: {}", e);
-            println!("❌ {}", error_msg);
-            error_msg
-        })?;
+    // Step 2: Unminimize if minimized (important!)
+    if let Ok(is_minimized) = window.is_minimized() {
+        if is_minimized {
+            println!("⚠️  Window is minimized, unminimizing...");
+            window.unminimize().map_err(|e| format!("Failed to unminimize: {}", e))?;
+        }
+    }
     
-    // Ensure it's on top
-    println!("Setting always on top...");
+    // Step 3: Set always on top BEFORE focusing (important for Windows)
     window.set_always_on_top(true)
         .map_err(|e| {
             let error_msg = format!("Failed to set always on top: {}", e);
             println!("❌ {}", error_msg);
             error_msg
         })?;
+    println!("✅ Always on top enabled");
+    
+    // Step 4: Set focus to bring window to front
+    window.set_focus()
+        .map_err(|e| {
+            let error_msg = format!("Failed to focus window: {}", e);
+            println!("❌ {}", error_msg);
+            error_msg
+        })?;
+    println!("✅ Window focused");
+    
+    // Step 5: Verify window is visible
+    match window.is_visible() {
+        Ok(true) => println!("✅ Window is visible"),
+        Ok(false) => {
+            println!("⚠️  Window reports as NOT visible after show(), trying again...");
+            window.show()?;
+        }
+        Err(e) => println!("⚠️  Could not check visibility: {}", e)
+    }
 
     println!("✅ Monitor window created and shown successfully!");
     println!("   Monitor: {}", monitor_index);
     println!("   Position: ({}, {})", logical_x, logical_y);
     println!("   Size: {}x{}", logical_width, logical_height);
     println!("   URL: {}", url);
+    println!("   Always on top: true");
+    println!("   Decorations: false (borderless)");
+    println!("   ℹ️  If you don't see the window, check monitor {} (it should be fullscreen there)", monitor_index);
     Ok(())
 }
 
@@ -772,14 +822,22 @@ async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(),
 
     // Close any existing TV monitor window first (Tauri v2 API)
     if let Some(existing_window) = app.get_webview_window("tv-monitor") {
-        println!("Destroying existing TV monitor window before creating regular window");
-        let destroy_result = existing_window.destroy();
-        match destroy_result {
-            Ok(_) => println!("Window destroyed successfully"),
-            Err(e) => println!("Failed to destroy window: {}", e),
+        println!("⚠️  Found existing TV monitor window, destroying before creating regular window...");
+        
+        match existing_window.close() {
+            Ok(_) => println!("✅ Window close() called"),
+            Err(e) => println!("⚠️  Window close() failed: {}", e),
         }
-        // Add a small delay to ensure destruction completes
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        
+        if let Some(still_exists) = app.get_webview_window("tv-monitor") {
+            println!("⚠️  Window still exists, forcing destroy()...");
+            let _ = still_exists.destroy();
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        
+        println!("✅ Old window cleanup complete");
     }
 
     // Get the primary monitor for positioning (first monitor is typically primary)
