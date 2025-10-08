@@ -8,6 +8,7 @@ use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use ab_glyph::{FontRef, PxScale};
 use std::path::PathBuf;
+use std::io::Read;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FxButton {
@@ -213,58 +214,41 @@ impl StreamDeckManager {
         None
     }
     
-    /// Download image from Nuxt proxy and cache it
-    fn download_image_to_cache(&self, fx_button: &FxButton) {
-        if fx_button.image_url.is_none() {
-            return;
-        }
+    /// Download image from Nuxt proxy and cache it (static method for thread safety)
+    fn download_image_to_cache_sync(image_url: String, name: String, cache_path: std::path::PathBuf) {
+        let full_url = format!("https://local.battles.app:3000{}", image_url);
         
-        let cache_dir = std::env::temp_dir().join("battles_fx_cache");
-        let _ = std::fs::create_dir_all(&cache_dir);
-        
-        // Cache filename: {name}.jpg (e.g., "x2.jpg", "galaxy.jpg")
-        let cache_filename = format!("{}.jpg", fx_button.name);
-        let cache_path = cache_dir.join(&cache_filename);
-        
-        // Skip if already cached
-        if cache_path.exists() {
-            return;
-        }
-        
-        // Download from Nuxt proxy (non-blocking in background)
-        let image_url = fx_button.image_url.clone().unwrap();
-        let name = fx_button.name.clone();
-        let cache_path_clone = cache_path.clone();
-        
-        std::thread::spawn(move || {
-            let full_url = format!("https://local.battles.app:3000{}", image_url);
-            
-            match reqwest::blocking::Client::builder()
-                .danger_accept_invalid_certs(true)
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-            {
-                Ok(client) => {
-                    match client.get(&full_url).send() {
-                        Ok(response) if response.status().is_success() => {
-                            match response.bytes() {
-                                Ok(bytes) => {
-                                    if let Err(e) = std::fs::write(&cache_path_clone, &bytes) {
-                                        println!("[Stream Deck] ⚠️ Failed to cache image for {}: {}", name, e);
-                                    } else {
-                                        println!("[Stream Deck] ✅ Cached image for {}: {:?}", name, cache_path_clone.file_name());
-                                    }
+        match reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(15))
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .pool_max_idle_per_host(0) // Don't reuse connections to avoid conflicts
+            .build()
+        {
+            Ok(client) => {
+                match client.get(&full_url).send() {
+                    Ok(mut response) if response.status().is_success() => {
+                        // Read body with better error handling
+                        let mut bytes = Vec::new();
+                        match std::io::copy(&mut response, &mut bytes) {
+                            Ok(_) => {
+                                if bytes.is_empty() {
+                                    println!("[Stream Deck] ⚠️ Empty response for {}", name);
+                                } else if let Err(e) = std::fs::write(&cache_path, &bytes) {
+                                    println!("[Stream Deck] ⚠️ Failed to write image for {}: {}", name, e);
+                                } else {
+                                    println!("[Stream Deck] ✅ Cached {} ({} bytes)", name, bytes.len());
                                 }
-                                Err(e) => println!("[Stream Deck] ⚠️ Failed to read image for {}: {}", name, e),
                             }
+                            Err(e) => println!("[Stream Deck] ⚠️ Failed to read response for {}: {}", name, e),
                         }
-                        Ok(response) => println!("[Stream Deck] ⚠️ HTTP {} for {}", response.status(), name),
-                        Err(e) => println!("[Stream Deck] ⚠️ Download failed for {}: {}", name, e),
                     }
+                    Ok(response) => println!("[Stream Deck] ⚠️ HTTP {} for {}", response.status(), name),
+                    Err(e) => println!("[Stream Deck] ⚠️ Download failed for {}: {}", name, e),
                 }
-                Err(e) => println!("[Stream Deck] ⚠️ Failed to create HTTP client for {}: {}", name, e),
             }
-        });
+            Err(e) => println!("[Stream Deck] ⚠️ Failed to create HTTP client for {}: {}", name, e),
+        }
     }
     
     pub fn update_layout(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {
@@ -273,10 +257,36 @@ impl StreamDeckManager {
             return Err("No device connected".to_string());
         }
         
-        // Start downloading images in background (non-blocking)
-        for fx in battle_board.iter().chain(user_fx.iter()) {
-            self.download_image_to_cache(fx);
-        }
+        // Start downloading images in background with rate limiting (non-blocking)
+        let cache_dir = std::env::temp_dir().join("battles_fx_cache");
+        let _ = std::fs::create_dir_all(&cache_dir);
+        
+        let all_fx: Vec<FxButton> = battle_board.iter().chain(user_fx.iter()).cloned().collect();
+        
+        std::thread::spawn(move || {
+            for (i, fx) in all_fx.iter().enumerate() {
+                if let Some(ref image_url) = fx.image_url {
+                    let cache_filename = format!("{}.jpg", fx.name);
+                    let cache_path = cache_dir.join(&cache_filename);
+                    
+                    // Skip if already cached
+                    if cache_path.exists() {
+                        continue;
+                    }
+                    
+                    // Download with delay between requests to avoid overwhelming the server
+                    if i > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    
+                    Self::download_image_to_cache_sync(
+                        image_url.clone(),
+                        fx.name.clone(),
+                        cache_path
+                    );
+                }
+            }
+        });
         
         println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
         
