@@ -1,47 +1,88 @@
 # 🎨 Icon Generation Guide for Battles.app
 
-## Quick Steps
+## ✅ Icons Already Generated!
 
-### 1. Generate PNG Files
-Open `generate-icons.html` in your browser and download all PNG sizes.
+All icons have been automatically generated with:
+- ✅ 15% padding on all sides
+- ✅ 15% rounded corners
+- ✅ Dark background (#0a0a0a)
+- ✅ Transparent corners
 
-### 2. Convert to ICO (Windows)
-- Visit [RedKetchup ICO Converter](https://redketchup.io/icon-converter)
-- Upload the largest PNG (1024x1024)
-- Download as `battles-app-icon.ico`
-- Replace `battlesDesktop/favicon.ico` with this file
+## 📦 Generated Files
 
-### 3. Convert to ICNS (macOS)
-- Visit [RedKetchup ICNS Converter](https://redketchup.io/icon-converter)
-- Upload the largest PNG (1024x1024)
-- Download as `icon.icns`
-- Save to `battlesDesktop/icon.icns`
+### Desktop App (Tauri)
+- `favicon.ico` - Windows icon (16, 32, 48, 256 px)
+- `.icon-temp/icon-*.png` - All sizes from 16px to 1024px
 
-### 4. Update Tauri Config
-Update `battlesDesktop/tauri.conf.json`:
+### Web App (Nuxt)
+- `battles.app/public/favicon.png` - 512x512 web icon
+- `battles.app/public/apple-touch-icon.png` - 180x180 iOS icon
 
-```json
-"icon": [
-  "favicon.ico",
-  "icon.icns",
-  "logo.svg"
-]
+## 🔄 Regenerate Icons
+
+If you need to regenerate icons (e.g., after changing the logo):
+
+```bash
+cd battlesDesktop
+bun run generate-icons
 ```
 
-## Alternative: Use Online Tool
-Visit [icon.kitchen](https://icon.kitchen/) and upload the `logo.svg` file to generate all required formats automatically.
+This will:
+1. Read `logo.svg`
+2. Add padding and rounded corners
+3. Generate all sizes
+4. Create ICO file for Windows
+5. Copy icons to web app
+6. Create Apple touch icon
 
-## Icon Sizes Required
+## 🍎 Optional: macOS ICNS
 
-| Platform | Format | Sizes |
-|----------|--------|-------|
-| Windows | ICO | 16, 32, 48, 64, 128, 256 |
-| macOS | ICNS | 16, 32, 64, 128, 256, 512, 1024 |
-| Linux | PNG | 32, 128, 256, 512 |
+For a native macOS `.icns` file:
 
-## Current Files
-- ✅ `logo.svg` - Source logo (all platforms)
-- ✅ `loading.html` - Animated loading screen
-- 🔄 `favicon.ico` - Windows icon (needs update)
-- ❌ `icon.icns` - macOS icon (needs creation)
+1. Go to: https://cloudconvert.com/png-to-icns
+2. Upload: `.icon-temp/icon-1024.png`
+3. Download as: `icon.icns`
+4. Save to: `battlesDesktop/icon.icns`
+5. Update `tauri.conf.json`:
+   ```json
+   "icon": ["favicon.ico", "icon.icns", "logo.svg"]
+   ```
 
+## 🎨 Icon Features
+
+| Feature | Value |
+|---------|-------|
+| **Padding** | 15% on all sides |
+| **Corner Radius** | 15% (rounded) |
+| **Background** | #0a0a0a (dark) |
+| **Format** | PNG with transparency |
+| **Sizes** | 16, 32, 48, 64, 128, 180, 256, 512, 1024 px |
+
+## 📁 File Locations
+
+```
+battlesDesktop/
+├── favicon.ico              ✅ Windows icon
+├── logo.svg                 ✅ Source logo
+├── generate-icons.js        ✅ Generator script
+└── .icon-temp/              ✅ All PNG sizes
+
+battles.app/public/
+├── favicon.png              ✅ Web app icon (512x512)
+├── apple-touch-icon.png     ✅ iOS icon (180x180)
+└── logo.svg                 ✅ Vector logo
+```
+
+## 🚀 Result
+
+Your app now has:
+- ✅ Beautiful rounded icons with proper padding
+- ✅ Dark background matching your app theme
+- ✅ Multi-size ICO file for Windows
+- ✅ High-res PNG for web browsers
+- ✅ Apple touch icon for iOS devices
+- ✅ Consistent branding across all platforms
+
+---
+
+**All icons are ready to use!** 🎉

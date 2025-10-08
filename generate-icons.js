@@ -2,15 +2,14 @@
 
 const fs = require('fs');
 const path = require('path');
-const { createCanvas, loadImage } = require('canvas');
 const sharp = require('sharp');
+const toIco = require('to-ico');
 
 // Configuration
 const LOGO_SVG = path.join(__dirname, 'logo.svg');
 const SIZES = [16, 32, 48, 64, 128, 256, 512, 1024];
-const PADDING_PERCENT = 0.15; // 15% padding on each side
-const CORNER_RADIUS_PERCENT = 0.15; // 15% corner radius
-const BG_COLOR = '#0a0a0a'; // Dark background
+const PADDING_PERCENT = 0.12; // 12% padding on each side (slightly less for better visibility)
+const CORNER_RADIUS_PERCENT = 0.0; // No corner radius - full transparency
 
 console.log('🎨 Battles.app Icon Generator\n');
 
@@ -20,119 +19,131 @@ if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir);
 }
 
-async function generateRoundedIcon(size) {
+async function generateTransparentIcon(size) {
   console.log(`📐 Generating ${size}x${size}...`);
-  
-  const canvas = createCanvas(size, size);
-  const ctx = canvas.getContext('2d');
   
   // Calculate dimensions
   const padding = Math.floor(size * PADDING_PERCENT);
   const logoSize = size - (padding * 2);
-  const radius = Math.floor(size * CORNER_RADIUS_PERCENT);
   
-  // Draw rounded rectangle background
-  ctx.beginPath();
-  ctx.moveTo(radius, 0);
-  ctx.lineTo(size - radius, 0);
-  ctx.quadraticCurveTo(size, 0, size, radius);
-  ctx.lineTo(size, size - radius);
-  ctx.quadraticCurveTo(size, size, size - radius, size);
-  ctx.lineTo(radius, size);
-  ctx.quadraticCurveTo(0, size, 0, size - radius);
-  ctx.lineTo(0, radius);
-  ctx.quadraticCurveTo(0, 0, radius, 0);
-  ctx.closePath();
-  
-  // Fill background
-  ctx.fillStyle = BG_COLOR;
-  ctx.fill();
-  
-  // Load and draw SVG logo
-  const svgContent = fs.readFileSync(LOGO_SVG, 'utf8');
-  const svgBuffer = Buffer.from(svgContent);
-  
-  // Use sharp to convert SVG to PNG at the right size
-  const logoBuffer = await sharp(svgBuffer)
-    .resize(logoSize, logoSize, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+  try {
+    // Create transparent canvas
+    const transparentBg = await sharp({
+      create: {
+        width: size,
+        height: size,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 } // Fully transparent
+      }
+    })
     .png()
     .toBuffer();
-  
-  const logoImage = await loadImage(logoBuffer);
-  
-  // Draw logo centered with padding
-  ctx.drawImage(logoImage, padding, padding, logoSize, logoSize);
-  
-  // Save PNG
-  const pngPath = path.join(tempDir, `icon-${size}.png`);
-  const out = fs.createWriteStream(pngPath);
-  const stream = canvas.createPNGStream();
-  stream.pipe(out);
-  
-  return new Promise((resolve) => {
-    out.on('finish', () => {
-      console.log(`  ✅ Saved: ${pngPath}`);
-      resolve(pngPath);
-    });
-  });
+    
+    // Load and resize SVG logo with high quality
+    const logoBuffer = await sharp(LOGO_SVG)
+      .resize(logoSize, logoSize, { 
+        fit: 'contain',
+        kernel: 'lanczos3', // High-quality downsampling
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      })
+      .png()
+      .toBuffer();
+    
+    // Composite logo on transparent background with padding
+    const final = await sharp(transparentBg)
+      .composite([
+        {
+          input: logoBuffer,
+          left: padding,
+          top: padding,
+          blend: 'over'
+        }
+      ])
+      .png()
+      .toBuffer();
+    
+    // Save PNG
+    const pngPath = path.join(tempDir, `icon-${size}.png`);
+    await sharp(final).toFile(pngPath);
+    
+    console.log(`  ✅ Saved: icon-${size}.png`);
+    return { path: pngPath, buffer: final, size };
+    
+  } catch (error) {
+    console.error(`  ❌ Error generating ${size}x${size}:`, error.message);
+    throw error;
+  }
 }
 
-async function convertToICO(pngPaths) {
+async function convertToICO(icons) {
   console.log('\n🔄 Converting to ICO format...');
   
-  // Use sharp to create ICO
-  // ICO format typically uses 16, 32, 48, 256 sizes
-  const icoSizes = [16, 32, 48, 256];
-  const icoPaths = pngPaths.filter(p => {
-    const size = parseInt(path.basename(p).match(/\d+/)[0]);
-    return icoSizes.includes(size);
-  });
-  
-  // For ICO, we'll use the largest PNG and let Windows handle scaling
-  const largest = pngPaths.find(p => p.includes('256'));
-  
-  if (largest) {
-    const icoPath = path.join(__dirname, 'favicon.ico');
+  try {
+    // ICO format supports 16, 32, 48, 256 sizes
+    const icoSizes = [16, 32, 48, 256];
+    const icoBuffers = icons
+      .filter(icon => icoSizes.includes(icon.size))
+      .map(icon => icon.buffer);
     
-    // Copy the 256x256 PNG as ICO base
-    // Note: True ICO conversion requires a specialized library
-    // For now, we'll create a multi-size PNG that Windows can use
-    await sharp(largest)
-      .resize(256, 256)
-      .toFile(icoPath);
-    
-    console.log(`  ✅ Created: ${icoPath}`);
-    return icoPath;
+    if (icoBuffers.length > 0) {
+      const icoBuffer = await toIco(icoBuffers);
+      const icoPath = path.join(__dirname, 'favicon.ico');
+      
+      fs.writeFileSync(icoPath, icoBuffer);
+      console.log(`  ✅ Created: favicon.ico (${icoBuffers.length} sizes)`);
+      return icoPath;
+    }
+  } catch (error) {
+    console.error('  ❌ Error creating ICO:', error.message);
   }
 }
 
-async function convertToICNS(pngPaths) {
-  console.log('\n🍎 Creating ICNS for macOS...');
-  
-  // ICNS requires specific sizes: 16, 32, 64, 128, 256, 512, 1024
-  const icnsPath = path.join(__dirname, 'icon.icns');
-  
-  // For macOS ICNS, we need the iconutil command or png2icns
-  // Since we're on Windows, we'll create the largest PNG for now
-  const largest = pngPaths.find(p => p.includes('1024'));
-  
-  if (largest) {
-    console.log('  ℹ️  For macOS ICNS, use: https://cloudconvert.com/png-to-icns');
-    console.log(`  ℹ️  Upload: ${largest}`);
-  }
-}
-
-async function copyToWebApp(pngPaths) {
+async function copyToWebApp(icons) {
   console.log('\n🌐 Copying to web app...');
   
-  // Copy 512x512 as favicon for web app
-  const webSize = pngPaths.find(p => p.includes('512'));
-  
-  if (webSize) {
-    const webIconPath = path.join(__dirname, '..', 'battles.app', 'public', 'favicon.png');
+  try {
+    // Copy 512x512 as favicon for web app
+    const webIcon = icons.find(icon => icon.size === 512);
     
-    fs.copyFileSync(webSize, webIconPath);
-    console.log(`  ✅ Copied to: ${webIconPath}`);
+    if (webIcon) {
+      const webAppPublic = path.join(__dirname, '..', 'battles.app', 'public');
+      
+      // Check if web app directory exists
+      if (fs.existsSync(webAppPublic)) {
+        const webIconPath = path.join(webAppPublic, 'favicon.png');
+        fs.copyFileSync(webIcon.path, webIconPath);
+        console.log(`  ✅ Copied to: battles.app/public/favicon.png`);
+      } else {
+        console.log(`  ⚠️  Web app directory not found: ${webAppPublic}`);
+      }
+    }
+  } catch (error) {
+    console.error('  ❌ Error copying to web app:', error.message);
+  }
+}
+
+async function createAppleIcons(icons) {
+  console.log('\n🍎 Creating Apple Touch Icons...');
+  
+  try {
+    const appleIcon = icons.find(icon => icon.size === 180);
+    if (!appleIcon) {
+      // Generate 180x180 specifically for Apple
+      const apple = await generateTransparentIcon(180);
+      icons.push(apple);
+    }
+    
+    const webAppPublic = path.join(__dirname, '..', 'battles.app', 'public');
+    if (fs.existsSync(webAppPublic)) {
+      const appleIconPath = path.join(webAppPublic, 'apple-touch-icon.png');
+      const icon180 = icons.find(icon => icon.size === 180);
+      if (icon180) {
+        fs.copyFileSync(icon180.path, appleIconPath);
+        console.log(`  ✅ Created: apple-touch-icon.png (180x180)`);
+      }
+    }
+  } catch (error) {
+    console.error('  ❌ Error creating Apple icons:', error.message);
   }
 }
 
@@ -140,12 +151,13 @@ async function main() {
   try {
     // Check if required modules are installed
     try {
-      require('canvas');
       require('sharp');
+      require('to-ico');
     } catch (e) {
       console.error('❌ Missing dependencies!');
-      console.error('📦 Please run: bun install canvas sharp');
-      process.exit(1);
+      console.error('📦 Installing dependencies...\n');
+      const { execSync } = require('child_process');
+      execSync('bun install', { stdio: 'inherit' });
     }
     
     // Check if logo.svg exists
@@ -154,39 +166,45 @@ async function main() {
       process.exit(1);
     }
     
-    console.log('🎨 Generating icons with rounded corners and padding...\n');
+    console.log('🎨 Generating transparent high-quality icons with padding...\n');
     
     // Generate all PNG sizes
-    const pngPaths = [];
+    const icons = [];
     for (const size of SIZES) {
-      const pngPath = await generateRoundedIcon(size);
-      pngPaths.push(pngPath);
+      const icon = await generateTransparentIcon(size);
+      icons.push(icon);
     }
     
     // Convert to various formats
-    await convertToICO(pngPaths);
-    await convertToICNS(pngPaths);
-    await copyToWebApp(pngPaths);
+    await convertToICO(icons);
+    await copyToWebApp(icons);
+    await createAppleIcons(icons);
     
     console.log('\n✨ All icons generated successfully!');
     console.log('\n📁 Generated files:');
-    console.log('  - favicon.ico (Windows icon)');
-    console.log(`  - ${tempDir}/ (PNG files in various sizes)`);
-    console.log('  - ../battles.app/public/favicon.png (Web app icon)');
+    console.log('  ✅ favicon.ico (Windows icon - 16, 32, 48, 256)');
+    console.log(`  ✅ .icon-temp/ (PNG files: ${SIZES.join(', ')} px)`);
+    console.log('  ✅ battles.app/public/favicon.png (512x512)');
+    console.log('  ✅ battles.app/public/apple-touch-icon.png (180x180)');
     
-    console.log('\n📝 Next steps:');
-    console.log('  1. For macOS ICNS: Upload icon-1024.png to https://cloudconvert.com/png-to-icns');
+    console.log('\n📝 Icon features:');
+    console.log(`  • ${PADDING_PERCENT * 100}% padding on all sides`);
+    console.log('  • Fully transparent background');
+    console.log('  • High-quality lanczos3 scaling');
+    console.log('  • No background or corners');
+    
+    console.log('\n📝 Optional - macOS ICNS:');
+    console.log('  1. Upload .icon-temp/icon-1024.png to: https://cloudconvert.com/png-to-icns');
     console.log('  2. Save as icon.icns in battlesDesktop/ directory');
     console.log('  3. Update tauri.conf.json to include "icon.icns" in the icon array');
     
     console.log('\n✅ Done!\n');
     
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    console.error('\n❌ Fatal error:', error.message);
     console.error(error.stack);
     process.exit(1);
   }
 }
 
 main();
-

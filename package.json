@@ -8,9 +8,13 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "check": "cargo check",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "generate-icons": "node generate-icons.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "sharp": "^0.33.5",
+    "to-ico": "^1.1.5"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
   }

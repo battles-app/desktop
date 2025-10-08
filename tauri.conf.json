@@ -30,7 +30,7 @@
         "title": "Battles.app",
         "titleBarStyle": "Overlay",
         "transparent": true,
-        "url": "loading.html",
+        "url": "https://local.battles.app:3000/",
         "visible": true,
         "windowEffects": {
           "effects": [
@@ -90,9 +90,7 @@
     "createUpdaterArtifacts": false,
     "resources": [
       "assets/sounds",
-      "src",
-      "loading.html",
-      "logo.svg"
+      "src"
     ]
   },
   "identifier": "io.battles.app",
