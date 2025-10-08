@@ -87,13 +87,16 @@ const VERTICES: &[Vertex] = &[
 ];
 
 // Uniform buffer data
+// WGSL alignment: vec3 is aligned to 16 bytes, so we need padding
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Uniforms {
     key_color: [f32; 3],
+    _padding1: f32,        // Padding to align to 16 bytes
     tolerance: f32,
     similarity: f32,
     use_chroma_key: f32,
+    _padding2: f32,        // Padding to align to 32 bytes total
 }
 
 // WGPU-based chroma key renderer
@@ -213,9 +216,11 @@ impl WgpuChromaRenderer {
             label: Some("Uniforms Buffer"),
             contents: bytemuck::cast_slice(&[Uniforms {
                 key_color: [0.0, 1.0, 0.0], // Default green screen
+                _padding1: 0.0,
                 tolerance: 0.1,
                 similarity: 0.1,
                 use_chroma_key: 0.0,
+                _padding2: 0.0,
             }]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
@@ -307,9 +312,11 @@ impl WgpuChromaRenderer {
             uniforms_buffer,
             current_uniforms: Uniforms {
                 key_color: [0.0, 1.0, 0.0],
+                _padding1: 0.0,
                 tolerance: 0.1,
                 similarity: 0.1,
                 use_chroma_key: 0.0,
+                _padding2: 0.0,
             },
             frame_count: 0,
             output_texture: Some(output_texture),
@@ -320,9 +327,11 @@ impl WgpuChromaRenderer {
     pub fn set_chroma_key_params(&mut self, key_color: [f32; 3], tolerance: f32, similarity: f32, use_chroma_key: bool) {
         self.current_uniforms = Uniforms {
             key_color,
+            _padding1: 0.0,
             tolerance,
             similarity,
             use_chroma_key: if use_chroma_key { 1.0 } else { 0.0 },
+            _padding2: 0.0,
         };
 
         self.queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[self.current_uniforms]));
@@ -704,17 +713,46 @@ impl GStreamerComposite {
                     if *count == 1 {
                         println!("[Composite] 🎬 FIRST FRAME! Processing with WGPU ({}x{})", frame_width, frame_height);
                     } else if *count % 90 == 0 {
-                        println!("[Composite] 📡 Frame {} - WGPU processing", *count);
+                        println!("[Composite] 📡 Frame {} - WGPU rendering", *count);
                     }
 
-                    // TODO: ACTUALLY USE THE WGPU RENDERER HERE!
-                    // This requires accessing self.wgpu_renderer from the closure
-                    // For now, just send raw RGBA but we need to refactor this
-                    let frame_data = rgba_data.to_vec();
+                    // ACTUALLY USE WGPU RENDERER!
+                    let processed_frame = if let Some(renderer_arc) = &wgpu_renderer {
+                        match renderer_arc.try_lock() {
+                            Some(mut renderer) => {
+                                // Upload RGBA to GPU texture
+                                if let Err(e) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
+                                    println!("[Composite] ⚠️ WGPU texture upload failed: {}", e);
+                                    rgba_data.to_vec() // Fallback to raw
+                                } else {
+                                    // Render with GPU shader (chroma key, etc.)
+                                    match renderer.render_frame() {
+                                        Ok(gpu_processed) => {
+                                            if *count % 90 == 0 {
+                                                println!("[Composite] ✅ Frame {} GPU-processed ({} bytes)", *count, gpu_processed.len());
+                                            }
+                                            gpu_processed
+                                        }
+                                        Err(e) => {
+                                            println!("[Composite] ⚠️ WGPU render failed: {}", e);
+                                            rgba_data.to_vec() // Fallback
+                                        }
+                                    }
+                                }
+                            }
+                            None => {
+                                // Renderer locked by another thread, skip GPU processing this frame
+                                rgba_data.to_vec()
+                            }
+                        }
+                    } else {
+                        // No renderer, send raw
+                        rgba_data.to_vec()
+                    };
 
-                    // Broadcast processed frames
+                    // Broadcast GPU-processed frames
                     if let Some(sender) = &*frame_sender.read() {
-                        let _ = sender.send(frame_data);
+                        let _ = sender.send(processed_frame);
                     }
 
                     Ok(gst::FlowSuccess::Ok)
@@ -890,8 +928,10 @@ impl GStreamerComposite {
 
     fn stop_fx_internal(&mut self) -> Result<(), String> {
         // Reset chroma key parameters
-        if let Some(wgpu_renderer) = &mut self.wgpu_renderer {
-            wgpu_renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
+        if let Some(renderer_arc) = &self.wgpu_renderer {
+            if let Some(mut renderer) = renderer_arc.try_lock() {
+                renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
+            }
         }
 
         self.current_fx_file = None;
