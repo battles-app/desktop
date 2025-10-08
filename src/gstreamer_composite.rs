@@ -763,11 +763,15 @@ impl GStreamerComposite {
         
         // Initialize WGPU renderer if not already done
         if self.wgpu_renderer.is_none() {
-            println!("[Composite] 🎨 Initializing WGPU renderer for GPU-accelerated chroma key...");
-            let renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
+            println!("[Composite] 🎨 Initializing WGPU renderer (chroma key DISABLED for camera)...");
+            let mut renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
                 .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
+            
+            // DISABLE camera chroma key - we only chroma key FX videos in frontend
+            renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
+            
             self.wgpu_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
-            println!("[Composite] ✅ WGPU renderer initialized (using optimized async readback)");
+            println!("[Composite] ✅ WGPU renderer initialized (camera chroma key OFF, FX chroma key in frontend)");
         }
 
         *self.is_running.write() = true;
@@ -1132,12 +1136,8 @@ impl GStreamerComposite {
     }
 
     fn stop_fx_internal(&mut self) -> Result<(), String> {
-        // Reset chroma key parameters
-        if let Some(renderer_arc) = &self.wgpu_renderer {
-            if let Some(mut renderer) = renderer_arc.try_lock() {
-                renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
-            }
-        }
+        // Camera chroma key is DISABLED - we only do chroma key on FX videos in frontend
+        // No need to reset anything in WGPU
 
         self.current_fx_file = None;
         self.current_chroma_params = None;
