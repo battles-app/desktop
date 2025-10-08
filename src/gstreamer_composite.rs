@@ -761,6 +761,16 @@ impl GStreamerComposite {
             _ => 0,    // identity (no rotation)
         };
         
+        // CRITICAL: videoflip swaps dimensions for 90° and 270° rotations!
+        // If output needs to be 720x1280 with 270° rotation:
+        //   Input to videoflip must be 1280x720
+        //   After rotation, it becomes 720x1280
+        let (pre_rotation_width, pre_rotation_height) = if rotation == 90 || rotation == 270 {
+            (height, width)  // Swap dimensions before rotation
+        } else {
+            (width, height)  // Keep dimensions for 0° and 180°
+        };
+        
         // Create simple pipeline - use camera if available, otherwise use test pattern
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
             // Escape backslashes in Windows device path
@@ -782,7 +792,7 @@ impl GStreamerComposite {
                     escaped_path, width, height
                 )
             } else {
-                // Apply rotation with videoflip
+                // Apply rotation with videoflip (use swapped dimensions if needed)
                 format!(
                     "mfvideosrc device-path=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
@@ -794,7 +804,7 @@ impl GStreamerComposite {
                      video/x-raw,format=RGBA ! \
                      queue leaky=downstream max-size-buffers=2 ! \
                      appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                    escaped_path, width, height, flip_method
+                    escaped_path, pre_rotation_width, pre_rotation_height, flip_method
                 )
             }
         } else {
