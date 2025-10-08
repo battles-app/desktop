@@ -1065,10 +1065,13 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to create videoconvert1: {}", e))?;
 
         // ALPHA ELEMENT: GPU-accelerated chroma key! 🔥
+        // Set method via property_from_str (GStreamer will parse the enum name)
         let alpha = gst::ElementFactory::make("alpha")
-            .property("method", "green")  // Chroma key method
             .build()
             .map_err(|e| format!("Failed to create alpha element: {}", e))?;
+        
+        // Set method using set_property_from_str (accepts enum name as string)
+        alpha.set_property_from_str("method", "green");  // green chroma key method
 
         // Map tolerance and similarity to alpha element parameters
         // tolerance (0.0-1.0) → angle (0-180 degrees)
