@@ -710,6 +710,25 @@ impl GStreamerComposite {
         })
     }
 
+    /// Parse hex color string to RGB float array
+    fn parse_hex_color(hex: &str) -> Result<[f32; 3], String> {
+        let hex = hex.trim_start_matches('#');
+        
+        if hex.len() != 6 {
+            return Err("Invalid hex color format".to_string());
+        }
+        
+        let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| "Invalid red component")?;
+        let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| "Invalid green component")?;
+        let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| "Invalid blue component")?;
+        
+        Ok([
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+        ])
+    }
+
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
         *self.frame_sender.write() = Some(sender);
     }
