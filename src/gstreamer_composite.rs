@@ -675,7 +675,6 @@ impl GStreamerComposite {
                 width, height, fps
             );
         }
-        };
 
         println!("[Composite] Pipeline with rotation: {}°", rotation);
         println!("[Composite] Pipeline mode: {}", if has_camera && !camera_device_id.is_empty() { "Camera + FX" } else { "FX Only" });
