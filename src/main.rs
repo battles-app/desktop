@@ -793,28 +793,38 @@ async fn start_composite_websocket_server() {
                     }
                 };
                 
-                println!("[Composite WS] Client connected");
+                println!("[Composite WS] ✅ Client connected");
                 
                 let (mut ws_sender, _ws_receiver) = ws_stream.split();
                 
                 // Subscribe to composite frames
                 if let Some(tx) = tx_opt {
                     let mut rx = tx.subscribe();
+                    let mut frame_count = 0u64;
+                    let start_time = std::time::Instant::now();
 
                     while let Ok(frame_data) = rx.recv().await {
                         use futures_util::SinkExt;
                         use tokio_tungstenite::tungstenite::protocol::Message;
 
-                        println!("[Composite WS] 📡 Sending frame to WebSocket client ({} bytes)", frame_data.len());
+                        frame_count += 1;
+                        
+                        // Log every 30 frames instead of every frame to reduce spam
+                        if frame_count % 30 == 0 {
+                            let elapsed = start_time.elapsed().as_secs_f64();
+                            let fps = frame_count as f64 / elapsed;
+                            println!("[Composite WS] 📡 Sending frame {} ({} bytes, {:.1} fps)", frame_count, frame_data.len(), fps);
+                        }
+                        
                         if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                            println!("[Composite WS] Client disconnected");
+                            println!("[Composite WS] ❌ Client disconnected after {} frames", frame_count);
                             break;
-                        } else {
-                            println!("[Composite WS] ✅ Frame sent successfully");
                         }
                     }
+                    
+                    println!("[Composite WS] ℹ️ Broadcast channel closed");
                 } else {
-                    println!("[Composite WS] No broadcast channel available for client");
+                    println!("[Composite WS] ❌ No broadcast channel available for client");
                 }
             });
         }
@@ -946,16 +956,39 @@ async fn start_composite_pipeline(camera_device_id: String, width: u32, height: 
     println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
     println!("[Composite] Main.rs received - camera_device_id: '{}', has_camera: {}", camera_device_id, has_camera);
 
+    // Validate camera device if camera is selected
+    if has_camera && !camera_device_id.is_empty() {
+        println!("[Composite] 🔍 Validating camera device path...");
+        // The device path should be a Windows device path format
+        if !camera_device_id.contains("vid_") && !camera_device_id.contains("videotestsrc") {
+            println!("[Composite] ⚠️ Warning: Camera device path format looks unusual: {}", camera_device_id);
+        }
+    }
+
     // Call the synchronous start method
-    let mut composite_lock = GSTREAMER_COMPOSITE.write();
-    if let Some(composite) = composite_lock.as_mut() {
-        composite.start(&camera_device_id, width, height, fps, rotation, has_camera)?;
-        println!("[Composite] ✅ Composite pipeline started");
-        drop(composite_lock);
-        Ok(())
-    } else {
-        drop(composite_lock);
-        Err("Composite pipeline not initialized".to_string())
+    let result = {
+        let mut composite_lock = GSTREAMER_COMPOSITE.write();
+        if let Some(composite) = composite_lock.as_mut() {
+            composite.start(&camera_device_id, width, height, fps, rotation, has_camera)
+        } else {
+            Err("Composite pipeline not initialized. Call initialize_composite_system first.".to_string())
+        }
+        // Lock is automatically dropped here when the scope ends
+    };
+    
+    match result {
+        Ok(_) => {
+            println!("[Composite] ✅ Composite pipeline started successfully");
+            
+            // Give the pipeline a moment to start producing frames
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            
+            Ok(())
+        }
+        Err(e) => {
+            println!("[Composite] ❌ Failed to start composite pipeline: {}", e);
+            Err(e)
+        }
     }
 }
 

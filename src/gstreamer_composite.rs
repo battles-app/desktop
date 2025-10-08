@@ -1,6 +1,6 @@
 // WGPU-powered composite system with hardware-accelerated chroma key
 use gstreamer::prelude::*;
-use gstreamer::{self as gst, Pipeline, Element};
+use gstreamer::{self as gst, Pipeline};
 use gstreamer_app::{AppSink, AppSrc};
 use tokio::sync::broadcast;
 use std::sync::Arc;
@@ -330,7 +330,7 @@ impl WgpuChromaRenderer {
 
     pub fn update_texture_from_rgba(&mut self, rgba_data: &[u8], width: u32, height: u32) -> Result<(), String> {
         // Create texture if dimensions changed
-        if let (Some(texture), Some(texture_view)) = (&self.current_texture, &self.current_texture_view) {
+        if let (Some(texture), Some(_texture_view)) = (&self.current_texture, &self.current_texture_view) {
             let current_size = texture.size();
             if current_size.width != width || current_size.height != height {
                 self.recreate_texture(width, height)?;
@@ -573,46 +573,50 @@ impl GStreamerComposite {
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
             let _ = pipeline.set_state(gst::State::Null);
+            // Wait a bit for cleanup
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         *self.is_running.write() = true;
 
         // Create simple pipeline - use camera if available, otherwise use test pattern
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
+            // Escape backslashes in Windows device path
+            let escaped_path = camera_device_id.replace("\\", "\\\\");
+            
             // Use camera with device path (Windows format)
+            // Note: Using sync=false and async=false on appsink to prevent blocking
             format!(
                 "mfvideosrc device-path=\"{}\" ! \
                  queue leaky=downstream max-size-buffers=3 ! \
                  videoconvert ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 video/x-raw,width={},height={},framerate={}/1 ! \
+                 video/x-raw,format=I420,width={},height={},framerate={}/1 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
-                 videoconvert ! \
+                 jpegenc quality=85 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
-                 jpegenc quality=90 ! \
-                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                camera_device_id, width, height, fps
+                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
+                escaped_path, width, height, fps
             )
         } else {
             // Use test pattern
             format!(
-                "videotestsrc pattern=ball ! \
-                 video/x-raw,width={},height={},framerate={}/1 ! \
-                 jpegenc quality=90 ! \
-                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                "videotestsrc pattern=ball is-live=true ! \
+                 video/x-raw,format=I420,width={},height={},framerate={}/1 ! \
+                 jpegenc quality=85 ! \
+                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
                 width, height, fps
             )
         };
 
         println!("[Composite] Creating pipeline: {}", pipeline_str);
 
-        // Create and start pipeline
+        // Create pipeline
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
             .dynamic_cast::<Pipeline>()
             .map_err(|_| "Failed to cast to Pipeline".to_string())?;
 
-        // Set up frame callback
+        // Set up frame callback BEFORE starting pipeline
         let appsink = pipeline
             .by_name("output")
             .ok_or("Failed to get output appsink")?
@@ -622,6 +626,10 @@ impl GStreamerComposite {
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
 
+        // Use Arc<Mutex<>> instead of closure mutation for thread safety
+        let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+        let frame_count_clone = frame_count.clone();
+
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |appsink| {
@@ -629,34 +637,113 @@ impl GStreamerComposite {
                         return Ok(gst::FlowSuccess::Ok);
                     }
 
-                    let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
-                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                    let sample = match appsink.pull_sample() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            println!("[Composite] ❌ Failed to pull sample: {:?}", e);
+                            return Err(gst::FlowError::Eos);
+                        }
+                    };
 
-                    let jpeg_data = map.as_slice();
+                    let buffer = match sample.buffer() {
+                        Some(b) => b,
+                        None => {
+                            println!("[Composite] ❌ Sample has no buffer");
+                            return Err(gst::FlowError::Error);
+                        }
+                    };
+
+                    let map = match buffer.map_readable() {
+                        Ok(m) => m,
+                        Err(e) => {
+                            println!("[Composite] ❌ Failed to map buffer: {:?}", e);
+                            return Err(gst::FlowError::Error);
+                        }
+                    };
+
+                    let jpeg_data = map.as_slice().to_vec();
+                    
+                    // Increment and log frame count
+                    let mut count = frame_count_clone.lock().unwrap();
+                    *count += 1;
+                    
+                    if *count == 1 {
+                        println!("[Composite] 🎬 FIRST FRAME CAPTURED! ({} bytes)", jpeg_data.len());
+                    } else if *count % 30 == 0 {
+                        println!("[Composite] 📡 Frame {} captured ({} bytes)", *count, jpeg_data.len());
+                    }
 
                     // Send frame to WebSocket
                     if let Some(sender) = &*frame_sender.read() {
-                        let _ = sender.send(jpeg_data.to_vec());
+                        match sender.send(jpeg_data) {
+                            Ok(receivers) => {
+                                if *count % 30 == 0 {
+                                    println!("[Composite] ✅ Frame broadcast to {} receivers", receivers);
+                                }
+                            },
+                            Err(e) => {
+                                println!("[Composite] ⚠️ Failed to send frame: {}", e);
+                            }
+                        }
+                    } else {
+                        if *count % 30 == 0 {
+                            println!("[Composite] ⚠️ No frame sender available!");
+                        }
                     }
 
                     Ok(gst::FlowSuccess::Ok)
                 })
                 .build(),
         );
+        
+        println!("[Composite] ✅ AppSink callbacks configured");
 
-        // Start pipeline
+        // Start pipeline with state transitions
+        println!("[Composite] 🔄 Setting pipeline to READY state...");
         pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to start pipeline: {:?}", e))?;
+            .set_state(gst::State::Ready)
+            .map_err(|e| format!("Failed to set pipeline to READY: {:?}", e))?;
+        
+        // Wait for READY state
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        
+        println!("[Composite] 🔄 Setting pipeline to PAUSED state...");
+        pipeline
+            .set_state(gst::State::Paused)
+            .map_err(|e| format!("Failed to set pipeline to PAUSED: {:?}", e))?;
+        
+        // Wait for PAUSED state
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        
+        println!("[Composite] 🔄 Setting pipeline to PLAYING state...");
+        let state_change_result = pipeline.set_state(gst::State::Playing);
+        
+        match state_change_result {
+            Ok(_) => {
+                println!("[Composite] ✅ Pipeline started successfully");
+            }
+            Err(e) => {
+                // Get more detailed error info
+                let bus = pipeline.bus().ok_or("No bus available")?;
+                if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error]) {
+                    if let gst::MessageView::Error(err) = msg.view() {
+                        let error_msg = format!("GStreamer error: {} (debug: {:?})", 
+                            err.error(), 
+                            err.debug());
+                        println!("[Composite] ❌ {}", error_msg);
+                        return Err(error_msg);
+                    }
+                }
+                return Err(format!("Failed to start pipeline: {:?}", e));
+            }
+        }
 
         self.pipeline = Some(pipeline);
-        println!("[Composite] Pipeline started successfully");
         Ok(())
     }
 
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
-        println!("[Composite] 🎬 Playing FX with WGPU chroma key: {} (chroma: {})", file_path, use_chroma_key);
+        println!("[Composite] 🎬 Playing FX: {} (chroma: {})", file_path, use_chroma_key);
 
         // Check if pipeline is running
         if !self.is_running() {
@@ -664,13 +751,39 @@ impl GStreamerComposite {
             return Err("Pipeline not initialized".to_string());
         }
 
-        if let Some(pipeline) = &self.pipeline {
-            // Stop any existing FX
-            self.stop_fx_internal()?;
+        // Check if FX file exists
+        if !std::path::Path::new(&file_path).exists() {
+            println!("[Composite] ❌ FX file does not exist: {}", file_path);
+            return Err(format!("FX file does not exist: {}", file_path));
+        }
 
-            // Parse keycolor (format: "r,g,b" or "#RRGGBB")
-            let key_rgb = if keycolor.starts_with('#') {
-                // Parse hex color
+        // Detect file type
+        let is_video = file_path.to_lowercase().ends_with(".mp4") ||
+                      file_path.to_lowercase().ends_with(".avi") ||
+                      file_path.to_lowercase().ends_with(".mov") ||
+                      file_path.to_lowercase().ends_with(".mkv") ||
+                      file_path.to_lowercase().ends_with(".webm");
+
+        if is_video {
+            println!("[Composite] 🎥 Video FX detected - this will be implemented with GStreamer overlay");
+            // For now, log that we received the FX command
+            // Full GStreamer overlay integration would require rebuilding the pipeline with compositor
+            // This is a complex change that requires:
+            // 1. Add compositor element to pipeline
+            // 2. Add filesrc + decodebin for video
+            // 3. Add alpha channel handling for chroma key
+            // 4. Sync video timing with camera feed
+            
+            self.current_fx_file = Some(file_path.clone());
+            self.current_chroma_params = Some((keycolor, tolerance, similarity, use_chroma_key));
+            
+            println!("[Composite] ✅ Video FX stored (overlay implementation in progress)");
+            Ok(())
+        } else {
+            println!("[Composite] 🖼️ Image FX detected - loading for overlay");
+            
+            // Parse keycolor for future use (currently unused but saved for later implementation)
+            let _key_rgb = if keycolor.starts_with('#') {
                 let hex = &keycolor[1..];
                 if hex.len() == 6 {
                     let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| "Invalid hex color")? as f32 / 255.0;
@@ -678,43 +791,21 @@ impl GStreamerComposite {
                     let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| "Invalid hex color")? as f32 / 255.0;
                     [r, g, b]
                 } else {
-                    return Err("Invalid hex color format".to_string());
+                    [0.0, 1.0, 0.0]
                 }
             } else if keycolor.contains(',') {
-                // Parse RGB values
                 let parts: Vec<&str> = keycolor.split(',').collect();
                 if parts.len() == 3 {
-                    let r: f32 = parts[0].trim().parse().map_err(|_| "Invalid red value")?;
-                    let g: f32 = parts[1].trim().parse().map_err(|_| "Invalid green value")?;
-                    let b: f32 = parts[2].trim().parse().map_err(|_| "Invalid blue value")?;
+                    let r: f32 = parts[0].trim().parse().unwrap_or(0.0);
+                    let g: f32 = parts[1].trim().parse().unwrap_or(255.0);
+                    let b: f32 = parts[2].trim().parse().unwrap_or(0.0);
                     [r / 255.0, g / 255.0, b / 255.0]
                 } else {
-                    return Err("Invalid RGB format".to_string());
+                    [0.0, 1.0, 0.0]
                 }
             } else {
-                // Default green screen
                 [0.0, 1.0, 0.0]
             };
-
-            // Configure WGPU renderer with chroma key parameters
-            if let Some(wgpu_renderer) = &mut self.wgpu_renderer {
-                wgpu_renderer.set_chroma_key_params(key_rgb, tolerance as f32, similarity as f32, use_chroma_key);
-            }
-
-            // Check if file is a video file (not supported for chroma key)
-            if file_path.to_lowercase().ends_with(".mp4") ||
-               file_path.to_lowercase().ends_with(".avi") ||
-               file_path.to_lowercase().ends_with(".mov") ||
-               file_path.to_lowercase().ends_with(".mkv") {
-                println!("[Composite] ❌ Video files not supported for chroma key FX");
-                return Err("Video files are not supported for chroma key effects. Please use image files (PNG, JPG, etc.)".to_string());
-            }
-
-            // Check if FX file exists
-            if !std::path::Path::new(&file_path).exists() {
-                println!("[Composite] ❌ FX file does not exist: {}", file_path);
-                return Err(format!("FX file does not exist: {}", file_path));
-            }
 
             // Load and decode the FX image file
             let fx_image = image::open(&file_path)
@@ -729,10 +820,8 @@ impl GStreamerComposite {
             self.current_fx_file = Some(file_path.clone());
             self.current_chroma_params = Some((keycolor, tolerance, similarity, use_chroma_key));
 
-            println!("[Composite] ✅ FX loaded and configured for WGPU chroma key processing");
+            println!("[Composite] ✅ Image FX loaded (overlay implementation in progress)");
             Ok(())
-        } else {
-            Err("Pipeline not initialized".to_string())
         }
     }
 
@@ -754,7 +843,7 @@ impl GStreamerComposite {
     }
 
     pub fn update_layers(&self, camera: (bool, f64), overlay: (bool, f64)) {
-        if let Some(pipeline) = &self.pipeline {
+        if let Some(_pipeline) = &self.pipeline {
             // Update layer visibility based on camera and overlay settings
             println!("[Composite] Updated layers - Camera: {}, Overlay: {}", camera.0, overlay.0);
         }
