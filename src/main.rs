@@ -805,45 +805,77 @@ async fn start_composite_websocket_server() {
                 
                 println!("[Composite WS] ✅ Client connected");
                 
-                use futures_util::SinkExt;
+                use futures_util::{SinkExt, StreamExt};
                 use tokio_tungstenite::tungstenite::protocol::Message;
                 
-                let (mut ws_sender, _ws_receiver) = ws_stream.split();
+                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
                 
                 // Subscribe to composite frames (receiver stays alive for entire connection)
                 let mut rx = tx.subscribe();
                 let mut frame_count = 0u64;
+                let mut sent_count = 0u64;
                 let start_time = std::time::Instant::now();
+                let mut last_send_time = std::time::Instant::now();
+                
+                // Throttle: only send frames at ~30 FPS max (even if producing faster)
+                let frame_interval = std::time::Duration::from_millis(33); // ~30 FPS
 
                 loop {
-                    match rx.recv().await {
-                        Ok(frame_data) => {
-                            frame_count += 1;
-                            
-                            // Log every 30 frames instead of every frame to reduce spam
-                            if frame_count % 30 == 0 {
-                                let elapsed = start_time.elapsed().as_secs_f64();
-                                let fps = frame_count as f64 / elapsed;
-                                println!("[Composite WS] 📡 Sending frame {} ({} bytes, {:.1} fps)", frame_count, frame_data.len(), fps);
+                    // Non-blocking check for client messages (for graceful disconnect)
+                    tokio::select! {
+                        // Receive frames from broadcast channel
+                        recv_result = rx.recv() => {
+                            match recv_result {
+                                Ok(frame_data) => {
+                                    frame_count += 1;
+                                    
+                                    // Throttle: only send if enough time has passed
+                                    let now = std::time::Instant::now();
+                                    if now.duration_since(last_send_time) >= frame_interval {
+                                        sent_count += 1;
+                                        
+                                        // Log every 30 sent frames
+                                        if sent_count % 30 == 0 {
+                                            let elapsed = start_time.elapsed().as_secs_f64();
+                                            let receive_fps = frame_count as f64 / elapsed;
+                                            let send_fps = sent_count as f64 / elapsed;
+                                            println!("[Composite WS] 📡 Frame {} sent ({} bytes) | Receive: {:.1} fps | Send: {:.1} fps", 
+                                                sent_count, frame_data.len(), receive_fps, send_fps);
+                                        }
+                                        
+                                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
+                                            println!("[Composite WS] ❌ Client disconnected after {} frames", sent_count);
+                                            break;
+                                        }
+                                        
+                                        last_send_time = now;
+                                    }
+                                    // else: skip frame (throttled)
+                                },
+                                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                    // This is expected with throttling - backend produces faster than we send
+                                    if skipped > 10 {
+                                        println!("[Composite WS] ⚠️ Lagged behind, skipped {} frames (throttled)", skipped);
+                                    }
+                                    continue;
+                                },
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    println!("[Composite WS] ℹ️ Broadcast channel closed");
+                                    break;
+                                }
                             }
-                            
-                            if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                                println!("[Composite WS] ❌ Client disconnected after {} frames", frame_count);
+                        }
+                        // Check for client disconnect
+                        ws_msg = ws_receiver.next() => {
+                            if ws_msg.is_none() {
+                                println!("[Composite WS] 🔌 Client disconnected gracefully");
                                 break;
                             }
-                        },
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                            println!("[Composite WS] ⚠️ Lagged behind, skipped {} frames", skipped);
-                            continue;
-                        },
-                        Err(broadcast::error::RecvError::Closed) => {
-                            println!("[Composite WS] ℹ️ Broadcast channel closed");
-                            break;
                         }
                     }
                 }
                 
-                println!("[Composite WS] 🔌 Client disconnected (total frames: {})", frame_count);
+                println!("[Composite WS] 🔌 Client disconnected (received: {}, sent: {})", frame_count, sent_count);
             });
         }
     });
