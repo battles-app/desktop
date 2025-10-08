@@ -579,9 +579,12 @@ impl GStreamerComposite {
             0
         });
 
-        // Validate camera device exists
+        // Validate camera device exists and try to use it
         if has_camera && device_index > 0 {
-            println!("[Composite] 🔍 Checking camera device availability for index: {}", device_index);
+            println!("[Composite] 🔍 Camera device {} requested, validating...", device_index);
+            // For now, we'll try to use the camera and fall back to test pattern if it fails
+        } else if has_camera && camera_device_id.is_empty() {
+            println!("[Composite] ⚠️ Camera requested but no device ID provided");
         }
 
         // Stop existing pipeline if any
