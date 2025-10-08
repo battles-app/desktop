@@ -3,10 +3,10 @@
 ## ✅ Icons Already Generated!
 
 All icons have been automatically generated with:
-- ✅ 15% padding on all sides
-- ✅ 15% rounded corners
-- ✅ Dark background (#0a0a0a)
-- ✅ Transparent corners
+- ✅ 12% padding on all sides
+- ✅ Fully transparent background (no black bg)
+- ✅ High-quality lanczos3 scaling
+- ✅ Crystal clear, production-ready quality
 
 ## 📦 Generated Files
 
@@ -52,10 +52,10 @@ For a native macOS `.icns` file:
 
 | Feature | Value |
 |---------|-------|
-| **Padding** | 15% on all sides |
-| **Corner Radius** | 15% (rounded) |
-| **Background** | #0a0a0a (dark) |
-| **Format** | PNG with transparency |
+| **Padding** | 12% on all sides |
+| **Background** | Fully transparent |
+| **Scaling** | High-quality lanczos3 kernel |
+| **Format** | PNG with alpha channel |
 | **Sizes** | 16, 32, 48, 64, 128, 180, 256, 512, 1024 px |
 
 ## 📁 File Locations
@@ -76,8 +76,9 @@ battles.app/public/
 ## 🚀 Result
 
 Your app now has:
-- ✅ Beautiful rounded icons with proper padding
-- ✅ Dark background matching your app theme
+- ✅ Crystal clear transparent icons with proper padding
+- ✅ No background - fully transparent
+- ✅ High-quality lanczos3 scaling for perfect clarity
 - ✅ Multi-size ICO file for Windows
 - ✅ High-res PNG for web browsers
 - ✅ Apple touch icon for iOS devices
