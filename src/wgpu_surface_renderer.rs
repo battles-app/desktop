@@ -51,7 +51,7 @@ pub struct WgpuSurfaceRenderer {
 
 impl WgpuSurfaceRenderer {
     pub async fn new(
-        window: Arc<tauri::Window>,
+        window: Arc<tauri::WebviewWindow>,
         width: u32,
         height: u32
     ) -> Result<Self, String> {
@@ -64,13 +64,25 @@ impl WgpuSurfaceRenderer {
 
         // Create surface from Tauri window  
         // SAFETY: We store the Arc<Window> in the struct to ensure it lives as long as the surface
+        println!("[WGPU Surface] 🔧 Creating surface from Tauri window...");
         let surface = unsafe {
-            instance.create_surface_unsafe(
-                wgpu::SurfaceTargetUnsafe::from_window(window.as_ref())
-                    .map_err(|e| format!("Failed to get surface target: {}", e))?
-            ).map_err(|e| format!("Failed to create surface: {}", e))?
+            let target = wgpu::SurfaceTargetUnsafe::from_window(window.as_ref())
+                .map_err(|e| {
+                    let err = format!("Failed to get surface target: {}", e);
+                    println!("[WGPU Surface] ❌ {}", err);
+                    err
+                })?;
+            
+            instance.create_surface_unsafe(target)
+                .map_err(|e| {
+                    let err = format!("Failed to create surface: {}", e);
+                    println!("[WGPU Surface] ❌ {}", err);
+                    err
+                })?
         };
+        println!("[WGPU Surface] ✅ Surface created successfully");
 
+        println!("[WGPU Surface] 🔧 Requesting GPU adapter...");
         let adapter = match instance
             .request_adapter(&RequestAdapterOptions {
                 power_preference: PowerPreference::HighPerformance,
@@ -78,10 +90,18 @@ impl WgpuSurfaceRenderer {
                 force_fallback_adapter: false,
             })
             .await {
-                Ok(adapter) => adapter,
-                Err(e) => return Err(format!("Failed to find suitable GPU adapter: {:?}", e)),
+                Ok(adapter) => {
+                    println!("[WGPU Surface] ✅ GPU adapter found");
+                    adapter
+                },
+                Err(e) => {
+                    let err = format!("Failed to find suitable GPU adapter: {:?}", e);
+                    println!("[WGPU Surface] ❌ {}", err);
+                    return Err(err);
+                },
             };
 
+        println!("[WGPU Surface] 🔧 Requesting GPU device...");
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("WGPU Surface Device"),
@@ -92,13 +112,22 @@ impl WgpuSurfaceRenderer {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .map_err(|e| format!("Failed to create device: {}", e))?;
+            .map_err(|e| {
+                let err = format!("Failed to create device: {}", e);
+                println!("[WGPU Surface] ❌ {}", err);
+                err
+            })?;
+        println!("[WGPU Surface] ✅ GPU device created");
 
+        println!("[WGPU Surface] 🔧 Configuring surface...");
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats.iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
+        
+        println!("[WGPU Surface] 📊 Surface format: {:?}", surface_format);
+        println!("[WGPU Surface] 📊 Alpha modes: {:?}", surface_caps.alpha_modes);
 
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
@@ -112,12 +141,15 @@ impl WgpuSurfaceRenderer {
         };
 
         surface.configure(&device, &config);
+        println!("[WGPU Surface] ✅ Surface configured ({}x{})", width, height);
 
         // Chroma key shader (same as before)
+        println!("[WGPU Surface] 🔧 Loading shader...");
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Chroma Key Shader"),
             source: ShaderSource::Wgsl(include_str!("chroma_key_shader.wgsl").into()),
         });
+        println!("[WGPU Surface] ✅ Shader loaded");
 
         // Create vertex buffer
         let vertex_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

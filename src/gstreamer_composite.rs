@@ -711,7 +711,7 @@ impl GStreamerComposite {
     }
 
     /// Initialize WGPU surface renderer with the Tauri window
-    pub fn set_window(&mut self, window: Arc<tauri::Window>, width: u32, height: u32) -> Result<(), String> {
+    pub fn set_window(&mut self, window: Arc<tauri::WebviewWindow>, width: u32, height: u32) -> Result<(), String> {
         println!("[Composite] 🖼️  Initializing WGPU surface renderer for direct window rendering...");
         
         let renderer = pollster::block_on(WgpuSurfaceRenderer::new(window, width, height))
@@ -841,7 +841,7 @@ impl GStreamerComposite {
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
 
-        let frame_sender = self.frame_sender.clone();
+        let _frame_sender = self.frame_sender.clone(); // Keep for FX commands
         let is_running = self.is_running.clone();
         let surface_renderer = self.surface_renderer.clone();
 
