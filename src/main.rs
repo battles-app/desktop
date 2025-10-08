@@ -38,6 +38,9 @@ lazy_static::lazy_static! {
     // Composite pipeline (OBS replacement)
     static ref GSTREAMER_COMPOSITE: Arc<parking_lot::RwLock<Option<GStreamerComposite>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref COMPOSITE_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
+    
+    // Latest frame for direct access (no WebSocket overhead)
+    static ref LATEST_COMPOSITE_FRAME: Arc<parking_lot::RwLock<Option<Vec<u8>>>> = Arc::new(parking_lot::RwLock::new(None));
 }
 
 const CAMERA_WS_PORT: u16 = 9876;

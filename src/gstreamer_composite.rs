@@ -594,6 +594,17 @@ impl GStreamerComposite {
         
         // Clear the old pipeline reference
         self.pipeline = None;
+        
+        // Initialize WGPU renderer if not already done
+        if self.wgpu_renderer.is_none() {
+            println!("[Composite] 🎨 Initializing WGPU renderer for GPU-accelerated chroma key...");
+            let renderer = tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(WgpuChromaRenderer::new(width, height))
+                .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
+            self.wgpu_renderer = Some(renderer);
+            println!("[Composite] ✅ WGPU renderer initialized");
+        }
 
         *self.is_running.write() = true;
 
@@ -603,26 +614,22 @@ impl GStreamerComposite {
             let escaped_path = camera_device_id.replace("\\", "\\\\");
             
             // Use camera with device path (Windows format)
-            // Let GStreamer negotiate format automatically, then scale to target resolution
-            // This prevents "not-negotiated" errors when camera doesn't support exact format
+            // Output RGBA for direct GPU texture upload (no JPEG encoding!)
             format!(
                 "mfvideosrc device-path=\"{}\" ! \
                  queue leaky=downstream max-size-buffers=3 ! \
                  videoconvert ! \
                  videoscale ! \
-                 video/x-raw,width={},height={} ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 jpegenc quality=85 ! \
+                 video/x-raw,format=RGBA,width={},height={} ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
                 escaped_path, width, height
             )
         } else {
-            // Use test pattern
+            // Use test pattern - also output RGBA
             format!(
                 "videotestsrc pattern=ball is-live=true ! \
-                 video/x-raw,width={},height={},framerate={}/1 ! \
-                 jpegenc quality=85 ! \
+                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
                 width, height, fps
             )
@@ -681,37 +688,46 @@ impl GStreamerComposite {
                         }
                     };
 
-                    let jpeg_data = map.as_slice().to_vec();
+                    // Now raw RGBA data (width * height * 4 bytes)
+                    let rgba_data = map.as_slice();
+                    
+                    // Get frame dimensions from sample caps
+                    let caps = sample.caps().expect("Sample has no caps");
+                    let structure = caps.structure(0).expect("Caps has no structure");
+                    let frame_width = structure.get::<i32>("width").expect("No width in caps") as u32;
+                    let frame_height = structure.get::<i32>("height").expect("No height in caps") as u32;
                     
                     // Increment and log frame count
                     let mut count = frame_count_clone.lock().unwrap();
                     *count += 1;
                     
                     if *count == 1 {
-                        println!("[Composite] 🎬 FIRST FRAME CAPTURED! ({} bytes)", jpeg_data.len());
+                        println!("[Composite] 🎬 FIRST FRAME CAPTURED! ({}x{} RGBA: {} bytes)", 
+                                frame_width, frame_height, rgba_data.len());
                     } else if *count % 30 == 0 {
-                        println!("[Composite] 📡 Frame {} captured ({} bytes)", *count, jpeg_data.len());
+                        println!("[Composite] 📡 Frame {} captured ({}x{} RGBA: {} bytes)", 
+                                *count, frame_width, frame_height, rgba_data.len());
                     }
 
-                    // Send frame to WebSocket
+                    // TODO: Apply WGPU chroma key processing here
+                    // For now, just pass through raw RGBA
+                    let frame_data = rgba_data.to_vec();
+
+                    // Broadcast to WebSocket
+                    // NOTE: This is now raw RGBA data, not JPEG!
+                    // Frontend should use putImageData() for zero-copy rendering
                     if let Some(sender) = &*frame_sender.read() {
-                        match sender.send(jpeg_data) {
+                        match sender.send(frame_data) {
                             Ok(receivers) => {
                                 if *count == 1 || *count % 30 == 0 {
-                                    println!("[Composite] ✅ Frame {} broadcast to {} WebSocket client(s)", *count, receivers);
+                                    println!("[Composite] ✅ Frame {} broadcast to {} client(s)", *count, receivers);
                                 }
                             },
                             Err(_) => {
-                                // This is normal if no WebSocket clients are connected yet
-                                // Only log occasionally to avoid spam
                                 if *count < 5 {
-                                    println!("[Composite] ⚠️ Frame {} - No WebSocket clients connected (waiting...)", *count);
+                                    println!("[Composite] ⚠️ Frame {} - No clients connected", *count);
                                 }
                             }
-                        }
-                    } else {
-                        if *count % 30 == 0 {
-                            println!("[Composite] ⚠️ No frame sender available!");
                         }
                     }
 
