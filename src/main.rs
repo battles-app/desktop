@@ -1868,14 +1868,23 @@ async fn streamdeck_update_layout(
     battle_board: Vec<FxButton>,
     user_fx: Vec<FxButton>
 ) -> Result<(), String> {
-    println!("[Stream Deck] Updating layout: {} battle board, {} user FX", 
-        battle_board.len(), user_fx.len());
+    println!("[Stream Deck] Received layout update request");
+    println!("[Stream Deck]   Battle Board: {} items", battle_board.len());
+    println!("[Stream Deck]   User FX: {} items", user_fx.len());
+    
+    // Debug first few items
+    if !battle_board.is_empty() {
+        println!("[Stream Deck]   First battle board item: {:?}", &battle_board[0]);
+    }
+    if !user_fx.is_empty() {
+        println!("[Stream Deck]   First user FX item: {:?}", &user_fx[0]);
+    }
     
     let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         manager.update_layout(battle_board, user_fx)?;
-        println!("[Stream Deck] ✅ Layout updated");
+        println!("[Stream Deck] ✅ Layout updated successfully");
         Ok(())
     } else {
         Err("Stream Deck not initialized".to_string())
