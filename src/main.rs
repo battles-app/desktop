@@ -730,10 +730,10 @@ async fn start_camera_websocket_server() {
     });
 }
 
-// Initialize composite system with transparent window overlay
+// Initialize composite system
 #[command]
-async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: u32) -> Result<String, String> {
-    println!("[Composite] 🚀 Initializing with TRANSPARENT WINDOW OVERLAY architecture");
+async fn initialize_composite_system() -> Result<String, String> {
+    println!("[Composite] Initializing composite system");
     
     // Only initialize once - check if already done
     {
@@ -745,17 +745,8 @@ async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: 
     } // Release lock before async operations
     
     // Initialize composite pipeline
-    let mut composite = GStreamerComposite::new()
+    let composite = GStreamerComposite::new()
         .map_err(|e| format!("Failed to initialize composite: {}", e))?;
-    
-    // Get the native window (NOT WebView!) for WGPU surface
-    let window = app.get_window("main")
-        .ok_or("Failed to get main window".to_string())?;
-    
-    println!("[Composite] 🔧 Setting up WGPU surface on native window...");
-    composite.set_window_async(Arc::new(window), width, height)
-        .await
-        .map_err(|e| format!("Failed to initialize surface: {}", e))?;
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
     
@@ -770,12 +761,12 @@ async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: 
     // Set sender before starting WebSocket to prevent multiple initializations
     *COMPOSITE_FRAME_SENDER.write() = Some(tx);
     
-    // Start WebSocket server (ONLY for FX commands, NOT video frames!)
+    // Start WebSocket server for frame delivery
     start_composite_websocket_server().await;
 
-    println!("[Composite] ✅ Composite system initialized with DIRECT SURFACE RENDERING!");
-    println!("[Composite] 💡 Video renders directly to window - ZERO WebSocket overhead!");
-    Ok("Composite initialized with direct surface rendering".to_string())
+    println!("[Composite] ✅ Composite system initialized");
+    println!("[Composite] 💡 Using optimized async readback (~60ms latency)");
+    Ok("Composite initialized".to_string())
 }
 
 // WebSocket server for composite frames

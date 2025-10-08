@@ -854,6 +854,7 @@ impl GStreamerComposite {
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
         let wgpu_renderer = self.wgpu_renderer.clone();
+        let surface_renderer = self.surface_renderer.clone();
 
         // Use Arc<Mutex<>> instead of closure mutation for thread safety
         let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
@@ -909,7 +910,23 @@ impl GStreamerComposite {
                         println!("[Composite] 📡 Frame {} - WGPU rendering", *count);
                     }
 
-                    // WGPU processing with async triple-buffered readback
+                    // DIRECT SURFACE RENDERING (zero-latency!)
+                    if let Some(renderer_arc) = &surface_renderer {
+                        if let Some(mut renderer) = renderer_arc.try_lock() {
+                            // Upload texture and render DIRECTLY to native window surface
+                            if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
+                                if let Err(e) = renderer.render_to_surface() {
+                                    if *count % 90 == 0 {
+                                        println!("[Composite] ⚠️  Surface render failed: {}", e);
+                                    }
+                                } else if *count % 90 == 0 {
+                                    println!("[Composite] ✅ Frame {} → DIRECT TO SURFACE (0ms latency!)", *count);
+                                }
+                            }
+                        }
+                    }
+
+                    // Fallback: WGPU processing with async triple-buffered readback
                     let processed_frame = if let Some(renderer_arc) = &wgpu_renderer {
                         if let Some(mut renderer) = renderer_arc.try_lock() {
                             // Upload and render (non-blocking)
