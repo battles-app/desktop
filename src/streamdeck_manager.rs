@@ -7,6 +7,7 @@ use image::RgbaImage;
 use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use ab_glyph::{FontRef, PxScale};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FxButton {
@@ -159,11 +160,72 @@ impl StreamDeckManager {
     
     /// Update button layout with FX buttons
     /// Battle board effects go on left side, user FX on right side
+    /// Download and cache an image from Directus via Nuxt proxy
+    fn download_and_cache_image(&self, image_url: &str) -> Result<PathBuf, String> {
+        // Create cache directory
+        let cache_dir = std::env::temp_dir().join("battles_streamdeck_cache");
+        std::fs::create_dir_all(&cache_dir)
+            .map_err(|e| format!("Failed to create cache directory: {}", e))?;
+        
+        // Extract file ID from URL (e.g., "/directus-assets/f1bd0750-f531-4712-9fda-8c12085cd63e")
+        let file_id = image_url.trim_start_matches("/directus-assets/");
+        let cached_path = cache_dir.join(format!("{}.jpg", file_id));
+        
+        // Return cached file if exists
+        if cached_path.exists() {
+            return Ok(cached_path);
+        }
+        
+        println!("[Stream Deck] Downloading image: {}", image_url);
+        
+        // Download from Nuxt proxy (handles authentication)
+        let full_url = format!("https://local.battles.app:3000{}", image_url);
+        
+        // Use reqwest blocking client with danger_accept_invalid_certs for local dev
+        let client = reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        
+        let response = client
+            .get(&full_url)
+            .send()
+            .map_err(|e| format!("Failed to download image: {}", e))?;
+        
+        if !response.status().is_success() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        
+        let bytes = response.bytes()
+            .map_err(|e| format!("Failed to read response: {}", e))?;
+        
+        // Write to cache
+        std::fs::write(&cached_path, &bytes)
+            .map_err(|e| format!("Failed to write cache file: {}", e))?;
+        
+        println!("[Stream Deck] ✅ Cached image: {:?}", cached_path.file_name());
+        Ok(cached_path)
+    }
+    
     pub fn update_layout(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {
         let button_count = self.button_count();
         if button_count == 0 {
             return Err("No device connected".to_string());
         }
+        
+        // Download and cache all images first
+        println!("[Stream Deck] Downloading {} battle board + {} user FX images...", battle_board.len(), user_fx.len());
+        for fx in battle_board.iter().chain(user_fx.iter()) {
+            if let Some(ref image_url) = fx.image_url {
+                // Attempt to download, but don't fail if it doesn't work
+                match self.download_and_cache_image(image_url) {
+                    Ok(_) => {},
+                    Err(e) => println!("[Stream Deck] ⚠️ Failed to cache image for {}: {}", fx.name, e),
+                }
+            }
+        }
+        println!("[Stream Deck] ✅ Image caching complete");
         
         // Initialize layout with None
         self.button_layout = vec![None; button_count];
@@ -262,60 +324,91 @@ impl StreamDeckManager {
         // Get button size
         let size = self.get_button_size();
         
-        // Create button image with colored background
-        let mut img = RgbaImage::new(size, size);
-        
-        // Set background color based on state
-        let bg_color = if is_playing {
-            // Bright green when playing
-            image::Rgba([50, 205, 50, 255])
-        } else if fx_button.is_global {
-            // Purple for battle board
-            image::Rgba([138, 43, 226, 255])
+        // Try to load cached image if available
+        let cached_image = if let Some(ref image_url) = fx_button.image_url {
+            let cache_dir = std::env::temp_dir().join("battles_streamdeck_cache");
+            let file_id = image_url.trim_start_matches("/directus-assets/");
+            let cached_path = cache_dir.join(format!("{}.jpg", file_id));
+            
+            if cached_path.exists() {
+                image::open(&cached_path).ok()
+            } else {
+                None
+            }
         } else {
-            // Blue for user FX
-            image::Rgba([30, 144, 255, 255])
+            None
         };
         
-        // Fill with background color
-        draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
-        
-        // Add a border for better visual separation
-        let border_color = if is_playing {
-            image::Rgba([255, 255, 255, 255]) // White border when playing
+        // Create base button image
+        let mut img = if let Some(cached_img) = cached_image {
+            // Use cached image, resize to fit button
+            let resized = cached_img.resize_exact(size, size, image::imageops::FilterType::Triangle);
+            resized.to_rgba8()
         } else {
-            image::Rgba([0, 0, 0, 128]) // Semi-transparent black border
+            // Fall back to colored background if no image
+            let mut img = RgbaImage::new(size, size);
+            let bg_color = if is_playing {
+                image::Rgba([50, 205, 50, 255]) // Green when playing
+            } else if fx_button.is_global {
+                image::Rgba([138, 43, 226, 255]) // Purple for battle board
+            } else {
+                image::Rgba([30, 144, 255, 255]) // Blue for user FX
+            };
+            draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
+            img
         };
         
-        // Draw border (4px thick)
-        for i in 0..4 {
-            let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
-            imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+        // Add colored border overlay for playing state or type indicator
+        if is_playing {
+            // Bright green border when playing
+            let border_color = image::Rgba([50, 255, 50, 255]);
+            for i in 0..6 {
+                let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
+                imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+            }
+        } else {
+            // Subtle colored border to indicate type
+            let border_color = if fx_button.is_global {
+                image::Rgba([138, 43, 226, 180]) // Purple tint for battle board
+            } else {
+                image::Rgba([30, 144, 255, 180]) // Blue tint for user FX
+            };
+            for i in 0..3 {
+                let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
+                imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+            }
         }
         
+        // Add semi-transparent text background at bottom for better readability
+        let text_bg_height = (size as f32 * 0.25) as u32;
+        let text_bg_y = size - text_bg_height;
+        draw_filled_rect_mut(
+            &mut img,
+            Rect::at(0, text_bg_y as i32).of_size(size, text_bg_height),
+            image::Rgba([0, 0, 0, 180])
+        );
+        
         // Render text with FX name
-        // Use embedded font data
         let font_data = include_bytes!("../assets/DejaVuSans.ttf");
         let font = FontRef::try_from_slice(font_data)
             .map_err(|e| format!("Failed to load font: {:?}", e))?;
         
         // Calculate font size based on button size
-        let font_scale = PxScale::from((size as f32 * 0.15).max(12.0));
+        let font_scale = PxScale::from((size as f32 * 0.13).max(10.0));
         
         // Prepare text (truncate if too long)
-        let display_name = if fx_button.name.len() > 12 {
-            format!("{}...", &fx_button.name[..9])
+        let display_name = if fx_button.name.len() > 10 {
+            format!("{}...", &fx_button.name[..7])
         } else {
             fx_button.name.clone()
         };
         
-        // Calculate text position (centered - approximate)
+        // Position text in the text background area (bottom of button)
         let text_color = image::Rgba([255, 255, 255, 255]); // White text
-        let text_x = (size as i32 / 2) - ((display_name.len() as i32 * font_scale.x as i32) / 4);
-        let text_y = (size as i32 / 2) + (font_scale.y as i32 / 4);
+        let text_x = ((size as f32 - (display_name.len() as f32 * font_scale.x * 0.5)) / 2.0) as i32;
+        let text_y = (text_bg_y + (text_bg_height / 2) - (font_scale.y as u32 / 2)) as i32;
         
-        // Draw text with shadow for better readability
-        draw_text_mut(&mut img, image::Rgba([0, 0, 0, 200]), text_x + 2, text_y + 2, font_scale, &font, &display_name);
+        // Draw text (no shadow needed on dark background)
         draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
         
         Ok(image::DynamicImage::ImageRgba8(img))
