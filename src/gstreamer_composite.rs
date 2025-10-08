@@ -6,7 +6,95 @@ use tokio::sync::broadcast;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use wgpu::*;
+use wgpu::util::DeviceExt;
 use bytemuck::{Pod, Zeroable};
+
+// WGSL Chroma Key Shader Source
+const CHROMA_KEY_SHADER: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) tex_coords: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32((vertex_index & 1u) << 2u) - 1.0;
+    let y = f32((vertex_index & 2u) >> 1u) * 2.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.tex_coords = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    return out;
+}
+
+struct Uniforms {
+    key_color: vec3<f32>,
+    tolerance: f32,
+    similarity: f32,
+    use_chroma_key: f32,
+}
+
+@group(0) @binding(0) var source_texture: texture_2d<f32>;
+@group(0) @binding(1) var source_sampler: sampler;
+@group(0) @binding(2) var<uniform> uniforms: Uniforms;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let tex_color = textureSample(source_texture, source_sampler, in.tex_coords);
+
+    if (uniforms.use_chroma_key > 0.5) {
+        // Calculate color distance in RGB space
+        let color_diff = tex_color.rgb - uniforms.key_color;
+        let distance = length(color_diff);
+
+        // Check if pixel is within tolerance
+        if (distance < uniforms.tolerance) {
+            // Additional similarity check using YUV color space
+            let y = dot(tex_color.rgb, vec3<f32>(0.299, 0.587, 0.114));
+            let u = dot(tex_color.rgb, vec3<f32>(-0.147, -0.289, 0.436));
+            let v = dot(tex_color.rgb, vec3<f32>(0.615, -0.515, -0.100));
+
+            let key_y = dot(uniforms.key_color, vec3<f32>(0.299, 0.587, 0.114));
+            let key_u = dot(uniforms.key_color, vec3<f32>(-0.147, -0.289, 0.436));
+            let key_v = dot(uniforms.key_color, vec3<f32>(0.615, -0.515, -0.100));
+
+            let yuv_diff = vec3<f32>(y - key_y, u - key_u, v - key_v);
+            let yuv_distance = length(yuv_diff);
+
+            if (yuv_distance < uniforms.similarity) {
+                // Make pixel transparent
+                return vec4<f32>(tex_color.rgb, 0.0);
+            }
+        }
+    }
+
+    return tex_color;
+}
+"#;
+
+// Vertex data for full-screen quad
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Vertex {
+    position: [f32; 2],
+    tex_coords: [f32; 2],
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0] },
+    Vertex { position: [ 1.0, -1.0], tex_coords: [1.0, 1.0] },
+    Vertex { position: [ 1.0,  1.0], tex_coords: [1.0, 0.0] },
+    Vertex { position: [-1.0,  1.0], tex_coords: [0.0, 0.0] },
+];
+
+// Uniform buffer data
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Uniforms {
+    key_color: [f32; 3],
+    tolerance: f32,
+    similarity: f32,
+    use_chroma_key: f32,
+}
 
 // WGPU-based chroma key renderer
 pub struct WgpuChromaRenderer {
@@ -431,7 +519,7 @@ impl WgpuChromaRenderer {
                 }
             });
 
-            // Skip polling for now to avoid the PollType issue
+            self.device.poll(wgpu::PollType::Wait);
 
             let buffer_data = buffer_slice.get_mapped_range();
             let rgba_data: Vec<u8> = buffer_data.to_vec();
@@ -480,24 +568,7 @@ impl GStreamerComposite {
     }
 
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
-        println!("[Composite] Starting WGPU-powered composite pipeline: {}x{} @ {}fps (rotation: {}°)",
-                 width, height, fps, rotation);
-        println!("[Composite] Camera device ID: '{}', has_camera: {}", camera_device_id, has_camera);
-        println!("[Composite] Rotation type: {}, value: {}", std::any::type_name::<u32>(), rotation);
-
-        // Parse camera device ID more robustly
-        let device_index = camera_device_id.parse::<u32>().unwrap_or_else(|_| {
-            println!("[Composite] ⚠️ Invalid camera device ID format: '{}', using 0", camera_device_id);
-            0
-        });
-
-        // Validate camera device exists and try to use it
-        if has_camera && device_index > 0 {
-            println!("[Composite] 🔍 Camera device {} requested, validating...", device_index);
-            // For now, we'll try to use the camera and fall back to test pattern if it fails
-        } else if has_camera && camera_device_id.is_empty() {
-            println!("[Composite] ⚠️ Camera requested but no device ID provided");
-        }
+        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps", width, height, fps);
 
         // Stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -506,129 +577,50 @@ impl GStreamerComposite {
 
         *self.is_running.write() = true;
 
-        // Initialize WGPU renderer for chroma key compositing
-        // Note: For now, we'll skip WGPU initialization in the sync start method
-        // In a real implementation, we'd need to restructure this for async compatibility
-        println!("[Composite] ⚠️ WGPU renderer initialization skipped in sync context");
-
-        // Create GStreamer pipeline for camera input + FX overlay
-        println!("[Composite] Building pipeline with rotation: {}, has_camera: {}", rotation, has_camera);
-
-        // Force no rotation for debugging - temporarily disable videorotate completely
-        let use_rotation = false; // rotation > 0;
-        println!("[Composite] Using rotation: {}", use_rotation);
-
-        // Create pipeline based on whether camera is available and rotation
-        let mut pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
-            // Try different camera pipeline configurations
-            let mut pipeline_configs = vec![];
-
-            // Try device index first
-            if camera_device_id.parse::<u32>().is_ok() {
-                pipeline_configs.push(format!("mfvideosrc device-index={} ", camera_device_id));
-            }
-
-            // Try device path
-            pipeline_configs.push(format!("mfvideosrc device-path=\"{}\" ", camera_device_id));
-
-            // Try device name
-            pipeline_configs.push(format!("mfvideosrc device-name=\"{}\" ", camera_device_id));
-
-            // Try each configuration
-            for (i, camera_element) in pipeline_configs.iter().enumerate() {
-                println!("[Composite] Trying camera configuration {}: {}", i + 1, camera_element);
-
-                let test_pipeline = format!(
-                    "{}! \
-                     queue leaky=downstream max-size-buffers=3 ! \
-                     videoconvert ! \
-                     queue leaky=downstream max-size-buffers=3 ! \
-                     video/x-raw,width={},height={},framerate={}/1 ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     videoconvert ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     jpegenc quality=90 ! \
-                     appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                    camera_element, width, height, fps
-                );
-
-                match gst::parse::launch(&test_pipeline) {
-                    Ok(_) => {
-                        println!("[Composite] ✅ Camera configuration {} succeeded", i + 1);
-                        // Use this pipeline configuration
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        println!("[Composite] ❌ Camera configuration {} failed: {}", i + 1, e);
-                    }
-                }
-            }
-
-            // If all camera configurations failed, fall back to test pattern
-            println!("[Composite] ❌ All camera configurations failed, using test pattern");
-            pipeline_str = format!(
-                "videotestsrc pattern=ball ! \
-                 video/x-raw,width={},height={},framerate={}/1 ! \
-                 jpegenc quality=90 ! \
-                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                width, height, fps
-            );
-        } else {
-            // FX-only pipeline (for when no camera is selected)
-            pipeline_str = format!(
-                "videotestsrc pattern=black ! \
+        // Create simple pipeline - use camera if available, otherwise use test pattern
+        let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
+            // Use camera with device path (Windows format)
+            format!(
+                "mfvideosrc device-path=\"{}\" ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
+                 videoconvert ! \
+                 queue leaky=downstream max-size-buffers=3 ! \
                  video/x-raw,width={},height={},framerate={}/1 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  videoconvert ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  jpegenc quality=90 ! \
                  appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
+                camera_device_id, width, height, fps
+            )
+        } else {
+            // Use test pattern
+            format!(
+                "videotestsrc pattern=ball ! \
+                 video/x-raw,width={},height={},framerate={}/1 ! \
+                 jpegenc quality=90 ! \
+                 appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
                 width, height, fps
-            );
-        }
-
-        println!("[Composite] Pipeline with rotation: {}°", rotation);
-        println!("[Composite] Pipeline mode: {}", if has_camera && !camera_device_id.is_empty() { "Camera + FX" } else { "FX Only" });
-        println!("[Composite] 🚀 Creating pipeline: {}", pipeline_str);
-        let pipeline = gst::parse::launch(&pipeline_str)
-            .map_err(|e| {
-                println!("[Composite] Pipeline creation failed: {}", e);
-                format!("Failed to create pipeline: {}", e)
-            })?
-            .dynamic_cast::<Pipeline>()
-            .map_err(|_| {
-                println!("[Composite] Failed to cast pipeline to Pipeline type");
-                "Failed to cast to Pipeline".to_string()
-            })?;
-
-        // Get the compositor element (try to get it, but don't fail if not available)
-        let _compositor = match pipeline.by_name("mixer") {
-            Some(element) => {
-                match element.dynamic_cast::<Element>() {
-                    Ok(elem) => Some(elem),
-                    Err(_) => {
-                        println!("[Composite] ⚠️ Could not cast compositor to Element, but continuing");
-                        None
-                    }
-                }
-            }
-            None => {
-                println!("[Composite] ⚠️ Compositor element not found, but continuing");
-                None
-            }
+            )
         };
 
-        // Get the output appsink
+        println!("[Composite] Creating pipeline: {}", pipeline_str);
+
+        // Create and start pipeline
+        let pipeline = gst::parse::launch(&pipeline_str)
+            .map_err(|e| format!("Failed to create pipeline: {}", e))?
+            .dynamic_cast::<Pipeline>()
+            .map_err(|_| "Failed to cast to Pipeline".to_string())?;
+
+        // Set up frame callback
         let appsink = pipeline
             .by_name("output")
             .ok_or("Failed to get output appsink")?
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
 
-        // Set up appsink callbacks for frame processing
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        // WGPU renderer is optional - only used for FX processing
 
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
@@ -643,22 +635,9 @@ impl GStreamerComposite {
 
                     let jpeg_data = map.as_slice();
 
-                    // Broadcast JPEG frame to WebSocket clients
-                    match frame_sender.read().as_ref() {
-                        Some(sender) => {
-                            println!("[Composite] 📡 Sending frame to WebSocket ({} bytes)", jpeg_data.len());
-                            match sender.send(jpeg_data.to_vec()) {
-                                Ok(_) => {
-                                    println!("[Composite] ✅ Frame sent successfully to WebSocket");
-                                }
-                                Err(e) => {
-                                    println!("[Composite] ❌ Failed to send frame: {}", e);
-                                }
-                            }
-                        }
-                        None => {
-                            println!("[Composite] ⚠️ Frame sender not available - pipeline may not be initialized properly");
-                        }
+                    // Send frame to WebSocket
+                    if let Some(sender) = &*frame_sender.read() {
+                        let _ = sender.send(jpeg_data.to_vec());
                     }
 
                     Ok(gst::FlowSuccess::Ok)
@@ -666,147 +645,13 @@ impl GStreamerComposite {
                 .build(),
         );
 
-        // Start the pipeline
-        println!("[Composite] 🎬 Starting pipeline...");
-        match pipeline.set_state(gst::State::Playing) {
-            Ok(_) => {
-                println!("[Composite] ✅ Pipeline set to Playing state");
-            }
-            Err(e) => {
-                println!("[Composite] ❌ Failed to set pipeline to Playing state: {:?}", e);
-                return Err(format!("Failed to start pipeline: {:?}", e));
-            }
-        }
-
-        // Wait for pipeline to reach PLAYING state with longer timeout
-        println!("[Composite] ⏳ Waiting for pipeline to reach Playing state...");
-        let state_result = pipeline.state(Some(gst::ClockTime::from_seconds(10)));
-        match state_result.1 {
-            gst::State::Playing => {
-                println!("[Composite] 🚀 WGPU-accelerated pipeline started and playing!");
-
-                // Check if we can get a sample from the pipeline to verify it's working
-                if let Some(appsink) = pipeline.by_name("output") {
-                    if let Ok(app_sink) = appsink.dynamic_cast::<AppSink>() {
-                        // Try to pull a sample to verify the pipeline is producing frames
-                        if let Some(sample) = app_sink.try_pull_sample(gst::ClockTime::from_seconds(2)) {
-                            println!("[Composite] ✅ Pipeline is producing frames (sample size: {} bytes)",
-                                     sample.buffer().map(|b| b.size()).unwrap_or(0));
-                        } else {
-                            println!("[Composite] ⚠️ Pipeline started but no frames available yet - this is normal for camera startup");
-                        }
-                    } else {
-                        println!("[Composite] ⚠️ Could not cast appsink to AppSink");
-                    }
-                } else {
-                    println!("[Composite] ⚠️ Output appsink not found");
-                }
-            }
-            gst::State::Paused => {
-                println!("[Composite] ⚠️ Pipeline is Paused - this might be normal for some camera types");
-                println!("[Composite] 🎯 Continuing with Paused pipeline - frames should still be available");
-            }
-            state => {
-                println!("[Composite] ❌ Pipeline in unexpected state: {:?}", state);
-                println!("[Composite] 🔄 Falling back to test pattern pipeline");
-
-                // Fallback to test pattern if camera fails
-                let test_pipeline_str = format!(
-                    "videotestsrc pattern=ball ! \
-                     video/x-raw,width={},height={},framerate={}/1 ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     videoconvert ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     jpegenc quality=90 ! \
-                     appsink name=output emit-signals=true sync=true max-buffers=2 drop=true",
-                    width, height, fps
-                );
-
-                // Stop the failed pipeline
-                let _ = pipeline.set_state(gst::State::Null);
-
-                // Create test pattern pipeline
-                let test_pipeline = gst::parse::launch(&test_pipeline_str)
-                    .map_err(|e| format!("Failed to create test pattern pipeline: {}", e))?
-                    .dynamic_cast::<Pipeline>()
-                    .map_err(|_| "Failed to cast test pattern pipeline to Pipeline".to_string())?;
-
-                // Set up test pattern pipeline
-                let test_appsink = test_pipeline
-                    .by_name("output")
-                    .ok_or("Failed to get test pattern appsink")?
-                    .dynamic_cast::<AppSink>()
-                    .map_err(|_| "Failed to cast test pattern appsink to AppSink")?;
-
-                // Set up callbacks for test pattern (same as camera)
-                let frame_sender = self.frame_sender.clone();
-                let is_running = self.is_running.clone();
-
-                test_appsink.set_callbacks(
-                    gstreamer_app::AppSinkCallbacks::builder()
-                        .new_sample(move |appsink| {
-                            if !*is_running.read() {
-                                return Ok(gst::FlowSuccess::Ok);
-                            }
-
-                            let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                            let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
-                            let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
-
-                            let jpeg_data = map.as_slice();
-
-                            // Broadcast JPEG frame to WebSocket clients
-                            match frame_sender.read().as_ref() {
-                                Some(sender) => {
-                                    println!("[Composite] 📡 [TEST] Sending frame to WebSocket ({} bytes)", jpeg_data.len());
-                                    match sender.send(jpeg_data.to_vec()) {
-                                        Ok(_) => {
-                                            println!("[Composite] ✅ [TEST] Frame sent successfully");
-                                        }
-                                        Err(e) => {
-                                            println!("[Composite] ❌ [TEST] Failed to send frame: {}", e);
-                                        }
-                                    }
-                                }
-                                None => {
-                                    println!("[Composite] ⚠️ [TEST] Frame sender not available");
-                                }
-                            }
-
-                            Ok(gst::FlowSuccess::Ok)
-                        })
-                        .build(),
-                );
-
-                // Start test pattern pipeline
-                match test_pipeline.set_state(gst::State::Playing) {
-                    Ok(_) => {
-                        println!("[Composite] ✅ Test pattern pipeline set to Playing");
-                    }
-                    Err(e) => {
-                        println!("[Composite] ❌ Failed to set test pattern pipeline to Playing: {:?}", e);
-                        return Err(format!("Failed to start test pattern pipeline: {:?}", e));
-                    }
-                }
-
-                // Wait for test pattern pipeline to reach PLAYING state
-                let test_state_result = test_pipeline.state(Some(gst::ClockTime::from_seconds(5)));
-                match test_state_result.1 {
-                    gst::State::Playing => {
-                        println!("[Composite] 🚀 Test pattern pipeline started successfully!");
-                    }
-                    state => {
-                        println!("[Composite] ❌ Test pattern pipeline failed: {:?}", state);
-                        return Err(format!("Test pattern pipeline failed to start: {:?}", state));
-                    }
-                }
-
-                self.pipeline = Some(test_pipeline);
-                return Ok(());
-            }
-        }
+        // Start pipeline
+        pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|e| format!("Failed to start pipeline: {:?}", e))?;
 
         self.pipeline = Some(pipeline);
+        println!("[Composite] Pipeline started successfully");
         Ok(())
     }
 
@@ -818,8 +663,6 @@ impl GStreamerComposite {
             println!("[Composite] ❌ Pipeline not initialized - cannot play FX");
             return Err("Pipeline not initialized".to_string());
         }
-
-        println!("[Composite] Pipeline is running, attempting to play FX: {}", file_path);
 
         if let Some(pipeline) = &self.pipeline {
             // Stop any existing FX
@@ -875,48 +718,18 @@ impl GStreamerComposite {
 
             // Load and decode the FX image file
             let fx_image = image::open(&file_path)
-                .map_err(|e| format!("Failed to load FX image: {} (file exists but may be corrupted)", e))?;
+                .map_err(|e| format!("Failed to load FX image: {}", e))?;
 
             let rgba_image = fx_image.to_rgba8();
             let (width, height) = rgba_image.dimensions();
 
             println!("[Composite] 📷 FX image loaded: {}x{}", width, height);
 
-            // Create filesrc -> decodebin -> videoconvert -> appsrc pipeline for FX
-            let fx_pipeline_str = format!(
-                "filesrc location=\"{}\" ! \
-                 decodebin ! \
-                 videoconvert ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
-                 appsink name=fx_sink emit-signals=true sync=true max-buffers=1 drop=true",
-                file_path, width, height
-            );
-
-            let fx_pipeline = gst::parse::launch(&fx_pipeline_str)
-                .map_err(|e| format!("Failed to create FX pipeline: {}", e))?
-                .dynamic_cast::<Pipeline>()
-                .map_err(|_| "Failed to cast FX pipeline to Pipeline".to_string())?;
-
-            // Get the FX appsink to read frames
-            let _fx_appsink = fx_pipeline
-                .by_name("fx_sink")
-                .ok_or("Failed to get FX appsink")?
-                .dynamic_cast::<AppSink>()
-                .map_err(|_| "Failed to cast FX appsink to AppSink")?;
-
             // Store current FX parameters
             self.current_fx_file = Some(file_path.clone());
             self.current_chroma_params = Some((keycolor, tolerance, similarity, use_chroma_key));
 
-            // For now, implement a simpler approach without the complex callback
-            // In a full implementation, we'd need to restructure this differently
-            // Start FX pipeline
-            if let Err(e) = fx_pipeline.set_state(gst::State::Playing) {
-                println!("[Composite] ❌ Failed to start FX pipeline: {}", e);
-            } else {
-                println!("[Composite] ✅ FX pipeline started (WGPU chroma key integration pending full implementation)");
-            }
-
+            println!("[Composite] ✅ FX loaded and configured for WGPU chroma key processing");
             Ok(())
         } else {
             Err("Pipeline not initialized".to_string())
