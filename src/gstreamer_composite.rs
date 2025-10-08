@@ -1237,6 +1237,43 @@ impl GStreamerComposite {
         // Set up appsink callback (reuses existing frame_sender)
         self.setup_appsink_callback(&pipeline)?;
         
+        // Add debug probe for FX video decoding (decodebin creates pads dynamically)
+        if let Some(fxdecode) = pipeline.by_name("fxdecode") {
+            fxdecode.connect_pad_added(move |_element, pad| {
+                pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, probe_info| {
+                    if let Some(gst::PadProbeData::Buffer(_buffer)) = &probe_info.data {
+                        static FX_FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                        let count = FX_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if count == 0 {
+                            println!("[FX Decoder] 🎬 FIRST FX FRAME DECODED!");
+                        } else if count % 30 == 0 {
+                            println!("[FX Decoder] 📹 FX frames decoded: {}", count);
+                        }
+                    }
+                    gst::PadProbeReturn::Ok
+                });
+            });
+        }
+        
+        // Add debug probe AFTER alpha (chroma key)
+        if let Some(fx_after_alpha) = pipeline.by_name("fx_after_alpha") {
+            let pad = fx_after_alpha.static_pad("src");
+            if let Some(pad) = pad {
+                pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, probe_info| {
+                    if let Some(gst::PadProbeData::Buffer(_buffer)) = &probe_info.data {
+                        static ALPHA_FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                        let count = ALPHA_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if count == 0 {
+                            println!("[Alpha] 🎨 FIRST FRAME AFTER CHROMA KEY!");
+                        } else if count % 30 == 0 {
+                            println!("[Alpha] ✅ Chroma keyed frames: {}", count);
+                        }
+                    }
+                    gst::PadProbeReturn::Ok
+                });
+            }
+        }
+        
         // Start compositor pipeline
         println!("[Compositor] 🎬 Starting compositor pipeline...");
         
@@ -1289,11 +1326,17 @@ impl GStreamerComposite {
         };
         
         // Map frontend tolerance/similarity to GStreamer alpha element
-        // tolerance (0-1) -> angle (0-180 degrees): Controls hue variance
-        let angle = (tolerance * 180.0).max(5.0).min(180.0) as u32;
+        // CRITICAL: GStreamer alpha uses INVERSE logic!
+        // - Lower angle = removes LESS (more strict)
+        // - Higher angle = removes MORE (aggressive)
+        // tolerance (0-1) -> angle (5-60 degrees): Controls hue variance
+        // 0.3 tolerance → 23° angle, 0.5 tolerance → 35° angle
+        let angle = (tolerance * 80.0).max(15.0).min(60.0) as u32;
         
-        // similarity (0-1) -> noise-level (0-64): Controls luminance/chroma variance
-        let noise_level = ((1.0 - similarity) * 64.0).max(1.0).min(64.0) as u32;
+        // similarity (0-1) -> noise-level (0-15): Controls luminance/saturation variance  
+        // Lower similarity = HIGHER noise level (more forgiving)
+        // 0.45 similarity → noise_level ~8
+        let noise_level = ((1.0 - similarity) * 15.0).max(5.0).min(15.0) as u32;
         
         println!("[Compositor] 🎨 Chroma Key Settings:");
         println!("  - Target Color: RGB({},{},{}) [{}]", target_r, target_g, target_b, keycolor);
@@ -1316,9 +1359,11 @@ impl GStreamerComposite {
         };
         
         // Build compositor pipeline: camera + FX video
+        // CRITICAL: sink_0::alpha=1.0 sink_1::alpha=1.0 ensures both layers are fully opaque
+        // The 'alpha' element handles transparency, compositor just blends
         let pipeline_str = if camera_device.is_empty() || camera_device == "__TEST_PATTERN__" {
             format!(
-                "compositor name=comp sink_0::zorder=0 sink_1::zorder=1 ! \
+                "compositor name=comp sink_0::alpha=1.0 sink_0::zorder=0 sink_1::alpha=1.0 sink_1::zorder=1 ! \
                  video/x-raw,format=RGBA,width={},height={} ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true \
@@ -1329,11 +1374,14 @@ impl GStreamerComposite {
                  comp.sink_0 \
                  \
                  filesrc location=\"{}\" ! \
-                 decodebin ! \
-                 videoconvert ! \
-                 videoscale ! \
+                 decodebin name=fxdecode ! \
+                 videoconvert name=fxconvert ! \
+                 videorate ! \
+                 videoscale name=fxscale ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                 identity name=fx_before_alpha ! \
                  {} \
+                 identity name=fx_after_alpha ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
@@ -1349,7 +1397,7 @@ impl GStreamerComposite {
             )
         } else if rotation == 0 {
             format!(
-                "compositor name=comp sink_0::zorder=0 sink_1::zorder=1 ! \
+                "compositor name=comp sink_0::alpha=1.0 sink_0::zorder=0 sink_1::alpha=1.0 sink_1::zorder=1 ! \
                  video/x-raw,format=RGBA,width={},height={} ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true \
@@ -1362,11 +1410,14 @@ impl GStreamerComposite {
                  comp.sink_0 \
                  \
                  filesrc location=\"{}\" ! \
-                 decodebin ! \
-                 videoconvert ! \
-                 videoscale ! \
+                 decodebin name=fxdecode ! \
+                 videoconvert name=fxconvert ! \
+                 videorate ! \
+                 videoscale name=fxscale ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                 identity name=fx_before_alpha ! \
                  {} \
+                 identity name=fx_after_alpha ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
@@ -1383,7 +1434,7 @@ impl GStreamerComposite {
             )
         } else {
             format!(
-                "compositor name=comp sink_0::zorder=0 sink_1::zorder=1 ! \
+                "compositor name=comp sink_0::alpha=1.0 sink_0::zorder=0 sink_1::alpha=1.0 sink_1::zorder=1 ! \
                  video/x-raw,format=RGBA,width={},height={} ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true \
@@ -1399,11 +1450,14 @@ impl GStreamerComposite {
                  comp.sink_0 \
                  \
                  filesrc location=\"{}\" ! \
-                 decodebin ! \
-                 videoconvert ! \
-                 videoscale ! \
+                 decodebin name=fxdecode ! \
+                 videoconvert name=fxconvert ! \
+                 videorate ! \
+                 videoscale name=fxscale ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                 identity name=fx_before_alpha ! \
                  {} \
+                 identity name=fx_after_alpha ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
@@ -1420,6 +1474,10 @@ impl GStreamerComposite {
                 }
             )
         };
+        
+        println!("[Compositor] 📹 Pipeline will composite:");
+        println!("  - Layer 0 (Background): Camera feed");
+        println!("  - Layer 1 (Overlay): FX video {} chroma key", if use_chroma_key { "WITH" } else { "WITHOUT" });
         
         Ok(pipeline_str)
     }
