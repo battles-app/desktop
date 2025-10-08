@@ -1187,7 +1187,7 @@ impl GStreamerComposite {
     }
     
     /// Rebuild pipeline with video FX compositor
-    fn rebuild_pipeline_with_fx(&mut self, fx_video_path: String, _keycolor: String, _tolerance: f64, _similarity: f64, _use_chroma_key: bool) -> Result<(), String> {
+    fn rebuild_pipeline_with_fx(&mut self, fx_video_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
         println!("[Composite] 🔄 Rebuilding pipeline with FX video compositor...");
         
         // IMPORTANT: Keep is_running=true to maintain WebSocket connection!
@@ -1213,7 +1213,7 @@ impl GStreamerComposite {
         let fps = self.output_fps;
         let rotation = self.rotation;
         
-        // Build compositor pipeline
+        // Build compositor pipeline with chroma key settings
         let pipeline_str = self.build_compositor_pipeline_string(
             &camera_device,
             &fx_video_path,
@@ -1221,6 +1221,10 @@ impl GStreamerComposite {
             height,
             fps,
             rotation,
+            &keycolor,
+            tolerance,
+            similarity,
+            use_chroma_key,
         )?;
         
         println!("[Compositor] Creating pipeline: {}", pipeline_str);
@@ -1266,9 +1270,35 @@ impl GStreamerComposite {
         height: u32,
         fps: u32,
         rotation: u32,
+        keycolor: &str,
+        tolerance: f64,
+        similarity: f64,
+        use_chroma_key: bool,
     ) -> Result<String, String> {
         let escaped_device = camera_device.replace("\\", "\\\\");
         let escaped_fx_path = fx_video_path.replace("\\", "\\\\");
+        
+        // Parse hex color (default to pure green #00FF00)
+        let (target_r, target_g, target_b) = if keycolor.starts_with('#') && keycolor.len() == 7 {
+            let r = u8::from_str_radix(&keycolor[1..3], 16).unwrap_or(0);
+            let g = u8::from_str_radix(&keycolor[3..5], 16).unwrap_or(255);
+            let b = u8::from_str_radix(&keycolor[5..7], 16).unwrap_or(0);
+            (r, g, b)
+        } else {
+            (0, 255, 0) // Default pure green
+        };
+        
+        // Map frontend tolerance/similarity to GStreamer alpha element
+        // tolerance (0-1) -> angle (0-180 degrees): Controls hue variance
+        let angle = (tolerance * 180.0).max(5.0).min(180.0) as u32;
+        
+        // similarity (0-1) -> noise-level (0-64): Controls luminance/chroma variance
+        let noise_level = ((1.0 - similarity) * 64.0).max(1.0).min(64.0) as u32;
+        
+        println!("[Compositor] 🎨 Chroma Key Settings:");
+        println!("  - Target Color: RGB({},{},{}) [{}]", target_r, target_g, target_b, keycolor);
+        println!("  - Tolerance: {:.2} → Angle: {}°", tolerance, angle);
+        println!("  - Similarity: {:.2} → Noise Level: {}", similarity, noise_level);
         
         // Swap dimensions for 90° and 270° rotations
         let (pre_rotation_width, pre_rotation_height) = if rotation == 90 || rotation == 270 {
@@ -1303,13 +1333,19 @@ impl GStreamerComposite {
                  videoconvert ! \
                  videoscale ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 alpha method=custom target-r=0 target-g=255 target-b=0 angle=20 noise-level=2 ! \
+                 {} \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
                 width, height, fps,
                 escaped_fx_path,
-                width, height, fps
+                width, height, fps,
+                if use_chroma_key {
+                    format!("alpha method=custom target-r={} target-g={} target-b={} angle={} noise-level={} !", 
+                        target_r, target_g, target_b, angle, noise_level)
+                } else {
+                    String::new()
+                }
             )
         } else if rotation == 0 {
             format!(
@@ -1330,14 +1366,20 @@ impl GStreamerComposite {
                  videoconvert ! \
                  videoscale ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 alpha method=custom target-r=0 target-g=255 target-b=0 angle=20 noise-level=2 ! \
+                 {} \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
                 escaped_device,
                 width, height,
                 escaped_fx_path,
-                width, height, fps
+                width, height, fps,
+                if use_chroma_key {
+                    format!("alpha method=custom target-r={} target-g={} target-b={} angle={} noise-level={} !", 
+                        target_r, target_g, target_b, angle, noise_level)
+                } else {
+                    String::new()
+                }
             )
         } else {
             format!(
@@ -1361,7 +1403,7 @@ impl GStreamerComposite {
                  videoconvert ! \
                  videoscale ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 alpha method=custom target-r=0 target-g=255 target-b=0 angle=20 noise-level=2 ! \
+                 {} \
                  queue leaky=downstream max-size-buffers=2 ! \
                  comp.sink_1",
                 width, height,
@@ -1369,7 +1411,13 @@ impl GStreamerComposite {
                 pre_rotation_width, pre_rotation_height,
                 flip_method,
                 escaped_fx_path,
-                width, height, fps
+                width, height, fps,
+                if use_chroma_key {
+                    format!("alpha method=custom target-r={} target-g={} target-b={} angle={} noise-level={} !", 
+                        target_r, target_g, target_b, angle, noise_level)
+                } else {
+                    String::new()
+                }
             )
         };
         
