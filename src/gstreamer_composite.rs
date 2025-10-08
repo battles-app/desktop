@@ -799,7 +799,8 @@ impl GStreamerComposite {
                      mfvideosrc device-path=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! videoscale ! \
-                     video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
+                     video/x-raw,format=RGBA,width={},height={} ! \
+                     videorate drop-only=false ! video/x-raw,framerate={}/1 ! \
                      queue leaky=downstream max-size-buffers=1 ! \
                      comp.sink_0",
                     width, height, escaped_path, width, height, fps
@@ -817,7 +818,8 @@ impl GStreamerComposite {
                      mfvideosrc device-path=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! videoscale ! \
-                     video/x-raw,width={},height={},framerate={}/1 ! \
+                     video/x-raw,width={},height={} ! \
+                     videorate drop-only=false ! video/x-raw,framerate={}/1 ! \
                      videoflip method={} ! \
                      videoconvert ! video/x-raw,format=RGBA ! \
                      queue leaky=downstream max-size-buffers=1 ! \
