@@ -644,30 +644,44 @@ async fn close_tv_monitor_window(app: tauri::AppHandle) -> Result<(), String> {
 async fn create_monitor_window(
     app: tauri::AppHandle,
     url: String,
-    monitor_index: usize
+    monitor_index: usize,
+    monitor_position: (i32, i32),  // Pass position from frontend to match preview
+    monitor_size: (u32, u32)       // Pass size from frontend to match preview
 ) -> Result<(), String> {
     println!("Creating monitor window for monitor index: {}", monitor_index);
+    println!("Frontend monitor data: position=({}, {}), size={}x{}", 
+        monitor_position.0, monitor_position.1, monitor_size.0, monitor_size.1);
 
-    // Get Tauri's native monitor info directly for accurate positioning
+    // Get Tauri's native monitor info to find the matching monitor
     let native_monitors = app.available_monitors().unwrap_or_default();
     println!("Found {} native monitors", native_monitors.len());
 
-    if monitor_index >= native_monitors.len() {
-        return Err(format!("Invalid monitor index: {} (total monitors: {})", monitor_index, native_monitors.len()));
-    }
+    // Find the monitor that matches the position and size from frontend
+    let native_monitor = native_monitors.iter()
+        .find(|m| {
+            let pos = m.position();
+            let size = m.size();
+            pos.x == monitor_position.0 && 
+            pos.y == monitor_position.1 && 
+            size.width == monitor_size.0 && 
+            size.height == monitor_size.1
+        })
+        .ok_or_else(|| format!(
+            "No monitor found matching position ({}, {}) and size {}x{}",
+            monitor_position.0, monitor_position.1, monitor_size.0, monitor_size.1
+        ))?;
 
-    let native_monitor = &native_monitors[monitor_index];
     let monitor_pos = native_monitor.position();
-    let monitor_size = native_monitor.size();
+    let monitor_size_actual = native_monitor.size();
     let scale_factor = native_monitor.scale_factor();
 
-    println!("Native monitor {}: position=({}, {}), size={}x{}, scale={}",
-             monitor_index, monitor_pos.x, monitor_pos.y, monitor_size.width, monitor_size.height, scale_factor);
+    println!("✅ Matched monitor: position=({}, {}), size={}x{}, scale={}",
+             monitor_pos.x, monitor_pos.y, monitor_size_actual.width, monitor_size_actual.height, scale_factor);
 
     // Convert physical pixels to logical pixels for Tauri v2
     // Tauri's inner_size and position expect logical pixels
-    let logical_width = monitor_size.width as f64 / scale_factor;
-    let logical_height = monitor_size.height as f64 / scale_factor;
+    let logical_width = monitor_size_actual.width as f64 / scale_factor;
+    let logical_height = monitor_size_actual.height as f64 / scale_factor;
     let logical_x = monitor_pos.x as f64 / scale_factor;
     let logical_y = monitor_pos.y as f64 / scale_factor;
 

@@ -923,9 +923,8 @@ impl GStreamerComposite {
                                     if *count % 90 == 0 {
                                         println!("[Composite] ⚠️  Surface render failed: {}", e);
                                     }
-                                } else if *count % 90 == 0 {
-                                    println!("[Composite] ✅ Frame {} → DIRECT TO SURFACE (0ms latency!)", *count);
                                 }
+                                // Removed excessive frame logging (was spamming console)
                             }
                         }
                     }
@@ -937,11 +936,9 @@ impl GStreamerComposite {
                             if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
                                 if let Ok(()) = renderer.render_frame_async() {
                                     // Success! Now poll for old frame (~3 frames ago)
-                                    if let Some(gpu_frame) = renderer.poll_readback() {
-                                        if *count % 90 == 0 {
-                                            println!("[Composite] ✅ Frame {} GPU-processed (async)", *count);
-                                        }
-                                        gpu_frame
+                                if let Some(gpu_frame) = renderer.poll_readback() {
+                                    // Removed excessive frame logging (was spamming console)
+                                    gpu_frame
                                     } else {
                                         // No readback ready yet (first 3 frames), send raw
                                         rgba_data.to_vec()
