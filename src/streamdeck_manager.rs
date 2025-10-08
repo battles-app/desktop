@@ -229,6 +229,15 @@ impl StreamDeckManager {
             Ok(client) => {
                 match client.get(&image_url).send() {
                     Ok(mut response) if response.status().is_success() => {
+                        // Check content type to see if it's actually an image
+                        let content_type = response.headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        
+                        println!("[Stream Deck] Content-Type for {}: {}", name, content_type);
+                        
                         // Read body with better error handling
                         let mut bytes = Vec::new();
                         match std::io::copy(&mut response, &mut bytes) {
@@ -238,7 +247,7 @@ impl StreamDeckManager {
                                 } else if let Err(e) = std::fs::write(&cache_path, &bytes) {
                                     println!("[Stream Deck] ⚠️ Failed to write image for {}: {}", name, e);
                                 } else {
-                                    println!("[Stream Deck] ✅ Cached {} ({} bytes)", name, bytes.len());
+                                    println!("[Stream Deck] ✅ Cached {} ({} bytes, type: {})", name, bytes.len(), content_type);
                                 }
                             }
                             Err(e) => println!("[Stream Deck] ⚠️ Failed to read response for {}: {}", name, e),
@@ -399,8 +408,21 @@ impl StreamDeckManager {
         // Cache files are named after the FX name, e.g., "x2.jpg", "galaxy.mp4"
         let cached_image = if let Some(cached_path) = self.find_cached_image(&fx_button.name) {
             println!("[Stream Deck] ✅ Found cached image for {}: {:?}", fx_button.name, cached_path.file_name());
-            image::open(&cached_path).ok()
+            
+            match image::open(&cached_path) {
+                Ok(img) => {
+                    println!("[Stream Deck] ✅ Successfully loaded image for {}: {}x{}", 
+                        fx_button.name, img.width(), img.height());
+                    Some(img)
+                }
+                Err(e) => {
+                    println!("[Stream Deck] ❌ Failed to load image for {}: {} (file might be video)", 
+                        fx_button.name, e);
+                    None
+                }
+            }
         } else {
+            println!("[Stream Deck] ⚠️ No cached image found for {}", fx_button.name);
             None
         };
         
