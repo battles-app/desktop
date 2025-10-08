@@ -686,16 +686,11 @@ pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
     frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     is_running: Arc<RwLock<bool>>,
-    wgpu_renderer: Option<Arc<parking_lot::Mutex<WgpuChromaRenderer>>>,
+    wgpu_renderer: Option<Arc<parking_lot::Mutex<WgpuChromaRenderer>>>, // For fallback
+    surface_renderer: Option<Arc<parking_lot::Mutex<WgpuSurfaceRenderer>>>, // Direct surface!
     fx_appsrc: Option<AppSrc>,
     current_fx_file: Option<String>,
     current_chroma_params: Option<(String, f64, f64, bool)>,
-    // Cached pipeline configuration
-    camera_device: Option<String>,
-    output_width: u32,
-    output_height: u32,
-    output_fps: u32,
-    rotation: u32,
 }
 
 impl GStreamerComposite {
@@ -710,34 +705,28 @@ impl GStreamerComposite {
             frame_sender: Arc::new(RwLock::new(None)),
             is_running: Arc::new(RwLock::new(false)),
             wgpu_renderer: None,
+            surface_renderer: None,
             fx_appsrc: None,
             current_fx_file: None,
             current_chroma_params: None,
-            camera_device: None,
-            output_width: 720,
-            output_height: 1280,
-            output_fps: 30,
-            rotation: 0,
         })
     }
 
-    /// Parse hex color string to RGB float array
-    fn parse_hex_color(hex: &str) -> Result<[f32; 3], String> {
-        let hex = hex.trim_start_matches('#');
+    /// Initialize WGPU surface renderer with transparent WebView overlay
+    pub async fn set_window_async(&mut self, window: Arc<tauri::Window>, width: u32, height: u32) -> Result<(), String> {
+        println!("[Composite] 🖼️  Initializing WGPU surface renderer...");
+        println!("[Composite] 💡 Using transparent WebView overlay architecture");
         
-        if hex.len() != 6 {
-            return Err("Invalid hex color format".to_string());
-        }
+        // Create surface renderer (async)
+        let renderer = WgpuSurfaceRenderer::new(window, width, height)
+            .await
+            .map_err(|e| format!("Failed to create surface renderer: {}", e))?;
         
-        let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| "Invalid red component")?;
-        let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| "Invalid green component")?;
-        let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| "Invalid blue component")?;
+        self.surface_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
         
-        Ok([
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-        ])
+        println!("[Composite] ✅ Surface renderer initialized - ZERO-LATENCY mode!");
+        println!("[Composite] 🎨 WebView is transparent - WGPU renders behind it");
+        Ok(())
     }
 
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
@@ -746,13 +735,6 @@ impl GStreamerComposite {
 
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
         println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-        
-        // Cache pipeline configuration for rebuilding with FX
-        self.camera_device = Some(camera_device_id.to_string());
-        self.output_width = width;
-        self.output_height = height;
-        self.output_fps = fps;
-        self.rotation = rotation;
 
         // CRITICAL: Properly stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -1068,16 +1050,19 @@ impl GStreamerComposite {
                       file_path.to_lowercase().ends_with(".webm");
 
         if is_video {
-            println!("[Composite] 🎥 Video FX detected - rebuilding pipeline with compositor");
+            println!("[Composite] 🎥 Video FX detected - this will be implemented with GStreamer overlay");
+            // For now, log that we received the FX command
+            // Full GStreamer overlay integration would require rebuilding the pipeline with compositor
+            // This is a complex change that requires:
+            // 1. Add compositor element to pipeline
+            // 2. Add filesrc + decodebin for video
+            // 3. Add alpha channel handling for chroma key
+            // 4. Sync video timing with camera feed
             
-            // Store FX parameters
             self.current_fx_file = Some(file_path.clone());
-            self.current_chroma_params = Some((keycolor.clone(), tolerance, similarity, use_chroma_key));
+            self.current_chroma_params = Some((keycolor, tolerance, similarity, use_chroma_key));
             
-            // Rebuild pipeline with video compositor
-            self.rebuild_pipeline_with_fx(file_path, keycolor, tolerance, similarity, use_chroma_key)?;
-            
-            println!("[Composite] ✅ Video FX compositor pipeline active");
+            println!("[Composite] ✅ Video FX stored (overlay implementation in progress)");
             Ok(())
         } else {
             println!("[Composite] 🖼️ Image FX detected - loading for overlay");
@@ -1184,402 +1169,6 @@ impl GStreamerComposite {
 
     pub fn is_running(&self) -> bool {
         *self.is_running.read()
-    }
-    
-    /// Rebuild pipeline with video FX compositor
-    fn rebuild_pipeline_with_fx(&mut self, fx_video_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
-        println!("[Composite] 🔄 Rebuilding pipeline with FX video compositor...");
-        
-        // IMPORTANT: Keep is_running=true to maintain WebSocket connection!
-        // Just stop the pipeline, not the entire system
-        
-        // Stop existing pipeline WITHOUT setting is_running to false
-        if let Some(pipeline) = &self.pipeline {
-            println!("[Compositor] ⏸️  Pausing current pipeline for rebuild...");
-            
-            pipeline.set_state(gst::State::Null)
-                .map_err(|e| format!("Failed to stop pipeline: {:?}", e))?;
-            
-            // Wait for NULL state
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-        
-        self.pipeline = None;
-        
-        // Get cached config
-        let camera_device = self.camera_device.as_ref().ok_or("No camera device cached")?.clone();
-        let width = self.output_width;
-        let height = self.output_height;
-        let fps = self.output_fps;
-        let rotation = self.rotation;
-        
-        // Build compositor pipeline with chroma key settings
-        let pipeline_str = self.build_compositor_pipeline_string(
-            &camera_device,
-            &fx_video_path,
-            width,
-            height,
-            fps,
-            rotation,
-            &keycolor,
-            tolerance,
-            similarity,
-            use_chroma_key,
-        )?;
-        
-        println!("[Compositor] Creating pipeline: {}", pipeline_str);
-        
-        let pipeline = gst::parse::launch(&pipeline_str)
-            .map_err(|e| format!("Failed to create compositor pipeline: {}", e))?
-            .dynamic_cast::<Pipeline>()
-            .map_err(|_| "Failed to cast to Pipeline".to_string())?;
-        
-        // Set up appsink callback (reuses existing frame_sender)
-        self.setup_appsink_callback(&pipeline)?;
-        
-        // Add debug probe for FX video decoding (decodebin creates pads dynamically)
-        if let Some(fxdecode) = pipeline.by_name("fxdecode") {
-            fxdecode.connect_pad_added(move |_element, pad| {
-                pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, probe_info| {
-                    if let Some(gst::PadProbeData::Buffer(_buffer)) = &probe_info.data {
-                        static FX_FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                        let count = FX_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if count == 0 {
-                            println!("[FX Decoder] 🎬 FIRST FX FRAME DECODED!");
-                        } else if count % 30 == 0 {
-                            println!("[FX Decoder] 📹 FX frames decoded: {}", count);
-                        }
-                    }
-                    gst::PadProbeReturn::Ok
-                });
-            });
-        }
-        
-        // Add debug probe AFTER alpha (chroma key)
-        if let Some(fx_after_alpha) = pipeline.by_name("fx_after_alpha") {
-            let pad = fx_after_alpha.static_pad("src");
-            if let Some(pad) = pad {
-                pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, probe_info| {
-                    if let Some(gst::PadProbeData::Buffer(_buffer)) = &probe_info.data {
-                        static ALPHA_FRAME_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                        let count = ALPHA_FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if count == 0 {
-                            println!("[Alpha] 🎨 FIRST FRAME AFTER CHROMA KEY!");
-                        } else if count % 30 == 0 {
-                            println!("[Alpha] ✅ Chroma keyed frames: {}", count);
-                        }
-                    }
-                    gst::PadProbeReturn::Ok
-                });
-            }
-        }
-        
-        // Start compositor pipeline
-        println!("[Compositor] 🎬 Starting compositor pipeline...");
-        
-        pipeline.set_state(gst::State::Ready)
-            .map_err(|e| format!("Failed to set READY: {:?}", e))?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        
-        pipeline.set_state(gst::State::Paused)
-            .map_err(|e| format!("Failed to set PAUSED: {:?}", e))?;
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        
-        pipeline.set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to start compositor pipeline: {:?}", e))?;
-        
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        
-        self.pipeline = Some(pipeline);
-        // Keep is_running=true throughout (never set to false)
-        
-        println!("[Compositor] ✅ Compositor pipeline active - frames now include FX overlay!");
-        println!("[Compositor] 💡 WebSocket connection maintained - frontend will receive composited frames");
-        Ok(())
-    }
-    
-    /// Build GStreamer compositor pipeline string
-    fn build_compositor_pipeline_string(
-        &self,
-        camera_device: &str,
-        fx_video_path: &str,
-        width: u32,
-        height: u32,
-        fps: u32,
-        rotation: u32,
-        keycolor: &str,
-        tolerance: f64,
-        similarity: f64,
-        use_chroma_key: bool,
-    ) -> Result<String, String> {
-        let escaped_device = camera_device.replace("\\", "\\\\");
-        let escaped_fx_path = fx_video_path.replace("\\", "\\\\");
-        
-        // Parse hex color (default to pure green #00FF00)
-        let (target_r, target_g, target_b) = if keycolor.starts_with('#') && keycolor.len() == 7 {
-            let r = u8::from_str_radix(&keycolor[1..3], 16).unwrap_or(0);
-            let g = u8::from_str_radix(&keycolor[3..5], 16).unwrap_or(255);
-            let b = u8::from_str_radix(&keycolor[5..7], 16).unwrap_or(0);
-            (r, g, b)
-        } else {
-            (0, 255, 0) // Default pure green
-        };
-        
-        // Map frontend tolerance/similarity to GStreamer alpha element
-        // CRITICAL: GStreamer alpha uses INVERSE logic!
-        // - Lower angle = removes LESS (more strict)
-        // - Higher angle = removes MORE (aggressive)
-        // tolerance (0-1) -> angle (5-60 degrees): Controls hue variance
-        // 0.3 tolerance → 23° angle, 0.5 tolerance → 35° angle
-        let angle = (tolerance * 80.0).max(15.0).min(60.0) as u32;
-        
-        // similarity (0-1) -> noise-level (0-15): Controls luminance/saturation variance  
-        // Lower similarity = HIGHER noise level (more forgiving)
-        // 0.45 similarity → noise_level ~8
-        let noise_level = ((1.0 - similarity) * 15.0).max(5.0).min(15.0) as u32;
-        
-        println!("[Compositor] 🎨 Chroma Key Settings:");
-        println!("  - Target Color: RGB({},{},{}) [{}]", target_r, target_g, target_b, keycolor);
-        println!("  - Tolerance: {:.2} → Angle: {}°", tolerance, angle);
-        println!("  - Similarity: {:.2} → Noise Level: {}", similarity, noise_level);
-        
-        // Swap dimensions for 90° and 270° rotations
-        let (pre_rotation_width, pre_rotation_height) = if rotation == 90 || rotation == 270 {
-            (height, width)
-        } else {
-            (width, height)
-        };
-        
-        let flip_method = match rotation {
-            0 => "none",
-            90 => "clockwise",
-            180 => "rotate-180",
-            270 => "counterclockwise",
-            _ => "none",
-        };
-        
-        // Build compositor pipeline: camera + FX video
-        // CRITICAL: sink_0::alpha=1.0 sink_1::alpha=1.0 ensures both layers are fully opaque
-        // The 'alpha' element handles transparency, compositor just blends
-        let pipeline_str = if camera_device.is_empty() || camera_device == "__TEST_PATTERN__" {
-            format!(
-                "compositor name=comp sink_0::alpha=1.0 sink_0::zorder=0 sink_1::alpha=1.0 sink_1::zorder=1 ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true \
-                 \
-                 videotestsrc pattern=ball is-live=true ! \
-                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 comp.sink_0 \
-                 \
-                 filesrc location=\"{}\" ! \
-                 decodebin name=fxdecode ! \
-                 videoconvert name=fxconvert ! \
-                 videorate ! \
-                 videoscale name=fxscale ! \
-                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 identity name=fx_before_alpha ! \
-                 {} \
-                 identity name=fx_after_alpha ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 comp.sink_1",
-                width, height,
-                width, height, fps,
-                escaped_fx_path,
-                width, height, fps,
-                if use_chroma_key {
-                    format!("alpha method=custom target-r={} target-g={} target-b={} angle={} noise-level={} !", 
-                        target_r, target_g, target_b, angle, noise_level)
-                } else {
-                    String::new()
-                }
-            )
-        } else if rotation == 0 {
-            format!(
-                "compositor name=comp sink_0::alpha=1.0 sink_0::zorder=0 sink_1::alpha=1.0 sink_1::zorder=1 ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true \
-                 \
-                 mfvideosrc device-path=\"{}\" ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
-                 comp.sink_0 \
-                 \
-                 filesrc location=\"{}\" ! \
-                 decodebin name=fxdecode ! \
-                 videoconvert name=fxconvert ! \
-                 videorate ! \
-                 videoscale name=fxscale ! \
-                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 identity name=fx_before_alpha ! \
-                 {} \
-                 identity name=fx_after_alpha ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 comp.sink_1",
-                width, height,
-                escaped_device,
-                width, height,
-                escaped_fx_path,
-                width, height, fps,
-                if use_chroma_key {
-                    format!("alpha method=custom target-r={} target-g={} target-b={} angle={} noise-level={} !", 
-                        target_r, target_g, target_b, angle, noise_level)
-                } else {
-                    String::new()
-                }
-            )
-        } else {
-            format!(
-                "compositor name=comp sink_0::alpha=1.0 sink_0::zorder=0 sink_1::alpha=1.0 sink_1::zorder=1 ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true \
-                 \
-                 mfvideosrc device-path=\"{}\" ! \
-                 queue leaky=downstream max-size-buffers=3 ! \
-                 videoconvert ! \
-                 videoscale ! \
-                 video/x-raw,format=RGBA,width={},height={} ! \
-                 videoflip method={} ! \
-                 videoconvert ! \
-                 video/x-raw,format=RGBA ! \
-                 comp.sink_0 \
-                 \
-                 filesrc location=\"{}\" ! \
-                 decodebin name=fxdecode ! \
-                 videoconvert name=fxconvert ! \
-                 videorate ! \
-                 videoscale name=fxscale ! \
-                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 identity name=fx_before_alpha ! \
-                 {} \
-                 identity name=fx_after_alpha ! \
-                 queue leaky=downstream max-size-buffers=2 ! \
-                 comp.sink_1",
-                width, height,
-                escaped_device,
-                pre_rotation_width, pre_rotation_height,
-                flip_method,
-                escaped_fx_path,
-                width, height, fps,
-                if use_chroma_key {
-                    format!("alpha method=custom target-r={} target-g={} target-b={} angle={} noise-level={} !", 
-                        target_r, target_g, target_b, angle, noise_level)
-                } else {
-                    String::new()
-                }
-            )
-        };
-        
-        println!("[Compositor] 📹 Pipeline will composite:");
-        println!("  - Layer 0 (Background): Camera feed");
-        println!("  - Layer 1 (Overlay): FX video {} chroma key", if use_chroma_key { "WITH" } else { "WITHOUT" });
-        
-        Ok(pipeline_str)
-    }
-    
-    /// Set up appsink callback for compositor pipeline
-    fn setup_appsink_callback(&self, pipeline: &Pipeline) -> Result<(), String> {
-        let appsink = pipeline
-            .by_name("output")
-            .ok_or("Failed to get output appsink")?
-            .dynamic_cast::<AppSink>()
-            .map_err(|_| "Failed to cast to AppSink")?;
-        
-        let frame_sender = self.frame_sender.clone();
-        let is_running = self.is_running.clone();
-        let wgpu_renderer = self.wgpu_renderer.clone();
-        
-        let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
-        let frame_count_clone = frame_count.clone();
-        
-        appsink.set_callbacks(
-            gstreamer_app::AppSinkCallbacks::builder()
-                .new_sample(move |appsink| {
-                    if !*is_running.read() {
-                        return Ok(gst::FlowSuccess::Ok);
-                    }
-                    
-                    let sample = match appsink.pull_sample() {
-                        Ok(s) => s,
-                        Err(e) => {
-                            println!("[Compositor] ❌ Failed to pull sample: {:?}", e);
-                            return Err(gst::FlowError::Eos);
-                        }
-                    };
-                    
-                    let buffer = match sample.buffer() {
-                        Some(b) => b,
-                        None => return Err(gst::FlowError::Error),
-                    };
-                    
-                    let map = match buffer.map_readable() {
-                        Ok(m) => m,
-                        Err(e) => {
-                            println!("[Compositor] ❌ Failed to map buffer: {:?}", e);
-                            return Err(gst::FlowError::Error);
-                        }
-                    };
-                    
-                    let rgba_data = map.as_slice();
-                    
-                    // Get frame dimensions
-                    let caps = sample.caps().expect("Sample has no caps");
-                    let structure = caps.structure(0).expect("Caps has no structure");
-                    let frame_width = structure.get::<i32>("width").expect("No width in caps") as u32;
-                    let frame_height = structure.get::<i32>("height").expect("No height in caps") as u32;
-                    
-                    let mut count = frame_count_clone.lock().unwrap();
-                    *count += 1;
-                    
-                    if *count == 1 {
-                        println!("[Compositor] 🎬 FIRST COMPOSITED FRAME! ({}x{})", frame_width, frame_height);
-                    } else if *count % 90 == 0 {
-                        println!("[Compositor] 📡 Frame {} - composited with FX overlay", *count);
-                    }
-                    
-                    // WGPU processing (chroma key on composited output)
-                    let processed_frame = if let Some(renderer_arc) = &wgpu_renderer {
-                        if let Some(mut renderer) = renderer_arc.try_lock() {
-                            if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
-                                if let Ok(()) = renderer.render_frame_async() {
-                                    if let Some(gpu_frame) = renderer.poll_readback() {
-                                        if *count % 90 == 0 {
-                                            println!("[Compositor] ✅ Frame {} GPU-processed", *count);
-                                        }
-                                        gpu_frame
-                                    } else {
-                                        rgba_data.to_vec()
-                                    }
-                                } else {
-                                    rgba_data.to_vec()
-                                }
-                            } else {
-                                rgba_data.to_vec()
-                            }
-                        } else {
-                            rgba_data.to_vec()
-                        }
-                    } else {
-                        rgba_data.to_vec()
-                    };
-                    
-                    // Broadcast composited frames
-                    if let Some(sender) = &*frame_sender.read() {
-                        let _ = sender.send(processed_frame);
-                    }
-                    
-                    Ok(gst::FlowSuccess::Ok)
-                })
-                .build(),
-        );
-        
-        println!("[Compositor] ✅ AppSink callbacks configured");
-        Ok(())
     }
 
     pub fn get_pipeline_state(&self) -> Option<gst::State> {

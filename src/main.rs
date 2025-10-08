@@ -730,10 +730,10 @@ async fn start_camera_websocket_server() {
     });
 }
 
-// Initialize composite system
+// Initialize composite system with transparent window overlay
 #[command]
-async fn initialize_composite_system() -> Result<String, String> {
-    println!("[Composite] Initializing composite system");
+async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: u32) -> Result<String, String> {
+    println!("[Composite] 🚀 Initializing with TRANSPARENT WINDOW OVERLAY architecture");
     
     // Only initialize once - check if already done
     {
@@ -745,8 +745,17 @@ async fn initialize_composite_system() -> Result<String, String> {
     } // Release lock before async operations
     
     // Initialize composite pipeline
-    let composite = GStreamerComposite::new()
+    let mut composite = GStreamerComposite::new()
         .map_err(|e| format!("Failed to initialize composite: {}", e))?;
+    
+    // Get the native window (NOT WebView!) for WGPU surface
+    let window = app.get_window("main")
+        .ok_or("Failed to get main window".to_string())?;
+    
+    println!("[Composite] 🔧 Setting up WGPU surface on native window...");
+    composite.set_window_async(Arc::new(window), width, height)
+        .await
+        .map_err(|e| format!("Failed to initialize surface: {}", e))?;
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
     

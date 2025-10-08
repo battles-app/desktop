@@ -32,7 +32,7 @@ struct Uniforms {
 }
 
 pub struct WgpuSurfaceRenderer {
-    _window: Arc<tauri::WebviewWindow>, // Keep window alive for surface lifetime
+    _window: Arc<tauri::Window>, // Keep window alive for surface lifetime
     surface: Surface<'static>,
     device: Device,
     queue: Queue,
@@ -51,36 +51,37 @@ pub struct WgpuSurfaceRenderer {
 
 impl WgpuSurfaceRenderer {
     pub async fn new(
-        window: Arc<tauri::WebviewWindow>,
+        window: Arc<tauri::Window>,
         width: u32,
         height: u32
     ) -> Result<Self, String> {
         println!("[WGPU Surface] 🚀 Initializing direct surface renderer ({}x{})", width, height);
+        println!("[WGPU Surface] 💡 Rendering to transparent window - WebView will overlay on top!");
 
         let instance = Instance::new(&InstanceDescriptor {
             backends: Backends::PRIMARY,
             ..Default::default()
         });
 
-        // Create surface from Tauri window  
-        // SAFETY: We store the Arc<Window> in the struct to ensure it lives as long as the surface
-        println!("[WGPU Surface] 🔧 Creating surface from Tauri window...");
+        // Create surface from the native window (NOT the WebView!)
+        // The WebView is transparent, so WGPU renders "behind" it
+        println!("[WGPU Surface] 🔧 Creating surface from native window handle...");
         let surface = unsafe {
             let target = wgpu::SurfaceTargetUnsafe::from_window(window.as_ref())
                 .map_err(|e| {
-                    let err = format!("Failed to get surface target: {}", e);
+                    let err = format!("Failed to get surface target from window: {}", e);
                     println!("[WGPU Surface] ❌ {}", err);
                     err
                 })?;
             
             instance.create_surface_unsafe(target)
                 .map_err(|e| {
-                    let err = format!("Failed to create surface: {}", e);
+                    let err = format!("Failed to create WGPU surface: {}", e);
                     println!("[WGPU Surface] ❌ {}", err);
                     err
                 })?
         };
-        println!("[WGPU Surface] ✅ Surface created successfully");
+        println!("[WGPU Surface] ✅ Surface created from native window handle!");
 
         println!("[WGPU Surface] 🔧 Requesting GPU adapter...");
         let adapter = match instance
@@ -129,12 +130,24 @@ impl WgpuSurfaceRenderer {
         println!("[WGPU Surface] 📊 Surface format: {:?}", surface_format);
         println!("[WGPU Surface] 📊 Alpha modes: {:?}", surface_caps.alpha_modes);
 
+        // Use Immediate for lowest latency, fall back to Mailbox, then Fifo
+        let present_mode = if surface_caps.present_modes.contains(&PresentMode::Immediate) {
+            println!("[WGPU Surface] ✅ Using PresentMode::Immediate (lowest latency!)");
+            PresentMode::Immediate
+        } else if surface_caps.present_modes.contains(&PresentMode::Mailbox) {
+            println!("[WGPU Surface] ✅ Using PresentMode::Mailbox (low latency)");
+            PresentMode::Mailbox
+        } else {
+            println!("[WGPU Surface] ⚠️ Using PresentMode::Fifo (VSync)");
+            PresentMode::Fifo
+        };
+
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width,
             height,
-            present_mode: PresentMode::Fifo, // VSync for smooth rendering
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
