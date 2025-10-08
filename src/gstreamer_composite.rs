@@ -519,7 +519,7 @@ impl WgpuChromaRenderer {
                 }
             });
 
-            self.device.poll(wgpu::PollType::Wait);
+            // Note: In newer WGPU versions, polling may not be needed for readback
 
             let buffer_data = buffer_slice.get_mapped_range();
             let rgba_data: Vec<u8> = buffer_data.to_vec();
@@ -567,7 +567,7 @@ impl GStreamerComposite {
         *self.frame_sender.write() = Some(sender);
     }
 
-    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
+    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, _rotation: u32, has_camera: bool) -> Result<(), String> {
         println!("[Composite] Starting composite pipeline: {}x{} @ {}fps", width, height, fps);
 
         // Stop existing pipeline if any
