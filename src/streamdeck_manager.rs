@@ -162,27 +162,48 @@ impl StreamDeckManager {
     /// Battle board effects go on left side, user FX on right side
     /// Find cached image from frontend cache (NO downloading - images are pre-cached by frontend!)
     fn find_cached_image(&self, image_url: &str) -> Option<PathBuf> {
-        // Extract file ID from URL (e.g., "/directus-assets/f1bd0750-f531-4712-9fda-8c12085cd63e")
+        let cache_dir = std::env::temp_dir().join("battles_fx_cache");
+        
+        // The URL format is like: /directus-assets/f1bd0750-f531-4712-9fda-8c12085cd63e
+        // Which maps to: https://tiktok.b4battle.com/assets/{id}/filename.jpg
+        // And gets cached as: battles_fx_cache/{id}_filename.jpg or similar
+        
         let file_id = image_url.trim_start_matches("/directus-assets/");
         
-        // Check multiple possible cache locations (frontend might cache them anywhere)
-        let possible_caches = vec![
-            std::env::temp_dir().join("battles_fx_cache").join(file_id),
-            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.jpg", file_id)),
-            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.png", file_id)),
-            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.mp4", file_id)),
-            std::env::temp_dir().join("battles_fx_cache").join(format!("{}.webm", file_id)),
-        ];
-        
-        for path in possible_caches {
-            if path.exists() {
-                // Check if it's an image file (not video)
-                if let Some(ext) = path.extension() {
-                    let ext_str = ext.to_string_lossy().to_lowercase();
-                    if ext_str == "jpg" || ext_str == "jpeg" || ext_str == "png" || ext_str == "webp" {
-                        return Some(path);
+        // Try to find any cached file that contains this ID
+        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                
+                // Check if filename contains the file ID
+                if let Some(filename) = path.file_name() {
+                    let filename_str = filename.to_string_lossy();
+                    
+                    // Must contain the ID and be an image file
+                    if filename_str.contains(file_id) {
+                        if let Some(ext) = path.extension() {
+                            let ext_str = ext.to_string_lossy().to_lowercase();
+                            if ext_str == "jpg" || ext_str == "jpeg" || ext_str == "png" || ext_str == "webp" || ext_str == "gif" {
+                                return Some(path);
+                            }
+                        }
                     }
                 }
+            }
+        }
+        
+        // Also try direct patterns
+        let possible_patterns = vec![
+            format!("{}", file_id),
+            format!("{}.jpg", file_id),
+            format!("{}.png", file_id),
+            format!("{}.jpeg", file_id),
+        ];
+        
+        for pattern in possible_patterns {
+            let path = cache_dir.join(&pattern);
+            if path.exists() {
+                return Some(path);
             }
         }
         
@@ -195,7 +216,20 @@ impl StreamDeckManager {
             return Err("No device connected".to_string());
         }
         
-        // Don't download images here - do it lazily in create_button_image to avoid blocking IPC
+        // Debug: List what's in the cache
+        let cache_dir = std::env::temp_dir().join("battles_fx_cache");
+        if cache_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+                let files: Vec<String> = entries
+                    .flatten()
+                    .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+                    .collect();
+                if !files.is_empty() {
+                    println!("[Stream Deck] Cache has {} files: {:?}", files.len(), files.iter().take(5).collect::<Vec<_>>());
+                }
+            }
+        }
+        
         println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
         
         // Initialize layout with None
@@ -298,8 +332,10 @@ impl StreamDeckManager {
         // Try to load cached image from frontend cache (NO downloading!)
         let cached_image = if let Some(ref image_url) = fx_button.image_url {
             if let Some(cached_path) = self.find_cached_image(image_url) {
+                println!("[Stream Deck] ✅ Found cached image for {}: {:?}", fx_button.name, cached_path.file_name());
                 image::open(&cached_path).ok()
             } else {
+                println!("[Stream Deck] ⚠️ No cached image for {} ({})", fx_button.name, image_url);
                 None
             }
         } else {
