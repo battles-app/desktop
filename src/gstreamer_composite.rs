@@ -354,20 +354,24 @@ impl WgpuChromaRenderer {
 
         // Update texture data
         if let (Some(texture), Some(texture_view)) = (&self.current_texture, &self.current_texture_view) {
+            // For write_texture with tightly packed data, we can use unpadded bytes_per_row
+            // But it must still be aligned to texel block size (4 bytes for RGBA)
+            let unpadded_bytes_per_row = width * 4;
+            
             self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
+                TexelCopyTextureInfo {
                     texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
                 },
                 rgba_data,
-                wgpu::TexelCopyBufferLayout {
+                TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(width * 4),
+                    bytes_per_row: Some(unpadded_bytes_per_row),
                     rows_per_image: Some(height),
                 },
-                wgpu::Extent3d {
+                Extent3d {
                     width,
                     height,
                     depth_or_array_layers: 1,
@@ -484,10 +488,17 @@ impl WgpuChromaRenderer {
             self.queue.submit([encoder.finish()]);
 
             // Read back the rendered frame from output texture
-            let size = (output_texture.width() * output_texture.height() * 4) as usize;
+            // IMPORTANT: bytes_per_row MUST be aligned to COPY_BYTES_PER_ROW_ALIGNMENT (256)
+            let width = output_texture.width();
+            let height = output_texture.height();
+            let unpadded_bytes_per_row = width * 4;
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+            
+            let buffer_size = (padded_bytes_per_row * height) as u64;
             let buffer = self.device.create_buffer(&BufferDescriptor {
                 label: Some("Readback Buffer"),
-                size: size as BufferAddress,
+                size: buffer_size,
                 usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
@@ -497,23 +508,23 @@ impl WgpuChromaRenderer {
             });
 
             encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
+                TexelCopyTextureInfo {
                     texture: output_texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
                 },
-                wgpu::TexelCopyBufferInfo {
+                TexelCopyBufferInfo {
                     buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
+                    layout: TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(output_texture.width() * 4),
-                        rows_per_image: Some(output_texture.height()),
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(height),
                     },
                 },
-                wgpu::Extent3d {
-                    width: output_texture.width(),
-                    height: output_texture.height(),
+                Extent3d {
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
             );
@@ -522,16 +533,42 @@ impl WgpuChromaRenderer {
 
             // Map buffer and read data
             let buffer_slice = buffer.slice(..);
+            
+            // Submit map request and wait synchronously
+            let (tx, rx) = std::sync::mpsc::channel();
             buffer_slice.map_async(MapMode::Read, move |result| {
-                if result.is_err() {
-                    println!("Failed to map buffer for reading");
-                }
+                tx.send(result).ok();
             });
-
-            // Note: In newer WGPU versions, polling may not be needed for readback
+            
+            // Wait for mapping to complete (device will automatically poll)
+            match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                Ok(Ok(_)) => {},  // Success
+                Ok(Err(e)) => {
+                    println!("[WGPU] Failed to map buffer: {:?}", e);
+                    return Err(format!("Buffer mapping failed: {:?}", e));
+                },
+                Err(_) => {
+                    println!("[WGPU] Buffer mapping timed out");
+                    return Err("Buffer mapping timeout".to_string());
+                }
+            }
 
             let buffer_data = buffer_slice.get_mapped_range();
-            let rgba_data: Vec<u8> = buffer_data.to_vec();
+            
+            // Remove padding from each row if present
+            let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+            if padded_bytes_per_row != unpadded_bytes_per_row {
+                // Data has padding, need to remove it
+                for row in 0..height {
+                    let row_start = (row * padded_bytes_per_row) as usize;
+                    let row_end = row_start + unpadded_bytes_per_row as usize;
+                    rgba_data.extend_from_slice(&buffer_data[row_start..row_end]);
+                }
+            } else {
+                // No padding, copy directly
+                rgba_data.extend_from_slice(&buffer_data);
+            }
+            
             drop(buffer_data);
             buffer.unmap();
 
@@ -660,7 +697,7 @@ impl GStreamerComposite {
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let wgpu_renderer = self.wgpu_renderer.clone();
+        let _wgpu_renderer = self.wgpu_renderer.clone();
 
         // Use Arc<Mutex<>> instead of closure mutation for thread safety
         let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
@@ -716,39 +753,10 @@ impl GStreamerComposite {
                         println!("[Composite] 📡 Frame {} - WGPU rendering", *count);
                     }
 
-                    // ACTUALLY USE WGPU RENDERER!
-                    let processed_frame = if let Some(renderer_arc) = &wgpu_renderer {
-                        match renderer_arc.try_lock() {
-                            Some(mut renderer) => {
-                                // Upload RGBA to GPU texture
-                                if let Err(e) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
-                                    println!("[Composite] ⚠️ WGPU texture upload failed: {}", e);
-                                    rgba_data.to_vec() // Fallback to raw
-                                } else {
-                                    // Render with GPU shader (chroma key, etc.)
-                                    match renderer.render_frame() {
-                                        Ok(gpu_processed) => {
-                                            if *count % 90 == 0 {
-                                                println!("[Composite] ✅ Frame {} GPU-processed ({} bytes)", *count, gpu_processed.len());
-                                            }
-                                            gpu_processed
-                                        }
-                                        Err(e) => {
-                                            println!("[Composite] ⚠️ WGPU render failed: {}", e);
-                                            rgba_data.to_vec() // Fallback
-                                        }
-                                    }
-                                }
-                            }
-                            None => {
-                                // Renderer locked by another thread, skip GPU processing this frame
-                                rgba_data.to_vec()
-                            }
-                        }
-                    } else {
-                        // No renderer, send raw
-                        rgba_data.to_vec()
-                    };
+                    // TODO: GPU readback is too slow for real-time (1fps due to sync CPU-GPU transfer)
+                    // Skip WGPU processing for now - send raw frames for 30fps performance
+                    // Future: Render WGPU directly to window surface (no readback!)
+                    let processed_frame = rgba_data.to_vec();
 
                     // Broadcast GPU-processed frames
                     if let Some(sender) = &*frame_sender.read() {
