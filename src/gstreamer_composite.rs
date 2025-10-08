@@ -585,23 +585,25 @@ impl GStreamerComposite {
             let escaped_path = camera_device_id.replace("\\", "\\\\");
             
             // Use camera with device path (Windows format)
-            // Note: Using sync=false and async=false on appsink to prevent blocking
+            // Let GStreamer negotiate format automatically, then scale to target resolution
+            // This prevents "not-negotiated" errors when camera doesn't support exact format
             format!(
                 "mfvideosrc device-path=\"{}\" ! \
                  queue leaky=downstream max-size-buffers=3 ! \
                  videoconvert ! \
-                 video/x-raw,format=I420,width={},height={},framerate={}/1 ! \
+                 videoscale ! \
+                 video/x-raw,width={},height={} ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  jpegenc quality=85 ! \
                  queue leaky=downstream max-size-buffers=2 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                escaped_path, width, height, fps
+                escaped_path, width, height
             )
         } else {
             // Use test pattern
             format!(
                 "videotestsrc pattern=ball is-live=true ! \
-                 video/x-raw,format=I420,width={},height={},framerate={}/1 ! \
+                 video/x-raw,width={},height={},framerate={}/1 ! \
                  jpegenc quality=85 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
                 width, height, fps
@@ -677,12 +679,16 @@ impl GStreamerComposite {
                     if let Some(sender) = &*frame_sender.read() {
                         match sender.send(jpeg_data) {
                             Ok(receivers) => {
-                                if *count % 30 == 0 {
-                                    println!("[Composite] ✅ Frame broadcast to {} receivers", receivers);
+                                if *count == 1 || *count % 30 == 0 {
+                                    println!("[Composite] ✅ Frame {} broadcast to {} WebSocket client(s)", *count, receivers);
                                 }
                             },
-                            Err(e) => {
-                                println!("[Composite] ⚠️ Failed to send frame: {}", e);
+                            Err(_) => {
+                                // This is normal if no WebSocket clients are connected yet
+                                // Only log occasionally to avoid spam
+                                if *count < 5 {
+                                    println!("[Composite] ⚠️ Frame {} - No WebSocket clients connected (waiting...)", *count);
+                                }
                             }
                         }
                     } else {
@@ -705,22 +711,30 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to set pipeline to READY: {:?}", e))?;
         
         // Wait for READY state
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(200));
         
         println!("[Composite] 🔄 Setting pipeline to PAUSED state...");
         pipeline
             .set_state(gst::State::Paused)
             .map_err(|e| format!("Failed to set pipeline to PAUSED: {:?}", e))?;
         
-        // Wait for PAUSED state
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Wait for PAUSED state to complete
+        println!("[Composite] ⏳ Waiting for pipeline to reach PAUSED state...");
+        match pipeline.state(Some(gst::ClockTime::from_seconds(5))).1 {
+            gst::State::Paused => {
+                println!("[Composite] ✅ Pipeline is PAUSED and ready");
+            }
+            state => {
+                println!("[Composite] ⚠️ Pipeline in unexpected state: {:?}", state);
+            }
+        }
         
         println!("[Composite] 🔄 Setting pipeline to PLAYING state...");
         let state_change_result = pipeline.set_state(gst::State::Playing);
         
         match state_change_result {
             Ok(_) => {
-                println!("[Composite] ✅ Pipeline started successfully");
+                println!("[Composite] ✅ Pipeline set to PLAYING");
             }
             Err(e) => {
                 // Get more detailed error info
@@ -737,6 +751,31 @@ impl GStreamerComposite {
                 return Err(format!("Failed to start pipeline: {:?}", e));
             }
         }
+        
+        // Wait a moment and verify pipeline is actually playing
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        
+        let (_, current_state, pending_state) = pipeline.state(None);
+        println!("[Composite] 📊 Pipeline state: {:?} (pending: {:?})", current_state, pending_state);
+        
+        // Check for any errors on the bus
+        if let Some(bus) = pipeline.bus() {
+            if let Some(msg) = bus.pop_filtered(&[gst::MessageType::Error, gst::MessageType::Warning]) {
+                match msg.view() {
+                    gst::MessageView::Error(err) => {
+                        let error_msg = format!("Pipeline error: {} (debug: {:?})", err.error(), err.debug());
+                        println!("[Composite] ❌ {}", error_msg);
+                        return Err(error_msg);
+                    }
+                    gst::MessageView::Warning(warn) => {
+                        println!("[Composite] ⚠️ Pipeline warning: {} (debug: {:?})", warn.error(), warn.debug());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        println!("[Composite] ✅ Pipeline fully initialized and running");
 
         self.pipeline = Some(pipeline);
         Ok(())
