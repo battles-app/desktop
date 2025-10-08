@@ -686,11 +686,14 @@ pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
     frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     is_running: Arc<RwLock<bool>>,
-    wgpu_renderer: Option<Arc<parking_lot::Mutex<WgpuChromaRenderer>>>, // For fallback
-    surface_renderer: Option<Arc<parking_lot::Mutex<WgpuSurfaceRenderer>>>, // Direct surface!
-    fx_appsrc: Option<AppSrc>,
+    // NATIVE COMPOSITOR elements
+    compositor: Option<Element>,      // compositor element (blends layers)
+    fx_bin: Option<Element>,          // bin containing FX pipeline
+    fx_source: Option<Element>,       // filesrc for FX video
     current_fx_file: Option<String>,
     current_chroma_params: Option<(String, f64, f64, bool)>,
+    width: u32,
+    height: u32,
 }
 
 impl GStreamerComposite {
@@ -704,11 +707,13 @@ impl GStreamerComposite {
             pipeline: None,
             frame_sender: Arc::new(RwLock::new(None)),
             is_running: Arc::new(RwLock::new(false)),
-            wgpu_renderer: None,
-            surface_renderer: None,
-            fx_appsrc: None,
+            compositor: None,
+            fx_bin: None,
+            fx_source: None,
             current_fx_file: None,
             current_chroma_params: None,
+            width: 1280,
+            height: 720,
         })
     }
 
@@ -734,7 +739,12 @@ impl GStreamerComposite {
     }
 
     pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
-        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+        println!("[Composite] 🚀 Starting NATIVE COMPOSITOR pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+        println!("[Composite] 🎨 Native GPU chroma key + compositing (OBS replacement mode!)");
+
+        // Store dimensions
+        self.width = width;
+        self.height = height;
 
         // CRITICAL: Properly stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -758,22 +768,12 @@ impl GStreamerComposite {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
         
-        // Clear the old pipeline reference
+        // Clear the old pipeline and compositor references
         self.pipeline = None;
+        self.compositor = None;
+        self.fx_bin = None;
+        self.fx_source = None;
         
-        // Initialize WGPU renderer if not already done
-        if self.wgpu_renderer.is_none() {
-            println!("[Composite] 🎨 Initializing WGPU renderer (chroma key DISABLED for camera)...");
-            let mut renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
-                .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
-            
-            // DISABLE camera chroma key - we only chroma key FX videos in frontend
-            renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
-            
-            self.wgpu_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
-            println!("[Composite] ✅ WGPU renderer initialized (camera chroma key OFF, FX chroma key in frontend)");
-        }
-
         *self.is_running.write() = true;
 
         // Map rotation degrees to videoflip method
@@ -785,62 +785,80 @@ impl GStreamerComposite {
         };
         
         // CRITICAL: videoflip swaps dimensions for 90° and 270° rotations!
-        // If output needs to be 720x1280 with 270° rotation:
-        //   Input to videoflip must be 1280x720
-        //   After rotation, it becomes 720x1280
         let (pre_rotation_width, pre_rotation_height) = if rotation == 90 || rotation == 270 {
             (height, width)  // Swap dimensions before rotation
         } else {
             (width, height)  // Keep dimensions for 0° and 180°
         };
         
-        // Create simple pipeline - use camera if available, otherwise use test pattern
+        // Build NATIVE COMPOSITOR pipeline:
+        // compositor → tee → (preview appsink, virtual cam, NDI, etc.)
+        //   ↑
+        // camera (sink_0, zorder=0, background)
+        // FX video (sink_1, zorder=1, foreground) - added dynamically
+        
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
             // Escape backslashes in Windows device path
             let escaped_path = camera_device_id.replace("\\", "\\\\");
             
-            // Use camera with device path (Windows format)
-            // Add videoflip for rotation support
-            // Output RGBA for direct GPU texture upload (no JPEG encoding!)
             if flip_method == 0 {
-                // No rotation needed
+                // No rotation - compositor pipeline
                 format!(
-                    "mfvideosrc device-path=\"{}\" ! \
+                    "compositor name=comp sink_0::zorder=0 background=black ! \
+                     videoconvert ! video/x-raw,format=RGBA ! \
+                     tee name=t \
+                        t. ! queue leaky=downstream max-size-buffers=2 ! \
+                           appsink name=preview emit-signals=true sync=false async=false max-buffers=2 drop=true \
+                     \
+                     mfvideosrc device-path=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
-                     videoconvert ! \
-                     videoscale ! \
+                     videoconvert ! videoscale ! \
                      video/x-raw,format=RGBA,width={},height={} ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
+                     queue leaky=downstream max-size-buffers=1 ! \
+                     comp.sink_0",
                     escaped_path, width, height
                 )
             } else {
-                // Apply rotation with videoflip (use swapped dimensions if needed)
+                // With rotation - compositor pipeline
                 format!(
-                    "mfvideosrc device-path=\"{}\" ! \
+                    "compositor name=comp sink_0::zorder=0 background=black ! \
+                     videoconvert ! video/x-raw,format=RGBA ! \
+                     tee name=t \
+                        t. ! queue leaky=downstream max-size-buffers=2 ! \
+                           appsink name=preview emit-signals=true sync=false async=false max-buffers=2 drop=true \
+                     \
+                     mfvideosrc device-path=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
-                     videoconvert ! \
-                     videoscale ! \
+                     videoconvert ! videoscale ! \
                      video/x-raw,width={},height={} ! \
                      videoflip method={} ! \
-                     videoconvert ! \
-                     video/x-raw,format=RGBA ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
-                     appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
+                     videoconvert ! video/x-raw,format=RGBA ! \
+                     queue leaky=downstream max-size-buffers=1 ! \
+                     comp.sink_0",
                     escaped_path, pre_rotation_width, pre_rotation_height, flip_method
                 )
             }
         } else {
-            // Use test pattern - also output RGBA
+            // Test pattern - also with compositor
             format!(
-                "videotestsrc pattern=ball is-live=true ! \
+                "compositor name=comp sink_0::zorder=0 background=black ! \
+                 videoconvert ! video/x-raw,format=RGBA ! \
+                 tee name=t \
+                    t. ! queue leaky=downstream max-size-buffers=2 ! \
+                       appsink name=preview emit-signals=true sync=false async=false max-buffers=2 drop=true \
+                 \
+                 videotestsrc pattern=ball is-live=true ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
+                 queue ! comp.sink_0",
                 width, height, fps
             )
         };
 
-        println!("[Composite] Creating pipeline: {}", pipeline_str);
+        println!("[Composite] 🏗️  Building NATIVE COMPOSITOR pipeline:");
+        println!("[Composite] 📹 Camera → compositor.sink_0 (background, zorder=0)");
+        println!("[Composite] 🎬 FX → compositor.sink_1 (foreground with alpha, zorder=1) - dynamic");
+        println!("[Composite] 🎨 Compositor → tee → [preview, virtual cam, NDI...]");
+        println!("[Composite] Pipeline: {}", pipeline_str);
 
         // Create pipeline
         let pipeline = gst::parse::launch(&pipeline_str)
@@ -848,17 +866,21 @@ impl GStreamerComposite {
             .dynamic_cast::<Pipeline>()
             .map_err(|_| "Failed to cast to Pipeline".to_string())?;
 
+        // Save compositor element reference for dynamic FX switching
+        let compositor = pipeline
+            .by_name("comp")
+            .ok_or("Failed to get compositor element")?;
+        self.compositor = Some(compositor);
+
         // Set up frame callback BEFORE starting pipeline
         let appsink = pipeline
-            .by_name("output")
-            .ok_or("Failed to get output appsink")?
+            .by_name("preview")  // Changed from "output" to "preview"
+            .ok_or("Failed to get preview appsink")?
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let wgpu_renderer = self.wgpu_renderer.clone();
-        let surface_renderer = self.surface_renderer.clone();
 
         // Use Arc<Mutex<>> instead of closure mutation for thread safety
         let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
