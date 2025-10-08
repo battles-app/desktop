@@ -30,7 +30,7 @@
         "title": "Battles.app",
         "titleBarStyle": "Overlay",
         "transparent": true,
-        "url": "https://local.battles.app:3000/",
+        "url": "loading.html",
         "visible": true,
         "windowEffects": {
           "effects": [

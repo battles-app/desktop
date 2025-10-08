@@ -1751,6 +1751,21 @@ fn main() {
         .plugin(tauri_plugin_cache::init_with_config(cache_config))
         .setup(|app| {
             let app_handle = app.handle().clone();
+            
+            // Get the main window and navigate to remote URL after showing loading screen
+            if let Some(main_window) = app.get_webview_window("main") {
+                let window_clone = main_window.clone();
+                
+                // Spawn a task to navigate to the remote URL after initialization
+                std::thread::spawn(move || {
+                    // Wait for systems to initialize (500ms should be enough for a smooth transition)
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    
+                    // Navigate to the remote URL
+                    let _ = window_clone.eval("window.location.href = 'https://local.battles.app:3000/'");
+                });
+            }
+            
             start_monitor_broadcast(app_handle);
             Ok(())
         })

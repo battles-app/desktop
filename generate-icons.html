@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Generate Battles.app Icons</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #fff;
+    }
+    .instructions {
+      background: #2a2a2a;
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+    canvas {
+      border: 2px solid #444;
+      margin: 10px 0;
+      display: block;
+      background: white;
+    }
+    button {
+      background: #ee2b63;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 5px;
+    }
+    button:hover {
+      background: #d91d53;
+    }
+    .size-label {
+      font-weight: bold;
+      margin-top: 20px;
+      color: #e9b320;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎨 Battles.app Icon Generator</h1>
+  
+  <div class="instructions">
+    <h2>Instructions:</h2>
+    <ol>
+      <li>Click the buttons below to download PNG files at various sizes</li>
+      <li>Use an online tool like <a href="https://redketchup.io/icon-converter" target="_blank">RedKetchup</a> to convert PNGs to ICO and ICNS</li>
+      <li>Replace <code>favicon.ico</code> with the generated ICO file</li>
+      <li>For macOS, create <code>icon.icns</code> with the ICNS file</li>
+    </ol>
+  </div>
+
+  <div id="canvases"></div>
+
+  <script>
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 103.71 103.65">
+        <path d="M103.71,81.03v-19.5c0-2.13-1.73-3.86-3.86-3.86h-38.1c-2.26,0-4.09,1.83-4.09,4.09v37.66c0,2.33,1.89,4.22,4.22,4.22h19.22c12.49,0,22.62-10.13,22.62-22.62Z" fill="#ee2b63"/>
+        <path d="M81.09,0h-19.22C59.55,0,57.66,1.89,57.66,4.22v38.39c0,2.26,1.83,4.09,4.09,4.09h38.1c2.13,0,3.86-1.73,3.86-3.86v-20.22C103.71,10.13,93.59,0,81.09,0Z" fill="#fff"/>
+        <path d="M22.62,0C10.13,0,0,10.13,0,22.62v33.75h0v24.66C0,93.52,10.13,103.65,22.62,103.65h19.22c2.33,0,4.22-1.89,4.22-4.22V4.22c0-2.33-1.89-4.22-4.22-4.22h-19.22Z" fill="#e9b320"/>
+      </svg>
+    `
+
+    const sizes = [16, 32, 48, 64, 128, 256, 512, 1024]
+    const container = document.getElementById('canvases')
+
+    sizes.forEach(size => {
+      const div = document.createElement('div')
+      div.innerHTML = `<div class="size-label">${size}x${size}px</div>`
+      
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      
+      const ctx = canvas.getContext('2d')
+      const img = new Image()
+      
+      img.onload = () => {
+        ctx.fillStyle = 'white'
+        ctx.fillRect(0, 0, size, size)
+        ctx.drawImage(img, 0, 0, size, size)
+      }
+      
+      img.src = 'data:image/svg+xml;base64,' + btoa(svg)
+      
+      const button = document.createElement('button')
+      button.textContent = `Download ${size}x${size} PNG`
+      button.onclick = () => {
+        canvas.toBlob(blob => {
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `battles-icon-${size}x${size}.png`
+          a.click()
+          URL.revokeObjectURL(url)
+        })
+      }
+      
+      div.appendChild(canvas)
+      div.appendChild(button)
+      container.appendChild(div)
+    })
+  </script>
+</body>
+</html>
+
