@@ -890,7 +890,7 @@ impl GStreamerComposite {
                 }
 
                 self.pipeline = Some(test_pipeline);
-                return Ok(());
+                return Ok(test_pipeline);
             }
         }
 
