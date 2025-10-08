@@ -5,7 +5,6 @@ use wgpu::*;
 use wgpu::util::DeviceExt;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -33,6 +32,7 @@ struct Uniforms {
 }
 
 pub struct WgpuSurfaceRenderer {
+    _window: Arc<tauri::WebviewWindow>, // Keep window alive for surface lifetime
     surface: Surface<'static>,
     device: Device,
     queue: Queue,
@@ -62,9 +62,14 @@ impl WgpuSurfaceRenderer {
             ..Default::default()
         });
 
-        // Create surface from Tauri window
-        let surface = instance.create_surface(window.as_ref())
-            .map_err(|e| format!("Failed to create surface: {}", e))?;
+        // Create surface from Tauri window  
+        // SAFETY: We store the Arc<Window> in the struct to ensure it lives as long as the surface
+        let surface = unsafe {
+            instance.create_surface_unsafe(
+                wgpu::SurfaceTargetUnsafe::from_window(window.as_ref())
+                    .map_err(|e| format!("Failed to get surface target: {}", e))?
+            ).map_err(|e| format!("Failed to create surface: {}", e))?
+        };
 
         let adapter = match instance
             .request_adapter(&RequestAdapterOptions {
@@ -78,17 +83,14 @@ impl WgpuSurfaceRenderer {
             };
 
         let (device, queue) = adapter
-            .request_device(
-                &DeviceDescriptor {
-                    label: Some("WGPU Device"),
-                    required_features: Features::empty(),
-                    required_limits: Limits::default(),
-                    memory_hints: MemoryHints::Performance,
-                    experimental_features: Default::default(),
-                    trace: None,
-                },
-                None,
-            )
+            .request_device(&DeviceDescriptor {
+                label: Some("WGPU Surface Device"),
+                required_features: Features::empty(),
+                required_limits: Limits::default(),
+                memory_hints: MemoryHints::Performance,
+                experimental_features: Default::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .map_err(|e| format!("Failed to create device: {}", e))?;
 
@@ -195,7 +197,7 @@ impl WgpuSurfaceRenderer {
             layout: Some(&pipeline_layout),
             vertex: VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as BufferAddress,
                     step_mode: VertexStepMode::Vertex,
@@ -205,7 +207,7 @@ impl WgpuSurfaceRenderer {
             },
             fragment: Some(FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
                     format: config.format,
                     blend: Some(BlendState::REPLACE),
@@ -231,6 +233,7 @@ impl WgpuSurfaceRenderer {
         println!("[WGPU Surface] ✅ Direct surface renderer initialized");
 
         Ok(Self {
+            _window: window,
             surface,
             device,
             queue,

@@ -8,6 +8,7 @@ use parking_lot::RwLock;
 use wgpu::*;
 use wgpu::util::DeviceExt;
 use bytemuck::{Pod, Zeroable};
+use crate::wgpu_surface_renderer::WgpuSurfaceRenderer;
 
 // WGSL Chroma Key Shader Source
 const CHROMA_KEY_SHADER: &str = r#"
@@ -683,9 +684,9 @@ impl WgpuChromaRenderer {
 // GStreamer-based composite pipeline with WGPU chroma key integration
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
-    frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
+    frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>, // Keep for FX commands
     is_running: Arc<RwLock<bool>>,
-    wgpu_renderer: Option<Arc<parking_lot::Mutex<WgpuChromaRenderer>>>,
+    surface_renderer: Option<Arc<parking_lot::Mutex<WgpuSurfaceRenderer>>>, // Direct surface rendering!
     fx_appsrc: Option<AppSrc>,
     current_fx_file: Option<String>,
     current_chroma_params: Option<(String, f64, f64, bool)>,
@@ -702,11 +703,24 @@ impl GStreamerComposite {
             pipeline: None,
             frame_sender: Arc::new(RwLock::new(None)),
             is_running: Arc::new(RwLock::new(false)),
-            wgpu_renderer: None,
+            surface_renderer: None,
             fx_appsrc: None,
             current_fx_file: None,
             current_chroma_params: None,
         })
+    }
+
+    /// Initialize WGPU surface renderer with the Tauri window
+    pub fn set_window(&mut self, window: Arc<tauri::Window>, width: u32, height: u32) -> Result<(), String> {
+        println!("[Composite] 🖼️  Initializing WGPU surface renderer for direct window rendering...");
+        
+        let renderer = pollster::block_on(WgpuSurfaceRenderer::new(window, width, height))
+            .map_err(|e| format!("Failed to create surface renderer: {}", e))?;
+        
+        self.surface_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
+        
+        println!("[Composite] ✅ Surface renderer initialized - ready for ZERO-LATENCY rendering!");
+        Ok(())
     }
 
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
@@ -741,14 +755,9 @@ impl GStreamerComposite {
         // Clear the old pipeline reference
         self.pipeline = None;
         
-        // Initialize WGPU renderer if not already done
-        if self.wgpu_renderer.is_none() {
-            println!("[Composite] 🎨 Initializing WGPU renderer for GPU-accelerated chroma key...");
-            // Use pollster to block on async without creating nested runtime
-            let renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
-                .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
-            self.wgpu_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
-            println!("[Composite] ✅ WGPU renderer initialized");
+        // Surface renderer must be initialized before calling start()
+        if self.surface_renderer.is_none() {
+            return Err("Surface renderer not initialized. Call set_window() first.".to_string());
         }
 
         *self.is_running.write() = true;
@@ -834,7 +843,7 @@ impl GStreamerComposite {
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let wgpu_renderer = self.wgpu_renderer.clone();
+        let surface_renderer = self.surface_renderer.clone();
 
         // Use Arc<Mutex<>> instead of closure mutation for thread safety
         let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
@@ -890,39 +899,27 @@ impl GStreamerComposite {
                         println!("[Composite] 📡 Frame {} - WGPU rendering", *count);
                     }
 
-                    // WGPU processing with async triple-buffered readback
-                    let processed_frame = if let Some(renderer_arc) = &wgpu_renderer {
+                    // DIRECT SURFACE RENDERING - ZERO CPU/GPU READBACK!
+                    if let Some(renderer_arc) = &surface_renderer {
                         if let Some(mut renderer) = renderer_arc.try_lock() {
-                            // Upload and render (non-blocking)
+                            // Upload texture and render DIRECTLY to window surface
                             if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
-                                if let Ok(()) = renderer.render_frame_async() {
-                                    // Success! Now poll for old frame (~3 frames ago)
-                                    if let Some(gpu_frame) = renderer.poll_readback() {
-                                        if *count % 90 == 0 {
-                                            println!("[Composite] ✅ Frame {} GPU-processed (async)", *count);
-                                        }
-                                        gpu_frame
-                                    } else {
-                                        // No readback ready yet (first 3 frames), send raw
-                                        rgba_data.to_vec()
+                                if let Err(e) = renderer.render_to_surface() {
+                                    if *count % 90 == 0 {
+                                        println!("[Composite] ⚠️  Frame {} render failed: {}", *count, e);
                                     }
                                 } else {
-                                    rgba_data.to_vec()
+                                    // SUCCESS! Frame is now on screen!
+                                    if *count % 90 == 0 {
+                                        println!("[Composite] ✅ Frame {} → DIRECT TO SCREEN (zero-latency)", *count);
+                                    }
                                 }
-                            } else {
-                                rgba_data.to_vec()
                             }
-                        } else {
-                            rgba_data.to_vec()
                         }
-                    } else {
-                        rgba_data.to_vec()
-                    };
-
-                    // Broadcast GPU-processed frames
-                    if let Some(sender) = &*frame_sender.read() {
-                        let _ = sender.send(processed_frame);
                     }
+
+                    // No more WebSocket broadcasting! Video renders directly to window surface.
+                    // Keep frame_sender for FX commands only (not video frames)
 
                     Ok(gst::FlowSuccess::Ok)
                 })
@@ -1097,7 +1094,7 @@ impl GStreamerComposite {
 
     fn stop_fx_internal(&mut self) -> Result<(), String> {
         // Reset chroma key parameters
-        if let Some(renderer_arc) = &self.wgpu_renderer {
+        if let Some(renderer_arc) = &self.surface_renderer {
             if let Some(mut renderer) = renderer_arc.try_lock() {
                 renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
             }
@@ -1141,7 +1138,7 @@ impl GStreamerComposite {
         }
 
         self.pipeline = None;
-        self.wgpu_renderer = None;
+        self.surface_renderer = None;
         self.fx_appsrc = None;
 
         println!("[Composite] Composite pipeline stopped");

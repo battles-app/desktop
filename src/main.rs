@@ -730,10 +730,10 @@ async fn start_camera_websocket_server() {
     });
 }
 
-// Initialize composite system
+// Initialize composite system with window handle for direct rendering
 #[command]
-async fn initialize_composite_system() -> Result<String, String> {
-    println!("[Composite] Initializing composite system");
+async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: u32) -> Result<String, String> {
+    println!("[Composite] 🚀 Initializing composite system with DIRECT SURFACE RENDERING");
     
     // Only initialize once - check if already done
     {
@@ -745,15 +745,23 @@ async fn initialize_composite_system() -> Result<String, String> {
     } // Release lock before async operations
     
     // Initialize composite pipeline
-    let composite = GStreamerComposite::new()
+    let mut composite = GStreamerComposite::new()
         .map_err(|e| format!("Failed to initialize composite: {}", e))?;
+    
+    // Get the main window for direct surface rendering
+    let main_window = app.get_webview_window("main")
+        .ok_or("Failed to get main window".to_string())?;
+    
+    // Initialize WGPU surface renderer with window handle
+    composite.set_window(Arc::new(main_window), width, height)
+        .map_err(|e| format!("Failed to set window: {}", e))?;
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
     
-    // Create broadcast channel for composite frames
+    // Create broadcast channel for FX commands (NOT video frames!)
     let (tx, _rx) = broadcast::channel::<Vec<u8>>(2);
     
-    // Set frame sender in composite
+    // Set frame sender in composite (for FX only)
     if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
         comp.set_frame_sender(tx.clone());
     }
@@ -761,14 +769,12 @@ async fn initialize_composite_system() -> Result<String, String> {
     // Set sender before starting WebSocket to prevent multiple initializations
     *COMPOSITE_FRAME_SENDER.write() = Some(tx);
     
-    // Start WebSocket server (only if not already running)
+    // Start WebSocket server (ONLY for FX commands, NOT video frames!)
     start_composite_websocket_server().await;
 
-    // NOTE: System monitor disabled - it was calling emergency_cleanup() which killed pipelines
-    // start_system_monitor().await;
-
-    println!("[Composite] ✅ Composite system initialized on port {}", COMPOSITE_WS_PORT);
-    Ok(format!("Composite initialized - WebSocket on port {}", COMPOSITE_WS_PORT))
+    println!("[Composite] ✅ Composite system initialized with DIRECT SURFACE RENDERING!");
+    println!("[Composite] 💡 Video renders directly to window - ZERO WebSocket overhead!");
+    Ok("Composite initialized with direct surface rendering".to_string())
 }
 
 // WebSocket server for composite frames
