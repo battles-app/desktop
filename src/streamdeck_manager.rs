@@ -216,7 +216,8 @@ impl StreamDeckManager {
     
     /// Download image from Nuxt proxy and cache it (static method for thread safety)
     fn download_image_to_cache_sync(image_url: String, name: String, cache_path: std::path::PathBuf) {
-        let full_url = format!("https://local.battles.app:3000{}", image_url);
+        // image_url is already a full URL from the frontend (e.g., https://local.battles.app:3000/directus-assets/xxx)
+        println!("[Stream Deck] Downloading image from: {}", image_url);
         
         match reqwest::blocking::Client::builder()
             .danger_accept_invalid_certs(true)
@@ -226,7 +227,7 @@ impl StreamDeckManager {
             .build()
         {
             Ok(client) => {
-                match client.get(&full_url).send() {
+                match client.get(&image_url).send() {
                     Ok(mut response) if response.status().is_success() => {
                         // Read body with better error handling
                         let mut bytes = Vec::new();
