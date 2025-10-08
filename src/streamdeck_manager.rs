@@ -257,36 +257,43 @@ impl StreamDeckManager {
             return Err("No device connected".to_string());
         }
         
-        // Start downloading images in background with rate limiting (non-blocking)
+        // Download missing images BEFORE rendering (ensures images are ready)
         let cache_dir = std::env::temp_dir().join("battles_fx_cache");
         let _ = std::fs::create_dir_all(&cache_dir);
         
         let all_fx: Vec<FxButton> = battle_board.iter().chain(user_fx.iter()).cloned().collect();
+        let mut needs_download = Vec::new();
         
-        std::thread::spawn(move || {
-            for (i, fx) in all_fx.iter().enumerate() {
-                if let Some(ref image_url) = fx.image_url {
-                    let cache_filename = format!("{}.jpg", fx.name);
-                    let cache_path = cache_dir.join(&cache_filename);
-                    
-                    // Skip if already cached
-                    if cache_path.exists() {
-                        continue;
-                    }
-                    
-                    // Download with delay between requests to avoid overwhelming the server
-                    if i > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                    }
-                    
-                    Self::download_image_to_cache_sync(
-                        image_url.clone(),
-                        fx.name.clone(),
-                        cache_path
-                    );
+        for fx in &all_fx {
+            if let Some(ref image_url) = fx.image_url {
+                let cache_filename = format!("{}.jpg", fx.name);
+                let cache_path = cache_dir.join(&cache_filename);
+                
+                if !cache_path.exists() {
+                    needs_download.push((image_url.clone(), fx.name.clone(), cache_path));
                 }
             }
-        });
+        }
+        
+        // Download missing images synchronously (fast with rate limiting)
+        if !needs_download.is_empty() {
+            println!("[Stream Deck] Downloading {} missing images...", needs_download.len());
+            
+            for (i, (image_url, name, cache_path)) in needs_download.iter().enumerate() {
+                // Small delay between requests
+                if i > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                }
+                
+                Self::download_image_to_cache_sync(
+                    image_url.clone(),
+                    name.clone(),
+                    cache_path.clone()
+                );
+            }
+            
+            println!("[Stream Deck] ✅ Image download complete, rendering layout...");
+        }
         
         println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
         
