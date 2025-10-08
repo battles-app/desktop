@@ -799,10 +799,10 @@ impl GStreamerComposite {
                      mfvideosrc device-path=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! videoscale ! \
-                     video/x-raw,format=RGBA,width={},height={} ! \
+                     video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
                      queue leaky=downstream max-size-buffers=1 ! \
                      comp.sink_0",
-                    width, height, escaped_path, width, height
+                    width, height, escaped_path, width, height, fps
                 )
             } else {
                 // With rotation - compositor pipeline with fixed output size
@@ -817,12 +817,12 @@ impl GStreamerComposite {
                      mfvideosrc device-path=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! videoscale ! \
-                     video/x-raw,width={},height={} ! \
+                     video/x-raw,width={},height={},framerate={}/1 ! \
                      videoflip method={} ! \
                      videoconvert ! video/x-raw,format=RGBA ! \
                      queue leaky=downstream max-size-buffers=1 ! \
                      comp.sink_0",
-                    width, height, escaped_path, pre_rotation_width, pre_rotation_height, flip_method
+                    width, height, escaped_path, pre_rotation_width, pre_rotation_height, fps, flip_method
                 )
             }
         } else {
