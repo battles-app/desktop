@@ -684,9 +684,9 @@ impl WgpuChromaRenderer {
 // GStreamer-based composite pipeline with WGPU chroma key integration
 pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
-    frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>, // Keep for FX commands
+    frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     is_running: Arc<RwLock<bool>>,
-    surface_renderer: Option<Arc<parking_lot::Mutex<WgpuSurfaceRenderer>>>, // Direct surface rendering!
+    wgpu_renderer: Option<Arc<parking_lot::Mutex<WgpuChromaRenderer>>>, // Back to working chroma renderer
     fx_appsrc: Option<AppSrc>,
     current_fx_file: Option<String>,
     current_chroma_params: Option<(String, f64, f64, bool)>,
@@ -703,24 +703,11 @@ impl GStreamerComposite {
             pipeline: None,
             frame_sender: Arc::new(RwLock::new(None)),
             is_running: Arc::new(RwLock::new(false)),
-            surface_renderer: None,
+            wgpu_renderer: None,
             fx_appsrc: None,
             current_fx_file: None,
             current_chroma_params: None,
         })
-    }
-
-    /// Initialize WGPU surface renderer with the Tauri window
-    pub fn set_window(&mut self, window: Arc<tauri::WebviewWindow>, width: u32, height: u32) -> Result<(), String> {
-        println!("[Composite] 🖼️  Initializing WGPU surface renderer for direct window rendering...");
-        
-        let renderer = pollster::block_on(WgpuSurfaceRenderer::new(window, width, height))
-            .map_err(|e| format!("Failed to create surface renderer: {}", e))?;
-        
-        self.surface_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
-        
-        println!("[Composite] ✅ Surface renderer initialized - ready for ZERO-LATENCY rendering!");
-        Ok(())
     }
 
     pub fn set_frame_sender(&self, sender: broadcast::Sender<Vec<u8>>) {
@@ -755,9 +742,13 @@ impl GStreamerComposite {
         // Clear the old pipeline reference
         self.pipeline = None;
         
-        // Surface renderer must be initialized before calling start()
-        if self.surface_renderer.is_none() {
-            return Err("Surface renderer not initialized. Call set_window() first.".to_string());
+        // Initialize WGPU renderer if not already done
+        if self.wgpu_renderer.is_none() {
+            println!("[Composite] 🎨 Initializing WGPU renderer for GPU-accelerated chroma key...");
+            let renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
+                .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
+            self.wgpu_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
+            println!("[Composite] ✅ WGPU renderer initialized (using optimized async readback)");
         }
 
         *self.is_running.write() = true;
@@ -841,9 +832,9 @@ impl GStreamerComposite {
             .dynamic_cast::<AppSink>()
             .map_err(|_| "Failed to cast to AppSink")?;
 
-        let _frame_sender = self.frame_sender.clone(); // Keep for FX commands
+        let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let surface_renderer = self.surface_renderer.clone();
+        let wgpu_renderer = self.wgpu_renderer.clone();
 
         // Use Arc<Mutex<>> instead of closure mutation for thread safety
         let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));

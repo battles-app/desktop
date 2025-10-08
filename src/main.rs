@@ -748,13 +748,11 @@ async fn initialize_composite_system(app: tauri::AppHandle, width: u32, height: 
     let mut composite = GStreamerComposite::new()
         .map_err(|e| format!("Failed to initialize composite: {}", e))?;
     
-    // Get the main window for direct surface rendering
-    let main_window = app.get_webview_window("main")
-        .ok_or("Failed to get main window".to_string())?;
-    
-    // Initialize WGPU surface renderer with window handle
-    composite.set_window(Arc::new(main_window), width, height)
-        .map_err(|e| format!("Failed to set window: {}", e))?;
+    // Initialize WGPU renderer (no surface - use canvas path)
+    // Note: Direct surface rendering doesn't work with Tauri's WebView
+    // This approach still gives us GPU-accelerated chroma key + fast canvas rendering
+    composite.initialize_renderer(width, height)
+        .map_err(|e| format!("Failed to initialize renderer: {}", e))?;
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
     
