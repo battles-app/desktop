@@ -613,7 +613,7 @@ fn start_monitor_broadcast(_app: tauri::AppHandle) {
 // Check if TV monitor window is open
 #[command]
 async fn check_tv_monitor_window(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let window = app.get_window("tv-monitor");
+    let window = app.get_webview_window("tv-monitor");
 
     match window {
         Some(w) => {
@@ -630,7 +630,7 @@ async fn check_tv_monitor_window(app: tauri::AppHandle) -> Result<serde_json::Va
 // Close TV monitor window (completely destroy it)
 #[command]
 async fn close_tv_monitor_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_window("tv-monitor") {
+    if let Some(window) = app.get_webview_window("tv-monitor") {
         window.close().map_err(|e| format!("Failed to close window: {}", e))?;
         println!("TV monitor window closed and destroyed");
     } else {
@@ -674,16 +674,19 @@ async fn create_monitor_window(
     println!("Logical coordinates: position=({}, {}), size={}x{}",
              logical_x, logical_y, logical_width, logical_height);
 
-    // Close any existing TV monitor window first
-    if let Some(existing_window) = app.get_window("tv-monitor") {
+    // Close any existing TV monitor window first (Tauri v2 API)
+    if let Some(existing_window) = app.get_webview_window("tv-monitor") {
         println!("Destroying existing TV monitor window before creating new one");
         let destroy_result = existing_window.destroy();
         match destroy_result {
-            Ok(_) => println!("Window destroyed successfully"),
-            Err(e) => println!("Failed to destroy window: {}", e),
+            Ok(_) => println!("✅ Existing window destroyed successfully"),
+            Err(e) => println!("❌ Failed to destroy window: {}", e),
         }
-        // Add a small delay to ensure destruction completes
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Add a delay to ensure destruction completes before creating new window
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        println!("Proceeding to create new window...");
+    } else {
+        println!("No existing tv-monitor window found, proceeding with creation");
     }
 
     // Create a borderless fullscreen window on the selected monitor
@@ -767,8 +770,8 @@ async fn create_monitor_window(
 async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
     println!("Creating regular window: 1080x640 at center-right position with direct URL");
 
-    // Close any existing TV monitor window first
-    if let Some(existing_window) = app.get_window("tv-monitor") {
+    // Close any existing TV monitor window first (Tauri v2 API)
+    if let Some(existing_window) = app.get_webview_window("tv-monitor") {
         println!("Destroying existing TV monitor window before creating regular window");
         let destroy_result = existing_window.destroy();
         match destroy_result {
