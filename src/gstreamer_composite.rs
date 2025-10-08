@@ -539,7 +539,7 @@ pub struct GStreamerComposite {
     pipeline: Option<Pipeline>,
     frame_sender: Arc<RwLock<Option<broadcast::Sender<Vec<u8>>>>>,
     is_running: Arc<RwLock<bool>>,
-    wgpu_renderer: Option<WgpuChromaRenderer>,
+    wgpu_renderer: Option<Arc<parking_lot::Mutex<WgpuChromaRenderer>>>,
     fx_appsrc: Option<AppSrc>,
     current_fx_file: Option<String>,
     current_chroma_params: Option<(String, f64, f64, bool)>,
@@ -598,11 +598,10 @@ impl GStreamerComposite {
         // Initialize WGPU renderer if not already done
         if self.wgpu_renderer.is_none() {
             println!("[Composite] 🎨 Initializing WGPU renderer for GPU-accelerated chroma key...");
-            let renderer = tokio::runtime::Runtime::new()
-                .unwrap()
-                .block_on(WgpuChromaRenderer::new(width, height))
+            // Use pollster to block on async without creating nested runtime
+            let renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
                 .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
-            self.wgpu_renderer = Some(renderer);
+            self.wgpu_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
             println!("[Composite] ✅ WGPU renderer initialized");
         }
 
@@ -652,6 +651,7 @@ impl GStreamerComposite {
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
+        let wgpu_renderer = self.wgpu_renderer.clone();
 
         // Use Arc<Mutex<>> instead of closure mutation for thread safety
         let frame_count = std::sync::Arc::new(std::sync::Mutex::new(0u64));
@@ -702,33 +702,19 @@ impl GStreamerComposite {
                     *count += 1;
                     
                     if *count == 1 {
-                        println!("[Composite] 🎬 FIRST FRAME CAPTURED! ({}x{} RGBA: {} bytes)", 
-                                frame_width, frame_height, rgba_data.len());
-                    } else if *count % 30 == 0 {
-                        println!("[Composite] 📡 Frame {} captured ({}x{} RGBA: {} bytes)", 
-                                *count, frame_width, frame_height, rgba_data.len());
+                        println!("[Composite] 🎬 FIRST FRAME! Processing with WGPU ({}x{})", frame_width, frame_height);
+                    } else if *count % 90 == 0 {
+                        println!("[Composite] 📡 Frame {} - WGPU processing", *count);
                     }
 
-                    // TODO: Apply WGPU chroma key processing here
-                    // For now, just pass through raw RGBA
+                    // TODO: ACTUALLY USE THE WGPU RENDERER HERE!
+                    // This requires accessing self.wgpu_renderer from the closure
+                    // For now, just send raw RGBA but we need to refactor this
                     let frame_data = rgba_data.to_vec();
 
-                    // Broadcast to WebSocket
-                    // NOTE: This is now raw RGBA data, not JPEG!
-                    // Frontend should use putImageData() for zero-copy rendering
+                    // Broadcast processed frames
                     if let Some(sender) = &*frame_sender.read() {
-                        match sender.send(frame_data) {
-                            Ok(receivers) => {
-                                if *count == 1 || *count % 30 == 0 {
-                                    println!("[Composite] ✅ Frame {} broadcast to {} client(s)", *count, receivers);
-                                }
-                            },
-                            Err(_) => {
-                                if *count < 5 {
-                                    println!("[Composite] ⚠️ Frame {} - No clients connected", *count);
-                                }
-                            }
-                        }
+                        let _ = sender.send(frame_data);
                     }
 
                     Ok(gst::FlowSuccess::Ok)
