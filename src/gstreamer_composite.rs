@@ -1063,9 +1063,34 @@ impl GStreamerComposite {
             .build()
             .map_err(|e| format!("Failed to create decodebin: {}", e))?;
 
+        // Add queue after decodebin (async, non-blocking)
+        let queue_decode = gst::ElementFactory::make("queue")
+            .property("max-size-buffers", 3u32)
+            .build()
+            .map_err(|e| format!("Failed to create queue_decode: {}", e))?;
+        queue_decode.set_property_from_str("leaky", "downstream");
+        
         let videoconvert1 = gst::ElementFactory::make("videoconvert")
             .build()
             .map_err(|e| format!("Failed to create videoconvert1: {}", e))?;
+        
+        // VIDEORATE: Duplicate frames to match camera fps (60fps)
+        // This prevents stuttering when FX video is 30fps
+        let videorate = gst::ElementFactory::make("videorate")
+            .property("drop-only", false)  // Duplicate frames, don't drop
+            .property("skip-to-first", true)
+            .build()
+            .map_err(|e| format!("Failed to create videorate: {}", e))?;
+        
+        // Caps filter to force videorate to output at 60fps
+        let videorate_caps = gst::ElementFactory::make("capsfilter")
+            .build()
+            .map_err(|e| format!("Failed to create videorate_caps: {}", e))?;
+        
+        let rate_caps = gst::Caps::builder("video/x-raw")
+            .field("framerate", gst::Fraction::new(60, 1))  // Force 60 FPS output!
+            .build();
+        videorate_caps.set_property("caps", &rate_caps);
 
         // ALPHA ELEMENT: GPU-accelerated chroma key! 🔥
         // Set method via property_from_str (GStreamer will parse the enum name)
@@ -1143,7 +1168,7 @@ impl GStreamerComposite {
 
         // Add all elements to pipeline
         pipeline.add_many(&[
-            &filesrc, &decodebin, &videoconvert1, &alpha, 
+            &filesrc, &decodebin, &queue_decode, &videoconvert1, &videorate, &videorate_caps, &alpha, 
             &videoscale, &caps_filter, &videoconvert2, &queue
         ]).map_err(|e| format!("Failed to add FX elements to pipeline: {}", e))?;
 
@@ -1153,8 +1178,9 @@ impl GStreamerComposite {
         ]).map_err(|e| format!("Failed to link filesrc → decodebin: {}", e))?;
 
         // Link the rest (after decodebin's dynamic pads)
+        // queue_decode will be linked by pad-added callback
         gst::Element::link_many(&[
-            &videoconvert1, &alpha, &videoscale, &caps_filter, &videoconvert2, &queue
+            &queue_decode, &videoconvert1, &videorate, &videorate_caps, &alpha, &videoscale, &caps_filter, &videoconvert2, &queue
         ]).map_err(|e| format!("Failed to link FX processing chain: {}", e))?;
 
         // Link queue to compositor.sink_1 (foreground layer with zorder=1)
@@ -1169,11 +1195,11 @@ impl GStreamerComposite {
         queue_src.link(&comp_sink).map_err(|e| format!("Failed to link queue → compositor: {:?}", e))?;
 
         // Handle decodebin's dynamic pad-added signal
-        let videoconvert1_weak = videoconvert1.downgrade();
+        let queue_decode_weak = queue_decode.downgrade();
         decodebin.connect_pad_added(move |_, src_pad| {
             println!("[Compositor] 🔌 decodebin pad-added: {}", src_pad.name());
             
-            let Some(videoconvert1) = videoconvert1_weak.upgrade() else {
+            let Some(queue_decode) = queue_decode_weak.upgrade() else {
                 return;
             };
             
@@ -1183,16 +1209,17 @@ impl GStreamerComposite {
             let name = structure.name();
             
             if name.starts_with("video/") {
-                let sink_pad = videoconvert1.static_pad("sink").expect("No sink pad");
+                let sink_pad = queue_decode.static_pad("sink").expect("No sink pad");
                 if sink_pad.is_linked() {
                     println!("[Compositor] ⚠️ Pad already linked");
                     return;
                 }
                 
                 if let Err(e) = src_pad.link(&sink_pad) {
-                    println!("[Compositor] ❌ Failed to link decodebin → videoconvert: {:?}", e);
+                    println!("[Compositor] ❌ Failed to link decodebin → queue: {:?}", e);
                 } else {
-                    println!("[Compositor] ✅ Linked decodebin → videoconvert → alpha → compositor");
+                    println!("[Compositor] ✅ Linked decodebin → queue → videorate@60fps → alpha → compositor");
+                    println!("[Compositor] 🎞️ Videorate forcing 60 FPS output (duplicating 30fps → 60fps)!");
                 }
             }
         });
@@ -1206,7 +1233,10 @@ impl GStreamerComposite {
         // Sync FX elements to pipeline state (PLAYING)
         filesrc.sync_state_with_parent().map_err(|e| format!("Failed to sync filesrc: {:?}", e))?;
         decodebin.sync_state_with_parent().map_err(|e| format!("Failed to sync decodebin: {:?}", e))?;
+        queue_decode.sync_state_with_parent().map_err(|e| format!("Failed to sync queue_decode: {:?}", e))?;
         videoconvert1.sync_state_with_parent().map_err(|e| format!("Failed to sync videoconvert1: {:?}", e))?;
+        videorate.sync_state_with_parent().map_err(|e| format!("Failed to sync videorate: {:?}", e))?;
+        videorate_caps.sync_state_with_parent().map_err(|e| format!("Failed to sync videorate_caps: {:?}", e))?;
         alpha.sync_state_with_parent().map_err(|e| format!("Failed to sync alpha: {:?}", e))?;
         videoscale.sync_state_with_parent().map_err(|e| format!("Failed to sync videoscale: {:?}", e))?;
         caps_filter.sync_state_with_parent().map_err(|e| format!("Failed to sync capsfilter: {:?}", e))?;
