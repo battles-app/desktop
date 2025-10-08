@@ -813,12 +813,7 @@ async fn start_composite_websocket_server() {
                 // Subscribe to composite frames (receiver stays alive for entire connection)
                 let mut rx = tx.subscribe();
                 let mut frame_count = 0u64;
-                let mut sent_count = 0u64;
                 let start_time = std::time::Instant::now();
-                let mut last_send_time = std::time::Instant::now();
-                
-                // Throttle: only send frames at ~30 FPS max (even if producing faster)
-                let frame_interval = std::time::Duration::from_millis(33); // ~30 FPS
 
                 loop {
                     // Non-blocking check for client messages (for graceful disconnect)
@@ -829,34 +824,24 @@ async fn start_composite_websocket_server() {
                                 Ok(frame_data) => {
                                     frame_count += 1;
                                     
-                                    // Throttle: only send if enough time has passed
-                                    let now = std::time::Instant::now();
-                                    if now.duration_since(last_send_time) >= frame_interval {
-                                        sent_count += 1;
-                                        
-                                        // Log every 30 sent frames
-                                        if sent_count % 30 == 0 {
-                                            let elapsed = start_time.elapsed().as_secs_f64();
-                                            let receive_fps = frame_count as f64 / elapsed;
-                                            let send_fps = sent_count as f64 / elapsed;
-                                            println!("[Composite WS] 📡 Frame {} sent ({} bytes) | Receive: {:.1} fps | Send: {:.1} fps", 
-                                                sent_count, frame_data.len(), receive_fps, send_fps);
-                                        }
-                                        
-                                        if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                                            println!("[Composite WS] ❌ Client disconnected after {} frames", sent_count);
-                                            break;
-                                        }
-                                        
-                                        last_send_time = now;
+                                    // Send EVERY frame (no throttling!)
+                                    // Log every 60 frames (2 seconds at 30fps)
+                                    if frame_count % 60 == 0 {
+                                        let elapsed = start_time.elapsed().as_secs_f64();
+                                        let fps = frame_count as f64 / elapsed;
+                                        println!("[Composite WS] 📡 Frame {} sent ({} bytes) | FPS: {:.1}", 
+                                            frame_count, frame_data.len(), fps);
                                     }
-                                    // else: skip frame (throttled)
+                                    
+                                    // Send immediately (WebSocket handles backpressure)
+                                    if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
+                                        println!("[Composite WS] ❌ Client disconnected after {} frames", frame_count);
+                                        break;
+                                    }
                                 },
                                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                                    // This is expected with throttling - backend produces faster than we send
-                                    if skipped > 10 {
-                                        println!("[Composite WS] ⚠️ Lagged behind, skipped {} frames (throttled)", skipped);
-                                    }
+                                    // Only warn if significant lag (shouldn't happen without throttling)
+                                    println!("[Composite WS] ⚠️ Lagged behind, skipped {} frames (backend producing too fast!)", skipped);
                                     continue;
                                 },
                                 Err(broadcast::error::RecvError::Closed) => {
@@ -875,7 +860,7 @@ async fn start_composite_websocket_server() {
                     }
                 }
                 
-                println!("[Composite WS] 🔌 Client disconnected (received: {}, sent: {})", frame_count, sent_count);
+                println!("[Composite WS] 🔌 Client disconnected (sent {} frames)", frame_count);
             });
         }
     });
