@@ -1076,18 +1076,18 @@ impl GStreamerComposite {
         // Map tolerance and similarity to alpha element parameters
         // tolerance (0.0-1.0) → angle (0-180 degrees)
         //   Higher tolerance = larger angle = more aggressive removal
-        let angle = (tolerance * 100.0).clamp(10.0, 70.0);  // 10-70 degrees range
+        let angle = (tolerance * 100.0).clamp(10.0, 70.0) as f32;  // 10-70 degrees range
         
         // similarity (0.0-1.0) → noise-level (0-255)
         //   Higher similarity = higher noise-level = smoother edges
-        let noise_level = (similarity * 30.0).clamp(1.0, 10.0) as u32;  // 1-10 range
+        let noise_level = (similarity * 30.0).clamp(1.0, 10.0) as f32;  // 1-10 range
 
         println!("[Compositor] 🎨 Chroma key params: angle={} (tolerance={}), noise-level={} (similarity={})", 
             angle, tolerance, noise_level, similarity);
 
-        // Set alpha properties
-        alpha.set_property("angle", angle as u32);  // How far from key color to remove
-        alpha.set_property("noise-level", noise_level);  // Edge smoothness
+        // Set alpha properties with correct types (all floats!)
+        alpha.set_property("angle", angle);  // gfloat: How far from key color to remove
+        alpha.set_property("noise-level", noise_level);  // gfloat: Edge smoothness
         
         // Parse key color (default to green #00ff00)
         let (target_r, target_g, target_b) = if keycolor.starts_with('#') {
@@ -1096,17 +1096,17 @@ impl GStreamerComposite {
                 let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
                 let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
                 let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-                (r as i32, g as i32, b as i32)
+                (r as u32, g as u32, b as u32)
             } else {
-                (0, 255, 0)
+                (0u32, 255u32, 0u32)
             }
         } else {
-            (0, 255, 0)
+            (0u32, 255u32, 0u32)
         };
         
-        alpha.set_property("target-r", target_r);
-        alpha.set_property("target-g", target_g);
-        alpha.set_property("target-b", target_b);
+        alpha.set_property("target-r", target_r);  // guint (u32)
+        alpha.set_property("target-g", target_g);  // guint (u32)
+        alpha.set_property("target-b", target_b);  // guint (u32)
         
         println!("[Compositor] 🎨 Key color: RGB({}, {}, {})", target_r, target_g, target_b);
 
@@ -1131,10 +1131,12 @@ impl GStreamerComposite {
             .map_err(|e| format!("Failed to create videoconvert2: {}", e))?;
 
         let queue = gst::ElementFactory::make("queue")
-            .property("leaky", "downstream")
             .property("max-size-buffers", 1u32)
             .build()
             .map_err(|e| format!("Failed to create queue: {}", e))?;
+        
+        // Set leaky using set_property_from_str (GstQueueLeaky enum)
+        queue.set_property_from_str("leaky", "downstream");  // downstream: drop old buffers
 
         // Add all elements to pipeline
         pipeline.add_many(&[
