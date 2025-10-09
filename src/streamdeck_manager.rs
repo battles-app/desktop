@@ -81,14 +81,14 @@ impl StreamDeckManager {
         
         self.device = Some(device);
         self.is_connected = true;
+        self.loading_animation_active = true; // Start animation
 
-        // Play loading animation BEFORE clearing
-        println!("[Stream Deck] 🎬 Playing loading animation...");
+        // Play INITIAL loading animation (one cycle)
+        println!("[Stream Deck] 🎬 Starting loading animation...");
         let _ = self.play_loading_animation();
-
-        // Clear all buttons AFTER animation
-        println!("[Stream Deck] 🧹 Clearing buttons after animation...");
-        let _ = self.clear_all_buttons();
+        
+        // Animation will continue looping in the background thread
+        println!("[Stream Deck] 🔄 Animation will loop until FX loaded...");
 
         Ok(info)
     }
@@ -196,8 +196,59 @@ impl StreamDeckManager {
         )
     }
     
-    /// Play a loading animation with gradient wave and appearing text
-    fn play_loading_animation(&mut self) -> Result<(), String> {
+    /// Create logo button image (first button)
+    fn create_logo_button(&self, frame: usize) -> Result<image::DynamicImage, String> {
+        let size = self.get_button_size();
+        let mut img = RgbaImage::new(size, size);
+        
+        // Dark gradient background (matches animation)
+        let wave_offset = frame as f32 * 8.0;
+        let hue = (wave_offset % 360.0);
+        let (r, g, b) = Self::hsv_to_rgb(hue, 0.3, 0.2);
+        draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), Rgba([r, g, b, 255]));
+        
+        // Draw simplified logo (3 colored squares representing the logo)
+        let square_size = (size as f32 * 0.25) as u32;
+        let spacing = (size as f32 * 0.05) as i32;
+        
+        // Pink square (top)
+        let pink = Rgba([238, 43, 99, 255]);
+        draw_filled_rect_mut(&mut img, 
+            Rect::at((size as i32 - square_size as i32) / 2, spacing)
+                .of_size(square_size, square_size), 
+            pink);
+        
+        // White square (middle-right)
+        let white = Rgba([255, 255, 255, 255]);
+        draw_filled_rect_mut(&mut img, 
+            Rect::at((size as i32 / 2) + spacing, (size as i32 / 2) - (square_size as i32 / 2))
+                .of_size(square_size, square_size), 
+            white);
+        
+        // Yellow square (bottom-left)
+        let yellow = Rgba([233, 179, 32, 255]);
+        draw_filled_rect_mut(&mut img, 
+            Rect::at((size as i32 / 2) - square_size as i32 - spacing, size as i32 - square_size as i32 - spacing)
+                .of_size(square_size, square_size), 
+            yellow);
+        
+        Ok(image::DynamicImage::ImageRgba8(img))
+    }
+    
+    /// Check if loading animation should continue
+    pub fn is_loading_animation_active(&self) -> bool {
+        self.loading_animation_active
+    }
+    
+    /// Stop loading animation (called when FX buttons are loaded)
+    pub fn stop_loading_animation(&mut self) {
+        self.loading_animation_active = false;
+        println!("[Stream Deck] 🛑 Stopping loading animation");
+    }
+    
+    /// Play a loading animation with dark gradient wave and brand-colored text
+    /// Shows "BATTLES" first, then "LOADING", with continuous background until loaded
+    pub fn play_loading_animation(&mut self) -> Result<(), String> {
         if self.device.is_none() {
             return Err("No device connected".to_string());
         }
@@ -215,60 +266,113 @@ impl StreamDeckManager {
             None => return Err("Unknown device type".to_string()),
         };
         
-        let text_row_1 = "BATTLES";
-        let text_row_2 = "LOADING";
-        let max_letters = text_row_1.len().max(text_row_2.len());
+        let text_battles = "BATTLES";
+        let text_loading = "LOADING";
         
-        // Animation: 3 frames per letter + 10 extra frames for full wave effect
-        let total_frames = (max_letters * 3) + 10;
+        // Logo colors: Pink (#ee2b63), White (#fff), Yellow (#e9b320)
+        let logo_colors = [
+            Rgba([238, 43, 99, 255]),   // Pink/Red
+            Rgba([255, 255, 255, 255]), // White
+            Rgba([233, 179, 32, 255]),  // Yellow
+        ];
         
         let font_data = include_bytes!("../assets/DejaVuSans.ttf");
         let font = FontRef::try_from_slice(font_data)
             .map_err(|e| format!("Failed to load font: {:?}", e))?;
         
+        // Phase 1: Show logo + "BATTLES" (3 frames per letter)
+        let battles_frames = text_battles.len() * 3;
+        // Phase 2: Show logo + "LOADING" (3 frames per letter)
+        let loading_frames = text_loading.len() * 3;
+        // Phase 3: Hold both visible (5 frames before looping)
+        let hold_frames = 5;
+        
+        let total_frames = battles_frames + loading_frames + hold_frames;
+        
         for frame in 0..total_frames {
             let mut images = Vec::new();
             
-            // How many letters to show (one letter appears every 3 frames)
-            let letters_visible = (frame / 3).min(max_letters);
+            // Calculate which phase we're in
+            let battles_visible = if frame < battles_frames {
+                (frame / 3).min(text_battles.len())
+            } else {
+                text_battles.len()
+            };
+            
+            let loading_visible = if frame >= battles_frames {
+                ((frame - battles_frames) / 3).min(text_loading.len())
+            } else {
+                0
+            };
             
             for button_idx in 0..button_count {
                 let row = button_idx / cols;
                 let col = button_idx % cols;
                 
-                // Create gradient background (wave effect across all keys)
+                // FIRST BUTTON: Show logo
+                if button_idx == 0 {
+                    if let Ok(logo_img) = self.create_logo_button(frame) {
+                        images.push(logo_img);
+                        continue;
+                    }
+                }
+                
+                // Create DARK gradient background (matching app's dark theme)
                 let mut img = RgbaImage::new(size, size);
                 
-                // Animated gradient wave (moving diagonally)
-                let wave_offset = frame as f32 * 10.0;
-                let position_factor = (col as f32 + row as f32) * 30.0;
-                let hue = ((position_factor + wave_offset) % 360.0) / 360.0 * 360.0;
-                let (r, g, b) = Self::hsv_to_rgb(hue, 0.8, 0.6);
+                // Animated dark gradient wave (slower, more subtle)
+                let wave_offset = frame as f32 * 8.0;
+                let position_factor = (col as f32 + row as f32) * 25.0;
+                let hue = ((position_factor + wave_offset) % 360.0);
+                
+                // Dark gradient: low saturation, low value for dark background
+                let (r, g, b) = Self::hsv_to_rgb(hue, 0.3, 0.2);
                 let bg_color = Rgba([r, g, b, 255]);
                 
                 draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
                 
-                // Draw text letters (white) on specific rows
-                let should_show_text_1 = row == 1 && col < text_row_1.len() && col < letters_visible;
-                let should_show_text_2 = row == 2 && col < text_row_2.len() && col < letters_visible;
+                // Draw "BATTLES" on row 1 (starting from col 1 since col 0 is logo)
+                // Adjust column index for text (shift by 1 to account for logo)
+                let text_col = if col > 0 { col - 1 } else { col };
+                let should_show_battles = row == 1 && col > 0 && text_col < text_battles.len() && text_col < battles_visible;
                 
-                if should_show_text_1 || should_show_text_2 {
-                    let letter = if should_show_text_1 {
-                        text_row_1.chars().nth(col).unwrap()
+                // Draw "LOADING" on row 2 (with logo colors)
+                let should_show_loading = row == 2 && col < text_loading.len() && col < loading_visible;
+                
+                if should_show_battles || should_show_loading {
+                    let (letter, color_idx) = if should_show_battles {
+                        (text_battles.chars().nth(text_col).unwrap(), text_col % logo_colors.len())
                     } else {
-                        text_row_2.chars().nth(col).unwrap()
+                        (text_loading.chars().nth(col).unwrap(), col % logo_colors.len())
                     };
                     
-                    // Large, centered white text
-                    let scale = PxScale::from((size as f32 * 0.5).max(40.0));
+                    // LARGE, BOLD, CENTERED text
+                    let scale = PxScale::from((size as f32 * 0.65).max(50.0));
                     let letter_str = letter.to_string();
-                    let text_color = Rgba([255, 255, 255, 255]);
+                    let text_color = logo_colors[color_idx];
                     
-                    // Center the letter
-                    let text_x = (size as f32 * 0.25) as i32;
-                    let text_y = (size as f32 * 0.25) as i32;
+                    // Calculate center position for the letter
+                    // Approximate letter width (rough estimate for centering)
+                    let estimated_letter_width = scale.x * 0.6;
+                    let estimated_letter_height = scale.y;
                     
-                    draw_text_mut(&mut img, text_color, text_x, text_y, scale, &font, &letter_str);
+                    let text_x = ((size as f32 - estimated_letter_width) / 2.0) as i32;
+                    let text_y = ((size as f32 - estimated_letter_height) / 2.0) as i32;
+                    
+                    // Draw letter multiple times for BOLD effect
+                    for offset_x in 0..2 {
+                        for offset_y in 0..2 {
+                            draw_text_mut(
+                                &mut img, 
+                                text_color, 
+                                text_x + offset_x, 
+                                text_y + offset_y, 
+                                scale, 
+                                &font, 
+                                &letter_str
+                            );
+                        }
+                    }
                 }
                 
                 images.push(image::DynamicImage::ImageRgba8(img));
@@ -290,8 +394,115 @@ impl StreamDeckManager {
         Ok(())
     }
     
+    /// Keep the gradient background animating (call from watcher until FX loaded)
+    /// This loops infinitely showing logo + "BATTLES LOADING"
+    pub fn continue_loading_background(&mut self, frame: usize) -> Result<(), String> {
+        if self.device.is_none() || !self.loading_animation_active {
+            return Err("No device or animation stopped".to_string());
+        }
+        
+        let size = self.get_button_size();
+        let button_count = self.button_count();
+        
+        let (cols, rows) = match self.device_kind {
+            Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) | Some(Kind::Mk2Scissor) => (5, 3),
+            Some(Kind::Mini) | Some(Kind::MiniMk2) => (3, 2),
+            Some(Kind::Xl) | Some(Kind::XlV2) => (8, 4),
+            Some(Kind::Plus) | Some(Kind::Neo) => (4, 2),
+            Some(Kind::Pedal) => (3, 1),
+            None => return Err("Unknown device type".to_string()),
+        };
+        
+        let text_battles = "BATTLES";
+        let text_loading = "LOADING";
+        
+        let logo_colors = [
+            Rgba([238, 43, 99, 255]),   // Pink
+            Rgba([255, 255, 255, 255]), // White
+            Rgba([233, 179, 32, 255]),  // Yellow
+        ];
+        
+        let font_data = include_bytes!("../assets/DejaVuSans.ttf");
+        let font = FontRef::try_from_slice(font_data)
+            .map_err(|e| format!("Failed to load font: {:?}", e))?;
+        
+        let mut images = Vec::new();
+        
+        for button_idx in 0..button_count {
+            let row = button_idx / cols;
+            let col = button_idx % cols;
+            
+            // FIRST BUTTON: Show animated logo
+            if button_idx == 0 {
+                if let Ok(logo_img) = self.create_logo_button(frame) {
+                    images.push(logo_img);
+                    continue;
+                }
+            }
+            
+            let mut img = RgbaImage::new(size, size);
+            
+            // Continuous dark gradient animation
+            let wave_offset = frame as f32 * 8.0;
+            let position_factor = (col as f32 + row as f32) * 25.0;
+            let hue = ((position_factor + wave_offset) % 360.0);
+            let (r, g, b) = Self::hsv_to_rgb(hue, 0.3, 0.2);
+            
+            draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), Rgba([r, g, b, 255]));
+            
+            // Keep text visible (adjust for logo taking first button)
+            let text_col = if col > 0 { col - 1 } else { col };
+            let should_show_battles = row == 1 && col > 0 && text_col < text_battles.len();
+            let should_show_loading = row == 2 && col < text_loading.len();
+            
+            if should_show_battles || should_show_loading {
+                let (letter, color_idx) = if should_show_battles {
+                    (text_battles.chars().nth(text_col).unwrap(), text_col % logo_colors.len())
+                } else {
+                    (text_loading.chars().nth(col).unwrap(), col % logo_colors.len())
+                };
+                
+                let scale = PxScale::from((size as f32 * 0.65).max(50.0));
+                let letter_str = letter.to_string();
+                let text_color = logo_colors[color_idx];
+                
+                let estimated_letter_width = scale.x * 0.6;
+                let estimated_letter_height = scale.y;
+                let text_x = ((size as f32 - estimated_letter_width) / 2.0) as i32;
+                let text_y = ((size as f32 - estimated_letter_height) / 2.0) as i32;
+                
+                // Bold text
+                for offset_x in 0..2 {
+                    for offset_y in 0..2 {
+                        draw_text_mut(&mut img, text_color, text_x + offset_x, text_y + offset_y, scale, &font, &letter_str);
+                    }
+                }
+            }
+            
+            images.push(image::DynamicImage::ImageRgba8(img));
+        }
+        
+        if let Some(ref mut device) = self.device {
+            for (idx, img) in images.into_iter().enumerate() {
+                let _ = device.set_button_image(idx as u8, img);
+            }
+            let _ = device.flush();
+        }
+        
+        Ok(())
+    }
+    
     /// Update button layout with FX buttons
     /// Battle board effects go on left side, user FX on right side
+    pub fn update_layout(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {
+        // STOP loading animation when FX buttons are loaded
+        self.stop_loading_animation();
+        
+        // Continue with normal layout update
+        self.update_layout_internal(battle_board, user_fx)
+    }
+    
+    /// Internal layout update (actual implementation)
     /// Find cached image from frontend cache (NO downloading - images are pre-cached by frontend!)
     /// Cache files are named after the FX name, e.g., "x2.jpg", "galaxy-001.mp4", "10 sec countdown_1.mp4"
     fn find_cached_image(&self, fx_name: &str) -> Option<PathBuf> {
