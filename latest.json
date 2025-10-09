@@ -1,11 +1,11 @@
 {
-  "version": "0.0.6",
-  "notes": "``` ## What's New in This Update  ### ✨ New Features - Automatically upload the `.github` folder to a public repository upon release, making project management smoother and more efficient.  ### 🚀 Imp...",
-  "pub_date": "2025-10-09T20:35:10.137Z",
+  "version": "0.0.8",
+  "notes": "### 🚀 Improvements  • Bug fixes and performance improvements...",
+  "pub_date": "2025-10-09T20:55:31.759Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.6/battles.app_0.0.10_x64-setup.exe"
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.8/battles.app_0.0.10_x64-setup.exe"
     }
   }
 }
