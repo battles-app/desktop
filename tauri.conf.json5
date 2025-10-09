@@ -88,8 +88,7 @@
     "createUpdaterArtifacts": true,
     "resources": [
       "assets/sounds",
-      "src",
-      "gstreamer-runtime"
+      "src"
     ],
     "externalBin": []
   },
