@@ -238,6 +238,18 @@ impl StreamDeckManager {
                         
                         println!("[Stream Deck] Content-Type for {}: {}", name, content_type);
                         
+                        // Skip videos - we only want images
+                        if content_type.starts_with("video/") {
+                            println!("[Stream Deck] ⚠️ Skipping {} - it's a video, not an image!", name);
+                            return;
+                        }
+                        
+                        // Validate it's an actual image
+                        if !content_type.starts_with("image/") && content_type != "application/octet-stream" {
+                            println!("[Stream Deck] ⚠️ Skipping {} - unexpected content type: {}", name, content_type);
+                            return;
+                        }
+                        
                         // Read body with better error handling
                         let mut bytes = Vec::new();
                         match std::io::copy(&mut response, &mut bytes) {
