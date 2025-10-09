@@ -128,7 +128,7 @@ ${changelog || 'Initial release with all core features'}
 
 **Requirements:**
 1. Eye-catching hero section with ASCII art banner or emoji banner
-2. Beautiful badges (version, platform, status)
+2. Beautiful badges (version, platform, status, license)
 3. Clear feature highlights with icons
 4. Use cases section
 5. Installation instructions
@@ -141,7 +141,13 @@ ${changelog || 'Initial release with all core features'}
 8. Beta access information
 9. System requirements
 10. FAQ section
-11. Footer with copyright and branding
+11. **License section** explaining BSL 1.1:
+    - Link to LICENSE file
+    - Explain non-production use is free
+    - Production use requires commercial license
+    - API ownership by BATTLES.app™
+    - Contact for commercial licensing: legal@battles.app
+12. Footer with copyright and branding
 
 **Style Guidelines:**
 - Use modern markdown styling
@@ -194,7 +200,7 @@ function generateFallbackReadme(version, changelog) {
 ![Version](https://img.shields.io/badge/version-${version}-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
 ![Status](https://img.shields.io/badge/status-Closed%20Beta-orange)
-![License](https://img.shields.io/badge/license-Proprietary-red)
+![License](https://img.shields.io/badge/license-BSL%201.1-purple)
 
 [Download](#-installation) • [Website](https://battles.app) • [Support](mailto:support@battles.app)
 
@@ -284,6 +290,39 @@ A: Visit [battles.app](https://battles.app) or email support@battles.app to requ
 
 **Q: Is my data secure?**  
 A: Yes. All updates are cryptographically signed, and we follow industry best practices for security.
+
+---
+
+## 📄 License
+
+Battles.app Desktop is licensed under the **Business Source License 1.1 (BSL 1.1)**.
+
+### What This Means:
+
+✅ **Free for Non-Production Use:**
+- Personal projects
+- Education and research
+- Testing and evaluation
+- Non-commercial use
+
+❌ **Production Use Requires Commercial License:**
+- Business/commercial deployments
+- Revenue-generating activities
+- Public-facing production services
+
+### API Ownership
+
+All APIs, interfaces, and protocols are **proprietary** and owned by **BATTLES.app™**. Reverse engineering or extraction for competing products is prohibited.
+
+### Commercial Licensing
+
+For production use and commercial licensing:
+- **Email:** legal@battles.app
+- **Website:** [https://battles.app](https://battles.app)
+
+### Full License
+
+See the [LICENSE](./LICENSE) file for complete terms and conditions.
 
 ---
 

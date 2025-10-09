@@ -1,0 +1,60 @@
+# Business Source License 1.1 (BSL 1.1)
+
+**This License governs the use of the software "Battles.app Desktop" ("Software"), provided by BATTLES.app™. By using, copying, modifying, or distributing the Software, you accept and agree to be bound by the terms of this License. If you do not agree to the terms of this License, do not use, copy, modify, or distribute the Software.**
+
+## 1. Definitions
+
+1. **"Licensor"** refers to BATTLES.app™.
+2. **"Software"** refers to Battles.app Desktop, including all its components, documentation, and updates provided by the Licensor.
+3. **"Production Use"** refers to deploying the Software in a live, operational environment where it is accessed or used by end-users or external systems for its intended purposes.
+4. **"Non-Production Use"** refers to using the Software for testing, development, demonstration, or evaluation purposes where it is not used to provide services to end-users or external systems.
+5. **"Change Date"** is defined as 4 years from the release date of the Software, at which point the License terms may be subject to modification.
+6. **"Change License"** refers to the Apache License 2.0, to which this License may convert upon reaching the Change Date.
+
+## 2. Grant of License
+
+Subject to the terms and conditions of this License, the Licensor hereby grants you a revocable, non-exclusive, non-transferable license to use the Software for Non-Production Use without charge. Use of the Software for Production Use requires a separate commercial license agreement.
+
+## 3. API Ownership
+
+The Licensor retains ownership of all APIs, interfaces, and protocols provided by the Software. Any use of these APIs, interfaces, and protocols, whether modified or unmodified, is subject to the terms of this License and requires explicit written permission from the Licensor.
+
+## 4. Commercial Licensing
+
+Use of the Software for Production Use is strictly prohibited without obtaining a commercial license from the Licensor. For information on obtaining a commercial license, please contact legal@battles.app.
+
+## 5. Attribution Requirements
+
+You must provide clear attribution to BATTLES.app™ in any modified versions of the Software or in any software that incorporates the Software. Such attribution must be in a form and manner that does not suggest endorsement by the Licensor.
+
+## 6. Modification Restrictions
+
+You may modify the Software for Non-Production Use only. Any modifications must be documented and clearly marked as such. Distribution of modified software is subject to the same terms and conditions as the original Software.
+
+## 7. Distribution Terms
+
+You may distribute the Software in its original form, provided that:
+- You include a copy of this License with the Software.
+- You inform recipients of the terms and conditions of this License.
+- You make clear any modifications made to the Software.
+
+## 8. Warranty Disclaimers
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE LICENSORS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## 9. Limitation of Liability
+
+IN NO EVENT SHALL BATTLES.app™, ITS OFFICERS, DIRECTORS, EMPLOYEES, OR LICENSORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO, DAMAGES FOR LOSS OF PROFITS, GOODWILL, USE, DATA, OR OTHER INTANGIBLE LOSSES, ARISING OUT OF OR IN CONNECTION WITH THE LICENSE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## 10. Contact Information
+
+For any questions regarding this License, obtaining a commercial license, or further information, please contact:
+
+**BATTLES.app Legal Department**  
+Email: legal@battles.app
+
+---
+
+**Copyright © 2025 BATTLES.app. All rights reserved.**
+
+**This document is subject to change. Please refer to the latest version before making any use of the Software.**

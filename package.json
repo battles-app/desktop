@@ -13,6 +13,8 @@
     "release:minor": "node scripts/release.js minor",
     "release:patch": "node scripts/release.js patch",
     "setup-repo": "node scripts/create-repo.js",
+    "generate-license": "node scripts/generate-license.js",
+    "generate-readme": "node scripts/generate-readme.js",
     "check": "cargo check",
     "tauri": "tauri",
     "generate-icons": "node generate-icons.js"
