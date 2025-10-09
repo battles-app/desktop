@@ -1974,6 +1974,25 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
         }
         println!("[Stream Deck Watcher] === END DIAGNOSTICS ===");
         
+        // INITIALIZE MANAGER (create it if not exists)
+        println!("[Stream Deck Watcher] 🔧 Initializing Stream Deck manager...");
+        {
+            let mut manager_lock = STREAMDECK_MANAGER.lock();
+            if manager_lock.is_none() {
+                match StreamDeckManager::new() {
+                    Ok(manager) => {
+                        println!("[Stream Deck Watcher] ✅ Manager created successfully");
+                        *manager_lock = Some(manager);
+                    }
+                    Err(e) => {
+                        println!("[Stream Deck Watcher] ❌ Failed to create manager: {}", e);
+                    }
+                }
+            } else {
+                println!("[Stream Deck Watcher] ℹ️ Manager already exists");
+            }
+        }
+        
         // Try to connect immediately if device was found
         let devices_found = initial_diagnostics.devices_found;
         
@@ -1981,9 +2000,9 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
         let _ = app.emit("streamdeck://diagnostics", initial_diagnostics);
         
         if devices_found > 0 {
+            println!("[Stream Deck Watcher] 🔌 Attempting initial connection...");
             let mut manager_lock = STREAMDECK_MANAGER.lock();
             if let Some(ref mut manager) = *manager_lock {
-                println!("[Stream Deck Watcher] Attempting initial connection...");
                 match manager.connect() {
                     Ok(info) => {
                         println!("[Stream Deck Watcher] ✅ Initial connection successful: {}", info);
@@ -1993,23 +2012,35 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                         println!("[Stream Deck Watcher] ❌ Initial connection failed: {}", e);
                     }
                 }
+            } else {
+                println!("[Stream Deck Watcher] ❌ Manager not initialized after creation attempt!");
             }
+        } else {
+            println!("[Stream Deck Watcher] ⚠️ No devices found, will wait for device connection...");
         }
         
-        let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        // Use shorter interval for button detection (50ms) but check connection less frequently
+        let mut button_poll_interval = tokio::time::interval(std::time::Duration::from_millis(50));
+        let mut connection_check_counter = 0;
         let mut was_connected = false;
         
+        println!("[Stream Deck Watcher] 🎮 Starting button polling loop (50ms interval)...");
+        
         loop {
-            check_interval.tick().await;
+            button_poll_interval.tick().await;
+            connection_check_counter += 1;
             
-            // Check if device is connected
-            let is_connected = {
+            // Check if device is connected (only every 40 ticks = ~2 seconds)
+            let is_connected = if connection_check_counter >= 40 {
+                connection_check_counter = 0;
                 let manager_lock = STREAMDECK_MANAGER.lock();
                 manager_lock.as_ref().map(|m| m.is_connected()).unwrap_or(false)
+            } else {
+                was_connected // Use cached value for frequent button polls
             };
             
-            // If connection state changed, notify frontend
-            if is_connected != was_connected {
+            // If connection state changed, notify frontend (only check every ~2 seconds)
+            if connection_check_counter == 0 && is_connected != was_connected {
                 was_connected = is_connected;
                 
                 if is_connected {
@@ -2031,11 +2062,34 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                 }
             }
             
-            // Read button presses if connected
+            // Read button presses if connected (poll more frequently)
             if is_connected {
                 let mut manager_lock = STREAMDECK_MANAGER.lock();
                 if let Some(ref mut manager) = *manager_lock {
                     let pressed_buttons = manager.read_button_presses();
+                    
+                    // Debug: log even when no presses (every 10 seconds)
+                    static mut LAST_DEBUG_LOG: std::time::Instant = unsafe { std::mem::zeroed() };
+                    let should_log_debug = unsafe {
+                        static mut INITIALIZED: bool = false;
+                        if !INITIALIZED {
+                            LAST_DEBUG_LOG = std::time::Instant::now();
+                            INITIALIZED = true;
+                            false
+                        } else {
+                            let elapsed = LAST_DEBUG_LOG.elapsed();
+                            if elapsed.as_secs() >= 10 {
+                                LAST_DEBUG_LOG = std::time::Instant::now();
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                    };
+                    
+                    if should_log_debug && pressed_buttons.is_empty() {
+                        println!("[Stream Deck Watcher] 🔍 Polling buttons... (no presses detected)");
+                    }
                     
                     if !pressed_buttons.is_empty() {
                         println!("[Stream Deck Watcher] 🔍 Detected {} button press(es): {:?}", pressed_buttons.len(), pressed_buttons);

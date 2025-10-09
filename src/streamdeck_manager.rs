@@ -8,7 +8,6 @@ use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, draw_filled_circle
 use imageproc::rect::Rect;
 use ab_glyph::{FontRef, PxScale};
 use std::path::PathBuf;
-use imageproc::point::Point;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FxButton {
@@ -686,24 +685,36 @@ impl StreamDeckManager {
         Ok(())
     }
     
-    /// Read button presses (non-blocking)
+    /// Read button presses (blocking read with proper timeout)
     pub fn read_button_presses(&mut self) -> Vec<u8> {
         let mut pressed_buttons = Vec::new();
         
         if let Some(ref mut device) = self.device {
-            // Read all available input events (non-blocking with 0ms timeout)
-            while let Ok(input) = device.read_input(Some(std::time::Duration::from_millis(0))) {
-                match input {
-                    elgato_streamdeck::StreamDeckInput::ButtonStateChange(states) => {
-                        // Stream Deck returns current state of all buttons
-                        for (idx, is_pressed) in states.iter().enumerate() {
-                            if *is_pressed {
-                                pressed_buttons.push(idx as u8);
+            // Use blocking read with 100ms timeout to catch button presses
+            // This allows the device to report button state changes
+            match device.read_input(Some(std::time::Duration::from_millis(100))) {
+                Ok(input) => {
+                    match input {
+                        elgato_streamdeck::StreamDeckInput::ButtonStateChange(states) => {
+                            // Stream Deck returns current state of all buttons
+                            println!("[Stream Deck Manager] 🔘 Button state change detected!");
+                            for (idx, is_pressed) in states.iter().enumerate() {
+                                if *is_pressed {
+                                    println!("[Stream Deck Manager]    → Button {} is PRESSED", idx);
+                                    pressed_buttons.push(idx as u8);
+                                } else if idx < 10 {
+                                    // Only log first 10 buttons to avoid spam
+                                    println!("[Stream Deck Manager]    → Button {} is released", idx);
+                                }
                             }
                         }
+                        _ => {
+                            // Ignore other input types (encoders, touchscreen, etc.)
+                        }
                     }
-                    // Ignore other input types (encoders, etc.)
-                    _ => {}
+                }
+                Err(_) => {
+                    // Timeout or no input - this is normal
                 }
             }
         }
