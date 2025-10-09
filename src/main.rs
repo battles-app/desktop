@@ -1071,24 +1071,38 @@ async fn initialize_composite_system() -> Result<String, String> {
         }
     } // Release lock before async operations
     
+    println!("[Composite] 🔧 Initializing GStreamer composite pipeline...");
+    
     // Initialize composite pipeline
-    let composite = GStreamerComposite::new()
-        .map_err(|e| format!("Failed to initialize composite: {}", e))?;
+    let composite = match GStreamerComposite::new() {
+        Ok(comp) => {
+            println!("[Composite] ✅ GStreamer composite created successfully");
+            comp
+        },
+        Err(e) => {
+            println!("[Composite] ❌ ERROR: Failed to create composite: {}", e);
+            return Err(format!("Failed to initialize composite: {}", e));
+        }
+    };
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
+    println!("[Composite] 📦 Composite stored in global state");
     
     // Create broadcast channel for composite frames with larger buffer
     // 60 frames = 2 seconds of buffer at 30fps (prevents lag spikes)
     let (tx, _rx) = broadcast::channel::<Vec<u8>>(60);
+    println!("[Composite] 📡 Created broadcast channel (60 frame buffer)");
     
     // Set frame sender in composite (for FX only)
     if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
         comp.set_frame_sender(tx.clone());
+        println!("[Composite] 🔗 Frame sender connected to composite");
     }
     
     // Set sender before starting WebSocket to prevent multiple initializations
     *COMPOSITE_FRAME_SENDER.write() = Some(tx);
     
+    println!("[Composite] 🌐 Starting WebSocket server on port {}...", COMPOSITE_WS_PORT);
     // Start WebSocket server for frame delivery
     start_composite_websocket_server().await;
 
@@ -1199,14 +1213,25 @@ async fn start_composite_websocket_server() {
 
 #[command]
 async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
-    println!("[GStreamer] Enumerating cameras");
+    println!("[Camera] 📹 Starting camera enumeration...");
     
-    let cameras_info = GStreamerCamera::list_cameras()?;
+    let cameras_info = match GStreamerCamera::list_cameras() {
+        Ok(cams) => {
+            println!("[Camera] ✅ Successfully listed cameras: {} found", cams.len());
+            cams
+        },
+        Err(e) => {
+            println!("[Camera] ❌ ERROR: Failed to list cameras: {}", e);
+            return Err(e);
+        }
+    };
     
     let cameras: Vec<CameraDeviceInfo> = cameras_info
         .into_iter()
-        .map(|cam| {
-            println!("[GStreamer] Found: {}", cam.name);
+        .enumerate()
+        .map(|(idx, cam)| {
+            println!("[Camera]   {}. ID: {}, Name: {}, Description: {}", 
+                idx + 1, cam.id, cam.name, cam.description);
             CameraDeviceInfo {
                 id: cam.id,
                 name: cam.name,
@@ -1216,7 +1241,13 @@ async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
         })
         .collect();
     
-    println!("[GStreamer] Total cameras found: {}", cameras.len());
+    println!("[Camera] 📊 Total cameras available: {}", cameras.len());
+    if cameras.is_empty() {
+        println!("[Camera] ⚠️  WARNING: No cameras found! Check:");
+        println!("[Camera]     • Camera is connected");
+        println!("[Camera]     • Camera drivers are installed");
+        println!("[Camera]     • No other application is using the camera");
+    }
     Ok(cameras)
 }
 

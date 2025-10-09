@@ -588,8 +588,11 @@ impl StreamDeckManager {
     /// Download image from Nuxt proxy, cache it, and trigger re-render
     fn download_image_to_cache(&self, fx_button: &FxButton) {
         if fx_button.image_url.is_none() {
+            println!("[Stream Deck] ⚠️  No image URL for FX: {}", fx_button.name);
             return;
         }
+        
+        println!("[Stream Deck] 📥 Starting download for FX: {} ({})", fx_button.name, fx_button.image_url.as_ref().unwrap());
         
         let cache_dir = std::env::temp_dir().join("battles_fx_cache");
         let _ = std::fs::create_dir_all(&cache_dir);
@@ -682,10 +685,19 @@ impl StreamDeckManager {
     fn update_layout_internal(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {
         let button_count = self.button_count();
         if button_count == 0 {
+            println!("[Stream Deck] ❌ ERROR: No device connected");
             return Err("No device connected".to_string());
         }
         
-        println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
+        println!("[Stream Deck] 📊 Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
+        println!("[Stream Deck] 🔍 Battle Board FX:");
+        for (idx, fx) in battle_board.iter().enumerate() {
+            println!("[Stream Deck]   {}. ID: {}, Name: {}, Image: {:?}", idx + 1, fx.id, fx.name, fx.image_url);
+        }
+        println!("[Stream Deck] 🔍 User FX:");
+        for (idx, fx) in user_fx.iter().enumerate() {
+            println!("[Stream Deck]   {}. ID: {}, Name: {}, Image: {:?}", idx + 1, fx.id, fx.name, fx.image_url);
+        }
         
         // Start downloading images in background (non-blocking)
         // They will trigger re-renders when complete
