@@ -77,33 +77,12 @@
       "msi" 
     ],
     "windows": {
-      "signCommand": null,
       "allowDowngrades": true,
-      "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "nsis": {
-        "compression": "lzma",
-        "displayLanguageSelector": false,
-        "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine",
-        "languages": ["English"],
-        "template": null,
-        "headerImage": null,
-        "sidebarImage": null,
-        "license": "LICENSE",
-        "welcomePageMessage": "Welcome to Battles.app Desktop Setup!\n\nPro TikTok Live Tools with Stream Deck Integration\n\n✨ Real-time FX Control\n🎮 Elgato Stream Deck Support\n🎬 Professional Streaming Tools\n🔥 GPU-Accelerated Performance",
-        "finishPageMessage": "Battles.app Desktop has been successfully installed!\n\n🚀 Launch the application to get started\n💡 Visit battles.app for support and updates"
-      },
       "timestampUrl": "https://timestamp.comodoca.com",
+      "nsis": null,
       "wix": {
-        "language": "en-US",
-        "template": null,
-        "banner": null,
-        "dialog": null,
-        "license": "LICENSE"
-      },
-      "webviewInstallMode": {
-        "type": "downloadBootstrapper"
+        "language": "en-US"
       }
     },
     "createUpdaterArtifacts": true,
@@ -142,5 +121,5 @@
       ]
     }
   },
-  "version": "0.0.10"
+  "version": "0.0.11"
 }

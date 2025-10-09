@@ -2,56 +2,47 @@
 
 ![Github banner](./.github/banner.jpg)
 # 🎮 Battles.app Desktop
-### Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI
-<a href="https://github.com/battles-app/desktop/releases/download/v0.0.10/battles.app_0.0.10_x64-setup.exe" style="background: linear-gradient(135deg, #1a4d2e, #2d5a3d); border-radius: 8px; box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08); color: white; padding: 10px 25px; font-weight: bold; text-decoration: none;">Download Battles.app Desktop</a>
-
-![Version](https://img.shields.io/badge/version-0.0.10-blue?style=for-the-badge)
-![Platform](https://img.shields.io/badge/platform-Windows_10/11-blueviolet?style=for-the-badge&logo=windows)
-![Status](https://img.shields.io/badge/status-Closed_Beta-red?style=for-the-badge)
-
-Download • [Beta Access](#beta-access-section) • [Documentation](#) • [Support](#)
+##### Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI
+![Version](https://img.shields.io/badge/version-0.0.11-blue?style=for-the-badge)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blueviolet?style=for-the-badge&logo=windows)
+![Status](https://img.shields.io/badge/status-Closed%20Beta-red?style=for-the-badge)
+<br>
+<a href="https://github.com/battles-app/desktop/releases/download/v0.0.11/battles.app_0.0.11_x64-setup.exe" style="background: linear-gradient(145deg, #1a4d2e, #2d5a3d); border: none; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.2); color: white; padding: 10px 20px; text-decoration: none; font-weight: bold;">Download Battles.app Desktop</a>
+<br>
+Download • Beta Access • Documentation • Support
 
 ---
 
-</div>
-
-## Features
-
 <table>
 <tr>
-<td width="50%" align="center">
+<td valign="top" width="50%">
 
-🎮 **Elgato Stream Deck Integration**  
-Full support with real-time updates
+#### 🎮 Elgato Stream Deck Integration
+Full Stream Deck support with real-time button updates, beautiful branded animations, and instant FX triggering.
 
-🎭 **Real-Time Animations**  
-Instant triggering during TikTok Live
+#### 🎭 Real-Time Animations
+Trigger animations, sound effects, and visual FX instantly during TikTok Live streams.
 
-💡 **Interactive Light Shows**  
-Synchronized effects for live performances
+#### 💡 Interactive Light Shows
+Synchronized light effects and visual shows for engaging live performances.
 
-</td>
-<td width="50%" align="center">
-
-🤖 **AI-Powered Tools**  
-Smart automation for professional streaming
-
-🎨 **Beautiful UI**  
-Modern, dark-themed interface
-
-🔄 **Auto-Updates**  
-Automatic updates with signature verification
+#### 🤖 AI-Powered Tools
+Smart automation and AI features for professional streaming.
 
 </td>
-</tr>
-<tr>
-<td colspan="2" align="center">
+<td valign="top" width="50%">
 
-⚔️ **Battle Board**  
-Global effects library
+#### 🎨 Beautiful UI
+Modern, dark-themed interface with smooth gradients and logo colors.
 
-✨ **User FX Board**  
-Custom effects and media management
+#### 🔄 Auto-Updates
+Automatic updates from GitHub releases with cryptographic signature verification.
+
+#### ⚔️ Battle Board
+Global effects library with pre-configured animations and sounds.
+
+#### ✨ User FX Board
+Custom effects and media management for personalized streaming.
 
 </td>
 </tr>
@@ -59,110 +50,91 @@ Custom effects and media management
 
 ---
 
-## Quick Start
-
-1. Download the latest release from the [releases page](https://github.com/battles-app/desktop/releases).
+### Quick Start
+1. Download the latest version from [here](https://github.com/battles-app/desktop/releases/download/v0.0.11/battles.app_0.0.11_x64-setup.exe).
 2. Run the installer and follow the on-screen instructions.
-3. Launch Battles.app Desktop and configure your settings.
+3. Launch Battles.app Desktop and connect your TikTok account.
+4. Start enhancing your TikTok Live streams with professional effects!
 
 ---
 
-## System Requirements
+### System Requirements
 
-| OS           | Processor | RAM | GPU  | Accessories          |
-|--------------|-----------|-----|------|----------------------|
-| Windows 10/11 (64-bit) | AMD Ryzen 5 / Intel i5 (3GHz+) | 8GB | DirectX 12 compatible | Elgato Stream Deck (Optional) |
-
----
-
-## Installation
-
-<div align="center">
-
-<a href="https://github.com/battles-app/desktop/releases/download/v0.0.10/battles.app_0.0.10_x64-setup.exe" style="background: linear-gradient(135deg, #1a4d2e, #2d5a3d); border-radius: 8px; box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08); color: white; padding: 10px 25px; font-weight: bold; text-decoration: none;">Download Now</a>
-
-</div>
-
-1. Click the download button above.
-2. Open the downloaded file to start the installation process.
-3. Follow the prompts to complete installation.
+| OS          | Processor | RAM  | GPU       | Accessories         |
+|-------------|-----------|------|-----------|---------------------|
+| Windows 10/11 (64-bit) | Quad-core 2.5GHz | 8GB | DirectX 11 Compatible | Stream Deck (Optional) |
 
 ---
 
-## Use Cases
+### Installation
 
-- **TikTok Live streaming** with professional effects
-- **Interactive audience engagement** with instant FX
-- **Battle and competition streams**
-- **Live performances** with synchronized effects
-- **Professional content creation**
-- **Stream automation and control**
+<a href="https://github.com/battles-app/desktop/releases/download/v0.0.11/battles.app_0.0.11_x64-setup.exe" style="background: linear-gradient(145deg, #1a4d2e, #2d5a3d); border: none; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.2); color: white; padding: 10px 20px; text-decoration: none; font-weight: bold;">Download Now</a>
 
----
-
-## Beta Access Section
-
-To request access to the closed beta, please [fill out this form](#). Beta users will receive:
-
-- Early access to new features and updates
-- Exclusive access to beta-only features
-- The opportunity to influence future development
+1. Click the download button.
+2. Save the `.exe` file.
+3. Double-click the file to start the installation.
+4. Follow the installation wizard instructions.
 
 ---
 
-## Auto-Updates
+### Use Cases
+
+Battles.app Desktop is perfect for TikTok Live streaming with professional effects, interactive audience engagement, battle and competition streams, live performances, and professional content creation.
+
+---
+
+### Beta Access
+
+To request access to the closed beta, [fill out this form](#). Beta users will get early access to new features and can provide feedback directly to the development team.
+
+---
+
+### Auto-Updates
 
 - [x] Automatic updates from GitHub releases
-- [x] Cryptographic signature verification for security
-- [x] Easy rollback to previous versions
+- [x] Cryptographic signature verification
+- [x] Early access to new features for beta testers
 
 ---
 
-## FAQ Section
+### FAQ
 
 <details>
-<summary>How do I configure the Stream Deck with Battles.app Desktop?</summary>
-Once Battles.app Desktop is installed, plug in your Stream Deck and launch the app. The software automatically detects the device and provides configuration options.
+<summary>How do I connect my TikTok account?</summary>
+After launching Battles.app Desktop, go to Settings and follow the instructions to connect your TikTok account securely.
 </details>
 
 <details>
-<summary>Can I use Battles.app Desktop without a Stream Deck?</summary>
-Yes, Battles.app Desktop offers a range of features and tools that do not require a Stream Deck.
+<summary>Is Battles.app Desktop free?</summary>
+Battles.app Desktop is free for non-production use under the BSL 1.1 license. Commercial use requires a license.
 </details>
 
 <details>
-<summary>Is there a tutorial for beginners?</summary>
-Yes, we have a comprehensive guide and tutorials available on our [documentation page](#).
+<summary>Can I use custom effects?</summary>
+Yes! You can manage your custom effects and media in the User FX Board for a personalized streaming experience.
 </details>
 
 ---
 
-## License Section
+### License
 
-Battles.app Desktop is licensed under the Business Source License 1.1 (BSL 1.1).
-
-- [x] Free for non-production use
-- [ ] Commercial use requires a purchased license
-
-For commercial licensing, please [contact us](#).
+Battles.app Desktop is licensed under the BSL 1.1. It's free for non-production use. Production environments require a commercial license. For commercial licensing, please [contact us](#).
 
 ---
 
-## Links Section
+### Links
 
-- [Download](https://github.com/battles-app/desktop/releases/download/v0.0.10/battles.app_0.0.10_x64-setup.exe)
+- [Download](https://github.com/battles-app/desktop/releases/download/v0.0.11/battles.app_0.0.11_x64-setup.exe)
+- [Beta Access](#)
 - [Documentation](#)
 - [Support](#)
-- [Beta Access Form](#)
 
 ---
 
-<div align="center">
-
-Made with ❤️ by the Battles.app team.
+Made with ❤️
 
 Copyright © 2023
 
-[Download](https://github.com/battles-app/desktop/releases/download/v0.0.10/battles.app_0.0.10_x64-setup.exe) • [Beta Access](#beta-access-section) • [Documentation](#) • [Support](#)
+Download • Beta Access • Documentation • Support
 
 </div>
