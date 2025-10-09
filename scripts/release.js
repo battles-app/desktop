@@ -885,18 +885,26 @@ async function release() {
   }
   log.success(`✅ Version verified: ${newVersion} matches executable`);
   
-  // Commit version changes
-  log.header('Committing Changes');
+  // Commit version changes to PRIVATE repo only (NOT to battles-app/desktop)
+  log.header('Committing Version Changes Locally');
   try {
     execSync('git add Cargo.toml tauri.conf.json5 Cargo.lock', { cwd: rootDir });
     execSync(`git commit -m "chore: bump version to ${newVersion}"`, { cwd: rootDir });
-    execSync('git push', { cwd: rootDir });
-    log.success('Committed and pushed version changes');
+    
+    // IMPORTANT: Check if we're on the private repo before pushing
+    const remoteUrl = execSync('git config --get remote.origin.url', { cwd: rootDir, encoding: 'utf-8' }).trim();
+    if (remoteUrl.includes('gkarmas/battles-desktop')) {
+      execSync('git push', { cwd: rootDir });
+      log.success('Committed and pushed version changes to PRIVATE repo');
+    } else {
+      log.info('Skipping git push - not on private repository');
+      log.info('Version changes committed locally only');
+    }
   } catch (error) {
     log.error('Failed to commit changes (this is okay if no changes)');
   }
   
-  // Create GitHub release
+  // Create GitHub release (to battles-app/desktop via API - NO source code!)
   await createGitHubRelease(newVersion, changelog, executable);
   
   log.header('Release Complete! 🎉');
