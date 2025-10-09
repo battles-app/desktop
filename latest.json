@@ -1,0 +1,12 @@
+{
+  "version": "0.0.15",
+  "notes": "Stream Deck integration with branded animations, real-time FX control, and auto-updates.",
+  "pub_date": "2025-10-09T19:03:19Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT2xDaC9zb0FQZ1dmcmRGb1RYdnZoaDF5QUJ5QytkTHo5OHB6L0h1aUJNRjhIbGQybDYzd3luOE1Zem9vZDRCZDRya2I1cHludlB1NTNrcHlmQkNWQXc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwMDM2MzcxCWZpbGU6YmF0dGxlcy5hcHBfMC4wLjE1X3g2NC1zZXR1cC5leGUKWHVQOXZnVDd4YVNXVFpoVWt5dmR3dGZMc3ZHUDRIb2VFTERMZytNUDRUU3J2RCtSL2wzWkszRzBCUkNCbzNwL3RlS2RaeFRLQld0ZGxUOWNHNzRKQXc9PQo=",
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.15/battles.app_0.0.15_x64-setup.exe"
+    }
+  }
+}
+

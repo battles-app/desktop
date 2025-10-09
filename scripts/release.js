@@ -410,22 +410,36 @@ This software is in **closed beta**. Access required:
     log.info(`File size: ${(fs.statSync(installerPath).size / 1024 / 1024).toFixed(2)} MB`);
     
     // Find updater artifacts (for auto-update)
-    const bundleDir = path.dirname(path.dirname(installerPath));
+    const bundleDir = path.dirname(installerPath);
     const updaterFiles = [];
     
-    // Look for .nsis.zip (updater artifact)
-    const nsisZip = path.join(bundleDir, 'nsis', `battles.app_${version}_x64-setup.nsis.zip`);
-    if (fs.existsSync(nsisZip)) {
-      updaterFiles.push(nsisZip);
-      log.info(`Found updater artifact: ${path.basename(nsisZip)}`);
-    }
-    
-    // Look for .sig files
-    const sigFile = path.join(bundleDir, 'nsis', `battles.app_${version}_x64-setup.nsis.zip.sig`);
+    // Look for .sig file (same location as installer)
+    const sigFile = `${installerPath}.sig`;
     if (fs.existsSync(sigFile)) {
       updaterFiles.push(sigFile);
       log.info(`Found signature file: ${path.basename(sigFile)}`);
+    } else {
+      console.log(`${colors.yellow}⚠️  Warning: Signature file not found at ${sigFile}${colors.reset}`);
     }
+    
+    // Generate latest.json for auto-updater
+    log.info('Generating latest.json for auto-updater...');
+    const latestJsonPath = path.join(rootDir, 'latest.json');
+    const signature = fs.existsSync(sigFile) ? fs.readFileSync(sigFile, 'utf-8').trim() : '';
+    const latestJson = {
+      version: version,
+      notes: changelog.replace(/\n/g, ' ').substring(0, 200) + '...',
+      pub_date: new Date().toISOString(),
+      platforms: {
+        'windows-x86_64': {
+          signature: signature,
+          url: `https://github.com/battles-app/desktop/releases/download/v${version}/${installerName}`
+        }
+      }
+    };
+    fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2));
+    log.success('Generated latest.json');
+    updaterFiles.push(latestJsonPath);
     
     // Create file list for upload
     const filesToUpload = [installerPath, ...updaterFiles].map(f => `"${f}"`).join(' ');
@@ -441,11 +455,14 @@ This software is in **closed beta**. Access required:
       log.info('Using standard release notes');
     }
     
-    log.info(`Uploading ${1 + updaterFiles.length} files...`);
+    log.info(`Uploading ${1 + updaterFiles.length} files to battles-app/desktop...`);
+    log.info(`  • Installer: ${installerName}`);
+    log.info(`  • Signature: ${path.basename(sigFile)}`);
+    log.info(`  • Updater manifest: latest.json`);
     
-    // Create release with installer and updater artifacts
+    // Create release on PUBLIC repo (battles-app/desktop) - NO source code!
     execSync(
-      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes "${readmeContent.replace(/"/g, '\\"')}" --repo battles-app/desktop`,
+      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes-file "${readmePath}" --repo battles-app/desktop`,
       { cwd: rootDir, stdio: 'inherit' }
     );
     
