@@ -238,20 +238,59 @@ Return ONLY the formatted changelog in markdown, no extra text.`
   }
 }
 
-// Build the application
+// Build the application with production URLs
 function buildApp() {
   log.header('Building Application');
-  log.info('Building Tauri application for Windows...');
+  log.info('Ensuring production URLs for release build...');
+  
+  // Backup and update tauri.conf.json5 to use production URLs
+  const tauriConfigPath = path.join(rootDir, 'tauri.conf.json5');
+  const tauriConfig = fs.readFileSync(tauriConfigPath, 'utf-8');
+  const tauriConfigBackup = tauriConfig;
   
   try {
+    // Ensure window URL uses production (battles.app)
+    let updatedConfig = tauriConfig.replace(
+      /"url":\s*"https:\/\/local\.battles\.app:3000\/"/g,
+      '"url": "https://battles.app/"'
+    );
+    
+    // Ensure devUrl stays as local (only used in dev mode)
+    // frontendDist should not be a URL - remove it or set to empty
+    updatedConfig = updatedConfig.replace(
+      /"frontendDist":\s*"https:\/\/battles\.app\/"/g,
+      '"frontendDist": "../battles.app/dist"'
+    );
+    
+    fs.writeFileSync(tauriConfigPath, updatedConfig, 'utf-8');
+    log.success('✅ Config updated for production build:');
+    log.info('   • Window URL: https://battles.app/');
+    log.info('   • DevUrl: https://local.battles.app:3000/ (dev only)');
+    console.log('');
+    
+    log.info('📦 Building Tauri application for Windows (Release mode)...');
     execSync('bun run tauri build', {
       cwd: rootDir,
-      stdio: 'inherit'
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        NODE_ENV: 'production',
+        TAURI_ENV_PRODUCTION: 'true'
+      }
     });
+    
     log.success('Build completed successfully!');
+    
+    // Restore original config
+    fs.writeFileSync(tauriConfigPath, tauriConfigBackup, 'utf-8');
+    log.info('Restored original config');
+    
     return true;
   } catch (error) {
+    // Restore original config on error
+    fs.writeFileSync(tauriConfigPath, tauriConfigBackup, 'utf-8');
     log.error('Build failed!');
+    log.error(error.message);
     return false;
   }
 }

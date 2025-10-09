@@ -47,7 +47,7 @@
   },
   "build": {
     "devUrl": "https://local.battles.app:3000/",
-    "frontendDist": "https://battles.app/"
+    "frontendDist": "../battles.app/dist"
   },
   "bundle": {
     "active": true,
