@@ -335,7 +335,7 @@ async function createGitHubRelease(version, changelog, executable) {
     log.error('GITHUB_TOKEN not found in .env file!');
     log.info('Please add GITHUB_TOKEN to .env file');
     log.info(`\nManual release instructions:`);
-    log.info(`1. Go to: https://github.com/battles-app/desktop-releases/releases/new`);
+    log.info(`1. Go to: https://github.com/battles-app/desktop/releases/new`);
     log.info(`2. Tag: v${version}`);
     log.info(`3. Title: Battles.app Desktop v${version}`);
     log.info(`4. Description:\n${changelog}`);
@@ -445,13 +445,13 @@ This software is in **closed beta**. Access required:
     
     // Create release with installer and updater artifacts
     execSync(
-      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes "${readmeContent.replace(/"/g, '\\"')}" --repo battles-app/desktop-releases`,
+      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes "${readmeContent.replace(/"/g, '\\"')}" --repo battles-app/desktop`,
       { cwd: rootDir, stdio: 'inherit' }
     );
     
     // Update repository README with latest version
     log.info('Updating repository README.md...');
-    const repoReadmePath = path.join(rootDir, '..', 'desktop-releases', 'README.md');
+    const repoReadmePath = path.join(rootDir, '..', 'desktop', 'README.md');
     if (fs.existsSync(readmePath)) {
       try {
         // Copy AI-generated README to repository
@@ -478,7 +478,7 @@ This software is in **closed beta**. Access required:
     }
     
     log.success(`Release v${version} created successfully!`);
-    log.info(`View at: https://github.com/battles-app/desktop-releases/releases/tag/v${version}`);
+    log.info(`View at: https://github.com/battles-app/desktop/releases/tag/v${version}`);
     return true;
   } catch (error) {
     log.error(`Failed to create GitHub release: ${error.message}`);
@@ -589,7 +589,7 @@ async function release() {
   }
   
   // Create GitHub release
-  await createGitHubRelease(newVersion, changelog, executable.path);
+  await createGitHubRelease(newVersion, changelog, executable);
   
   log.header('Release Complete! 🎉');
   log.success(`Version ${newVersion} has been released!`);
