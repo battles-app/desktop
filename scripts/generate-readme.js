@@ -450,97 +450,30 @@ Made with ❤️ by the Battles.app team
 
 // Generate release notes (for GitHub release)
 async function generateReleaseNotes(version, changelog) {
-  // Create beautiful release notes with glassmorphic download button
-  return `<div align="center">
+  // Minimal release notes - just what changed and download link
+  return `# 🎮 Battles.app Desktop v${version}
 
-# 🎮 Battles.app Desktop v${version}
+## What's New
 
-**Pro TikTok Live Utilities** • Stream Deck Integration • Real-Time FX
-
-<a href="https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe">
-  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_FOR_WINDOWS-battles.app_${version}_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4), 0 0 0 1px rgba(255,255,255,0.1); padding: 16px 32px; font-size: 18px; font-weight: bold; backdrop-filter: blur(10px);">
-</a>
-
-[![Version](https://img.shields.io/badge/version-${version}-blue?style=for-the-badge)](https://github.com/battles-app/desktop/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows_10/11-blueviolet?style=for-the-badge&logo=windows)](https://github.com/battles-app/desktop)
-[![Beta](https://img.shields.io/badge/status-Closed_Beta-red?style=for-the-badge)](https://battles.app)
-
-</div>
+${changelog || '• Bug fixes and improvements'}
 
 ---
 
-## ✨ What's New
-
-${changelog}
-
----
-
-## 📥 Installation
+## 📥 Download
 
 <div align="center">
 
 <a href="https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe">
-  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_NOW-battles.app_${version}_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4); padding: 16px; font-weight: bold;">
+  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_FOR_WINDOWS-battles.app_${version}_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4); padding: 16px 32px; font-size: 18px; font-weight: bold;">
 </a>
 
-**Size:** ~10 MB • **Platform:** Windows 10/11 (64-bit)
-
-</div>
-
-### Quick Start:
-1. 📥 Download the installer above
-2. 🔓 Run battles.app_${version}_x64-setup.exe
-3. 🎮 Launch Battles.app Desktop
-4. 🔌 Connect your Elgato Stream Deck (optional)
-5. 🚀 Start streaming with professional FX!
-
----
-
-## 💻 System Requirements
-
-| Component | Requirement |
-|-----------|------------|
-| **OS** | Windows 10/11 (64-bit) |
-| **Processor** | Intel i5 or equivalent |
-| **RAM** | 4 GB minimum |
-| **Graphics** | DirectX 11 compatible |
-| **Accessories** | Elgato Stream Deck (optional) |
-
----
-
-## 🎯 Closed Beta Access
-
-This software is currently in **closed beta**. To request access:
-- 🌐 Visit [battles.app](https://battles.app)
-- 📧 Email [support@battles.app](mailto:support@battles.app)
-
----
-
-## 🔗 Quick Links
-
-<div align="center">
-
-[![Website](https://img.shields.io/badge/🌐_Website-battles.app-pink?style=for-the-badge)](https://battles.app)
-[![Support](https://img.shields.io/badge/📧_Support-Email_Us-yellow?style=for-the-badge)](mailto:support@battles.app)
-[![Issues](https://img.shields.io/badge/🐛_Report_Bug-GitHub_Issues-green?style=for-the-badge)](https://github.com/battles-app/desktop/issues)
+**Windows 10/11 (64-bit)** • **Size:** ~10 MB
 
 </div>
 
 ---
 
-<div align="center">
-
-**⚠️ Security Notice:** This release contains only the compiled installer. No source code is included.
-
-**🔐 Auto-Updates Enabled:** The app will automatically check for updates and notify you.
-
----
-
-Made with ❤️ by the **Battles.app** team
-
-© 2025 BATTLES.app™ • All Rights Reserved
-
-</div>`;
+**Closed Beta** • Request access at [battles.app](https://battles.app) • Support: [support@battles.app](mailto:support@battles.app)`;
 }
 
 // Main function
