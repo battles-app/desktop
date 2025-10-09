@@ -230,6 +230,7 @@ dependencies = [
  "gstreamer-audio",
  "gstreamer-sys",
  "gstreamer-video",
+ "image",
  "imageproc",
  "lazy_static",
  "parking_lot",
