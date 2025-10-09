@@ -402,22 +402,15 @@ impl StreamDeckManager {
             return Err("No device or animation stopped".to_string());
         }
         
-        // SKIP FRAMES: Only update every 3rd frame to avoid overwhelming Stream Deck hardware
-        // Stream Deck has USB bandwidth limitations (~15-20 full updates/sec max)
-        if frame % 3 != 0 {
-            return Ok(());
-        }
-        
         // Calculate animation phase based on frame number
         let text_battles = "BATTLES";
         let text_loading = "LOADING";
         
-        // Each letter appears every 1 frame (but we only render every 3rd frame)
-        // Effective: ~18ms per letter at 55 FPS actual render rate
+        // Each letter appears every 1 frame at 166 FPS
         let frames_per_letter = 1;
         let battles_frames = text_battles.len() * frames_per_letter;
         let loading_frames = text_loading.len() * frames_per_letter;
-        let hold_frames = 8; // Hold for ~150ms
+        let hold_frames = 25; // Hold for ~150ms
         let cycle_frames = battles_frames + loading_frames + hold_frames;
         
         // Loop the animation by taking modulo

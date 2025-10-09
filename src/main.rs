@@ -2033,15 +2033,31 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                 };
                 
                 if should_animate {
+                    let start_time = std::time::Instant::now();
+                    
                     let mut manager_lock = STREAMDECK_MANAGER.lock();
                     if let Some(ref mut manager) = *manager_lock {
                         let _ = manager.continue_loading_background(frame_counter);
                         frame_counter = frame_counter.wrapping_add(1);
                     }
+                    drop(manager_lock); // Release lock immediately
+                    
+                    let elapsed = start_time.elapsed();
+                    
+                    // Log if rendering is slow (first 10 frames only)
+                    if frame_counter < 10 {
+                        println!("[Animation] Frame {} rendered in {:?}", frame_counter, elapsed);
+                    }
+                    
+                    // Sleep for remaining time to hit 166 FPS (~6ms target)
+                    let target_frame_time = std::time::Duration::from_millis(6);
+                    if elapsed < target_frame_time {
+                        std::thread::sleep(target_frame_time - elapsed);
+                    }
+                } else {
+                    // Not animating, sleep longer
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-                
-                // 6ms per frame = ~166 FPS (5x faster!)
-                std::thread::sleep(std::time::Duration::from_millis(6));
             }
         });
         
