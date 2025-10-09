@@ -308,9 +308,25 @@ function buildApp() {
     
     log.success('Build completed successfully!');
     
-    // Restore original config
-    fs.writeFileSync(tauriConfigPath, tauriConfigBackup, 'utf-8');
-    log.info('Restored original config');
+    // Check if config was changed
+    const configChanged = tauriConfig !== updatedConfig;
+    
+    if (configChanged) {
+      // Keep the production config and commit it
+      log.info('⚠️  Config was updated to use production URLs');
+      log.info('   Committing corrected config to prevent future issues...');
+      
+      try {
+        execSync('git add tauri.conf.json5', { cwd: rootDir, stdio: 'pipe' });
+        execSync('git commit -m "fix: ensure tauri.conf.json5 uses production URLs"', { cwd: rootDir, stdio: 'pipe' });
+        log.success('✅ Committed production URL config');
+        log.info('   To use dev mode locally, run: bun run tauri dev');
+      } catch (gitError) {
+        log.info('   (Could not auto-commit, but config is correct)');
+      }
+    } else {
+      log.info('✅ Config already correct, no changes needed');
+    }
     
     return true;
   } catch (error) {
