@@ -13,7 +13,7 @@ use std::path::PathBuf;
 pub struct FxButton {
     pub id: String,
     pub name: String,
-    pub image_data: Option<String>, // base64 encoded image from browser
+    pub image_url: Option<String>, // Authenticated URL with admin token from Nuxt proxy
     pub is_global: bool, // true for battle board, false for user FX
     pub position: usize, // Original position in the list
 }
@@ -173,15 +173,56 @@ impl StreamDeckManager {
     
     /// Get button size for the device
     fn get_button_size(&self) -> u32 {
+        // Use 144x144 for high-DPI support (scales down to display size automatically)
+        // Stream Deck software scales larger images down to fit the 72x72 pixel key display
         match self.device_kind {
             Some(Kind::Original) | Some(Kind::OriginalV2) |
             Some(Kind::Mk2) | Some(Kind::Mk2Scissor) | 
-            Some(Kind::Mini) | Some(Kind::MiniMk2) => 72,
-            Some(Kind::Xl) | Some(Kind::XlV2) => 96,
-            Some(Kind::Plus) | Some(Kind::Neo) => 200,
+            Some(Kind::Mini) | Some(Kind::MiniMk2) => 144,
+            Some(Kind::Xl) | Some(Kind::XlV2) => 144,
+            Some(Kind::Plus) | Some(Kind::Neo) => 200, // Keep high for touchscreen models
             Some(Kind::Pedal) => 0,
-            None => 72,
+            None => 144,
         }
+    }
+    
+    /// Download image from authenticated URL (blocking)
+    fn download_image_from_url(&self, url: &str) -> Result<image::DynamicImage, String> {
+        // Use reqwest::blocking to download image
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        
+        let response = client
+            .get(url)
+            .send()
+            .map_err(|e| format!("Failed to download image: {}", e))?;
+        
+        if !response.status().is_success() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        
+        // Get content type for validation
+        let content_type = response.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown");
+        
+        // Skip video files
+        if content_type.starts_with("video/") {
+            return Err(format!("Skipping video file (Content-Type: {})", content_type));
+        }
+        
+        // Download bytes
+        let bytes = response.bytes()
+            .map_err(|e| format!("Failed to read image bytes: {}", e))?;
+        
+        // Decode image
+        let img = image::load_from_memory(&bytes)
+            .map_err(|e| format!("Failed to decode image: {}", e))?;
+        
+        Ok(img)
     }
     
     /// Update button layout with FX buttons
@@ -386,7 +427,7 @@ impl StreamDeckManager {
                     self.button_layout[button_idx] = Some(FxButton {
                         id: format!("control_{}", name.to_lowercase()),
                         name: name.to_string(),
-                        image_data: None,
+                        image_url: None,
                         is_global: false,
                         position: row,
                     });
@@ -497,30 +538,18 @@ impl StreamDeckManager {
         // Get button size
         let size = self.get_button_size();
         
-        // Decode base64 image data from browser
-        let decoded_image = if let Some(ref base64_data) = fx_button.image_data {
-            // Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
-            let base64_str = if base64_data.contains(',') {
-                base64_data.split(',').nth(1).unwrap_or(base64_data)
-            } else {
-                base64_data
-            };
+        // Download image from authenticated URL (provided by Nuxt proxy with admin token)
+        let decoded_image = if let Some(ref image_url) = fx_button.image_url {
+            println!("[Stream Deck] Downloading image for {} from: {}", fx_button.name, image_url);
             
-            match base64::decode(base64_str) {
-                Ok(bytes) => {
-                    match image::load_from_memory(&bytes) {
-                        Ok(img) => {
-                            println!("[Stream Deck] ✅ Decoded image for {} ({}x{})", fx_button.name, img.width(), img.height());
-                            Some(img)
-                        }
-                        Err(e) => {
-                            println!("[Stream Deck] ❌ Failed to decode image for {}: {}", fx_button.name, e);
-                            None
-                        }
-                    }
+            // Download image synchronously (we're already in render context)
+            match self.download_image_from_url(image_url) {
+                Ok(img) => {
+                    println!("[Stream Deck] ✅ Downloaded image for {} ({}x{})", fx_button.name, img.width(), img.height());
+                    Some(img)
                 }
                 Err(e) => {
-                    println!("[Stream Deck] ❌ Failed to decode base64 for {}: {}", fx_button.name, e);
+                    println!("[Stream Deck] ❌ Failed to download image for {}: {}", fx_button.name, e);
                     None
                 }
             }
