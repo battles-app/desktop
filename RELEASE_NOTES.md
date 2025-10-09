@@ -15,7 +15,7 @@
 
 ## ✨ What's New
 
-Initial release with Stream Deck integration, real-time FX, and beautiful branded animations
+Stream Deck integration with beautiful branded animations, real-time FX control, and auto-updates
 
 ---
 
