@@ -108,61 +108,110 @@ async function generateReadme(version, changelog = '') {
   console.log('🤖 Generating README with AI...');
   console.log(`Version: ${version}`);
   
-  const prompt = `Generate a beautiful, professional README.md for "${appContext.name}" GitHub releases repository.
+  const prompt = `You are an expert at creating stunning, professional GitHub README files. Create a beautiful README.md for "${appContext.name}" following modern GitHub best practices.
 
-**Context:**
-- Application: ${appContext.name}
-- Tagline: ${appContext.tagline}
-- Current Version: ${version}
-- Platform: ${appContext.platform}
-- Status: Closed Beta
-
-**Features:**
-${appContext.features.map(f => `- ${f.icon} **${f.name}**: ${f.description}`).join('\n')}
-
-**Use Cases:**
-${appContext.useCases.map(u => `- ${u}`).join('\n')}
-
-**Technical Highlights:**
-${appContext.technicalHighlights.map(t => `- ${t}`).join('\n')}
-
-**Recent Changes (if any):**
-${changelog || 'Initial release with all core features'}
-
-**Requirements:**
-1. Eye-catching hero section with ASCII art banner or emoji banner
-2. Beautiful badges (version, platform, status, license)
-3. Clear feature highlights with icons
-4. Use cases section
-5. Installation instructions
-6. Links section with:
-   - Website: https://battles.app
-   - Privacy Policy: https://battles.app/policy
-   - Terms of Service: https://battles.app/terms
-   - Support: support@battles.app
-7. Screenshots/demo section placeholder
-8. Beta access information
-9. System requirements
-10. FAQ section
-11. **License section** explaining BSL 1.1:
-    - Link to LICENSE file
-    - Explain non-production use is free
-    - Production use requires commercial license
-    - API ownership by BATTLES.app™
-    - Contact for commercial licensing: legal@battles.app
-12. Footer with copyright and branding
-
-**Style Guidelines:**
-- Use modern markdown styling
-- Include plenty of emojis for visual appeal
+**EXAMPLE STRUCTURE TO FOLLOW:**
+Study this example structure and style:
+- Hero section: Centered logo + title + tagline + badges in a row
+- Badges use shields.io with style=for-the-badge
+- Features in 2-column table layout
+- System requirements in markdown table
+- Collapsible FAQ sections using <details>
+- Clear download CTAs with direct links
 - Professional yet friendly tone
-- Focus on user benefits, not just features
-- Use tables where appropriate
-- Add horizontal rules for section separation
-- Use blockquotes for important notes
-- Include call-to-action buttons/links
 
-Generate ONLY the markdown content, no additional text or explanations.`;
+**APP DETAILS:**
+Name: ${appContext.name}
+Version: ${version}
+Tagline: ${appContext.tagline}
+Platform: ${appContext.platform}
+Status: Closed Beta
+License: BSL 1.1
+
+**FEATURES:**
+${appContext.features.map(f => `${f.icon} ${f.name}: ${f.description}`).join('\n')}
+
+**USE CASES:**
+${appContext.useCases.join(', ')}
+
+**RECENT UPDATES:**
+${changelog || 'Initial release with comprehensive feature set'}
+
+**REQUIRED SECTIONS (IN ORDER):**
+
+1. **Hero Section** (centered):
+   - Logo: https://battles.app/assets/battles-logo.svg (use img tag, 120px width)
+   - Title: # 🎮 Battles.app Desktop
+   - Tagline subtitle
+   - Badge row (for-the-badge style):
+     * Download (blue Windows badge linking to releases)
+     * Website (red badge)
+     * Version (blue)
+     * Platform (purple with Windows logo)
+     * Status (red "Closed Beta")
+   - Quick links bar: Download • Beta Access • Documentation • Support
+
+2. **Features Section**:
+   - Use <table> with 2 columns (50% width each)
+   - Split features across columns
+   - Include icons and bold names
+
+3. **Quick Start** (brief command/steps)
+
+4. **System Requirements Table**:
+   - OS, Processor, RAM, GPU, Accessories
+   - Use markdown table format
+
+5. **Installation Section**:
+   - Centered download button
+   - Numbered steps
+   - Links to releases
+
+6. **Use Cases** (visual presentation)
+
+7. **Beta Access Section**:
+   - How to request access
+   - What users get
+
+8. **Auto-Updates Section** (checkmarks for features)
+
+9. **FAQ Section**:
+   - Use <details><summary> for collapsible items
+   - At least 3-4 common questions
+
+10. **License Section**:
+    - BSL 1.1 explanation
+    - Free for non-production (checkmarks)
+    - Production requires license (X marks)
+    - Commercial licensing contact
+
+11. **Links Section** (all important links)
+
+12. **Footer** (centered):
+    - Made with ❤️
+    - Copyright
+    - Quick links
+
+**STYLE REQUIREMENTS:**
+✅ ALL badges must use style=for-the-badge
+✅ Use centered <div align="center"> sections
+✅ Use tables for features and requirements
+✅ Include direct download links
+✅ Professional, modern, clean layout
+✅ Emojis for visual interest (but not excessive)
+✅ Clear hierarchy with ---separators
+✅ NO code examples (this is desktop app, not library)
+✅ Focus on benefits, not implementation
+
+**BADGE COLORS:**
+- Download: 0078D4 (Windows blue)
+- Website: FF1744 (red)
+- Support: FFC107 (yellow/gold)
+- Version: blue
+- Platform: blueviolet
+- Status: red
+
+Generate ONLY the markdown. Make it stunning and professional like top GitHub projects.`;
 
   try {
     const response = await openai.chat.completions.create({
@@ -170,15 +219,26 @@ Generate ONLY the markdown content, no additional text or explanations.`;
       messages: [
         {
           role: 'system',
-          content: 'You are a professional technical writer and UX designer specializing in creating engaging, beautiful README files for software releases. Create markdown that is visually appealing, informative, and encourages users to try the software.'
+          content: `You are an expert at creating stunning, professional GitHub README files that match the quality of top open-source projects. 
+
+Your expertise includes:
+- Modern markdown with shields.io badges (style=for-the-badge)
+- Centered hero sections with logos and taglines
+- 2-column feature layouts using HTML tables
+- Collapsible FAQ sections with <details> tags
+- Clear download CTAs and navigation
+- Professional yet friendly tone
+- Visual hierarchy with proper spacing
+
+Study the style of popular repositories like microsoft/vscode, tauri-apps/tauri, and similar professional projects. Generate README content that looks polished, modern, and encourages users to download and try the software.`
         },
         {
           role: 'user',
           content: prompt
         }
       ],
-      temperature: 0.8,
-      max_tokens: 2500
+      temperature: 0.7,
+      max_tokens: 3000
     });
     
     const readme = response.choices[0].message.content.trim();
