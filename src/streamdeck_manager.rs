@@ -277,12 +277,15 @@ impl StreamDeckManager {
         let font = FontRef::try_from_slice(font_data)
             .map_err(|e| format!("Failed to load font: {:?}", e))?;
         
-        // Phase 1: Show logo + "BATTLES" (3 frames per letter)
-        let battles_frames = text_battles.len() * 3;
-        // Phase 2: Show logo + "LOADING" (3 frames per letter)
-        let loading_frames = text_loading.len() * 3;
-        // Phase 3: Hold both visible (5 frames before looping)
-        let hold_frames = 5;
+        // Each letter appears every 1 frame (6ms at 166 FPS) - BLAZING FAST!
+        let frames_per_letter = 1;
+        
+        // Phase 1: Show logo + "BATTLES" (1 frame per letter)
+        let battles_frames = text_battles.len() * frames_per_letter;
+        // Phase 2: Show logo + "LOADING" (1 frame per letter)
+        let loading_frames = text_loading.len() * frames_per_letter;
+        // Phase 3: Hold both visible (25 frames = ~150ms at 166 FPS)
+        let hold_frames = 25;
         
         let total_frames = battles_frames + loading_frames + hold_frames;
         
@@ -291,13 +294,13 @@ impl StreamDeckManager {
             
             // Calculate which phase we're in
             let battles_visible = if frame < battles_frames {
-                (frame / 3).min(text_battles.len())
+                (frame / frames_per_letter).min(text_battles.len())
             } else {
                 text_battles.len()
             };
             
             let loading_visible = if frame >= battles_frames {
-                ((frame - battles_frames) / 3).min(text_loading.len())
+                ((frame - battles_frames) / frames_per_letter).min(text_loading.len())
             } else {
                 0
             };
@@ -399,25 +402,35 @@ impl StreamDeckManager {
             return Err("No device or animation stopped".to_string());
         }
         
+        // SKIP FRAMES: Only update every 3rd frame to avoid overwhelming Stream Deck hardware
+        // Stream Deck has USB bandwidth limitations (~15-20 full updates/sec max)
+        if frame % 3 != 0 {
+            return Ok(());
+        }
+        
         // Calculate animation phase based on frame number
         let text_battles = "BATTLES";
         let text_loading = "LOADING";
-        let battles_frames = text_battles.len() * 3;
-        let loading_frames = text_loading.len() * 3;
-        let hold_frames = 5;
+        
+        // Each letter appears every 1 frame (but we only render every 3rd frame)
+        // Effective: ~18ms per letter at 55 FPS actual render rate
+        let frames_per_letter = 1;
+        let battles_frames = text_battles.len() * frames_per_letter;
+        let loading_frames = text_loading.len() * frames_per_letter;
+        let hold_frames = 8; // Hold for ~150ms
         let cycle_frames = battles_frames + loading_frames + hold_frames;
         
         // Loop the animation by taking modulo
         let cycle_frame = frame % cycle_frames;
         
         let battles_visible = if cycle_frame < battles_frames {
-            (cycle_frame / 3).min(text_battles.len())
+            (cycle_frame / frames_per_letter).min(text_battles.len())
         } else {
             text_battles.len()
         };
         
         let loading_visible = if cycle_frame >= battles_frames {
-            ((cycle_frame - battles_frames) / 3).min(text_loading.len())
+            ((cycle_frame - battles_frames) / frames_per_letter).min(text_loading.len())
         } else {
             0
         };

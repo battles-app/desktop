@@ -2040,8 +2040,8 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                     }
                 }
                 
-                // 30ms per frame = ~33 FPS
-                std::thread::sleep(std::time::Duration::from_millis(30));
+                // 6ms per frame = ~166 FPS (5x faster!)
+                std::thread::sleep(std::time::Duration::from_millis(6));
             }
         });
         
