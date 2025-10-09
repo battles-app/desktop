@@ -123,7 +123,7 @@ gh release create v${version} ... --repo battles-app/desktop
 
 ## Current Status
 
-✅ **battles-app/desktop** - Clean, contains only README  
+✅ **battles-app/desktop** - Clean, contains only README and downloads  
 ✅ **gkarmas/battles-desktop** - Private, contains full source  
 ✅ **Release script** - Secured with safety checks  
 ✅ **All source code** - Removed from public repo  
