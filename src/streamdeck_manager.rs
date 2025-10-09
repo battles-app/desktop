@@ -188,19 +188,34 @@ impl StreamDeckManager {
     
     /// Download image from authenticated URL (blocking)
     fn download_image_from_url(&self, url: &str) -> Result<image::DynamicImage, String> {
+        println!("[Stream Deck] 🌐 Starting download: {}", url);
+        
         // Use reqwest::blocking to download image
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+            .map_err(|e| {
+                let err = format!("Failed to create HTTP client: {}", e);
+                println!("[Stream Deck] ❌ {}", err);
+                err
+            })?;
         
+        println!("[Stream Deck] 📡 Sending GET request...");
         let response = client
             .get(url)
             .send()
-            .map_err(|e| format!("Failed to download image: {}", e))?;
+            .map_err(|e| {
+                let err = format!("Failed to download image: {}", e);
+                println!("[Stream Deck] ❌ {}", err);
+                err
+            })?;
+        
+        println!("[Stream Deck] 📥 Response status: {}", response.status());
         
         if !response.status().is_success() {
-            return Err(format!("HTTP error: {}", response.status()));
+            let err = format!("HTTP error: {}", response.status());
+            println!("[Stream Deck] ❌ {}", err);
+            return Err(err);
         }
         
         // Get content type for validation
@@ -209,18 +224,36 @@ impl StreamDeckManager {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown");
         
+        println!("[Stream Deck] 📋 Content-Type: {}", content_type);
+        
         // Skip video files
         if content_type.starts_with("video/") {
-            return Err(format!("Skipping video file (Content-Type: {})", content_type));
+            let err = format!("Skipping video file (Content-Type: {})", content_type);
+            println!("[Stream Deck] ⚠️ {}", err);
+            return Err(err);
         }
         
         // Download bytes
+        println!("[Stream Deck] 💾 Reading response bytes...");
         let bytes = response.bytes()
-            .map_err(|e| format!("Failed to read image bytes: {}", e))?;
+            .map_err(|e| {
+                let err = format!("Failed to read image bytes: {}", e);
+                println!("[Stream Deck] ❌ {}", err);
+                err
+            })?;
+        
+        println!("[Stream Deck] 📦 Downloaded {} bytes", bytes.len());
         
         // Decode image
+        println!("[Stream Deck] 🖼️ Decoding image...");
         let img = image::load_from_memory(&bytes)
-            .map_err(|e| format!("Failed to decode image: {}", e))?;
+            .map_err(|e| {
+                let err = format!("Failed to decode image: {}", e);
+                println!("[Stream Deck] ❌ {}", err);
+                err
+            })?;
+        
+        println!("[Stream Deck] ✅ Image decoded: {}x{}", img.width(), img.height());
         
         Ok(img)
     }
@@ -347,8 +380,21 @@ impl StreamDeckManager {
         if button_count == 0 {
             return Err("No device connected".to_string());
         }
+
+        println!("[Stream Deck] ========== LAYOUT UPDATE START ==========");
+        println!("[Stream Deck] Device: {:?}, Button count: {}", self.device_kind, button_count);
+        println!("[Stream Deck] Received {} battle board items", battle_board.len());
+        println!("[Stream Deck] Received {} user FX items", user_fx.len());
         
-        println!("[Stream Deck] Updating layout with {} battle board + {} user FX items (images from browser cache)", battle_board.len(), user_fx.len());
+        // Log first few items
+        for (i, item) in battle_board.iter().take(3).enumerate() {
+            println!("[Stream Deck] Battle[{}]: id={}, name={}, has_url={}", 
+                i, item.id, item.name, item.image_url.is_some());
+        }
+        for (i, item) in user_fx.iter().take(3).enumerate() {
+            println!("[Stream Deck] UserFX[{}]: id={}, name={}, has_url={}", 
+                i, item.id, item.name, item.image_url.is_some());
+        }
         
         // Store button mapping for press handling
         self.button_states.clear();
@@ -474,20 +520,29 @@ impl StreamDeckManager {
             }
         }
         
+        println!("[Stream Deck] Layout mapping complete, rendering {} buttons...", self.button_layout.len());
+        
         // Render all buttons
         self.render_all_buttons()?;
         
+        println!("[Stream Deck] ========== LAYOUT UPDATE COMPLETE ==========");
         Ok(())
     }
     
     /// Render all buttons based on current layout
     fn render_all_buttons(&mut self) -> Result<(), String> {
         if self.device.is_none() {
+            println!("[Stream Deck] ⚠️ Cannot render: no device");
             return Ok(());
         }
         
+        println!("[Stream Deck] Rendering {} buttons...", self.button_layout.len());
+        
         // Collect all button images first
         let mut button_images: Vec<(u8, Option<image::DynamicImage>)> = Vec::new();
+        let mut created_count = 0;
+        let mut empty_count = 0;
+        let mut error_count = 0;
         
         for (idx, button_opt) in self.button_layout.iter().enumerate() {
             let image = if let Some(button) = button_opt {
@@ -495,15 +550,29 @@ impl StreamDeckManager {
                     .get(&(idx as u8))
                     .map(|s| s.is_playing)
                     .unwrap_or(false);
-                Some(self.create_button_image(button, is_playing)?)
+                
+                match self.create_button_image(button, is_playing) {
+                    Ok(img) => {
+                        created_count += 1;
+                        Some(img)
+                    }
+                    Err(e) => {
+                        println!("[Stream Deck] ❌ Failed to create image for button {}: {}", idx, e);
+                        error_count += 1;
+                        None
+                    }
+                }
             } else {
                 // Empty button
+                empty_count += 1;
                 let size = self.get_button_size();
                 let img = image::RgbaImage::new(size, size);
                 Some(image::DynamicImage::ImageRgba8(img))
             };
             button_images.push((idx as u8, image));
         }
+        
+        println!("[Stream Deck] Image creation: {} created, {} empty, {} errors", created_count, empty_count, error_count);
         
         // Now set all button images
         if let Some(ref mut device) = self.device {
@@ -522,12 +591,19 @@ impl StreamDeckManager {
                 }
             }
             
-            println!("[Stream Deck] Set {} button images ({} success, {} failed)", 
+            println!("[Stream Deck] 📊 Set {} button images ({} success, {} failed)", 
                 success_count + fail_count, success_count, fail_count);
             
             // Flush changes to device
-            device.flush().map_err(|e| format!("Failed to flush device: {}", e))?;
-            println!("[Stream Deck] ✅ Flushed button updates to device");
+            println!("[Stream Deck] 🔄 Flushing changes to device...");
+            match device.flush() {
+                Ok(_) => println!("[Stream Deck] ✅ Successfully flushed button updates to device"),
+                Err(e) => {
+                    let err = format!("Failed to flush device: {}", e);
+                    println!("[Stream Deck] ❌ {}", err);
+                    return Err(err);
+                }
+            }
         }
         
         Ok(())
@@ -535,12 +611,15 @@ impl StreamDeckManager {
     
     /// Create button image with text and styling
     fn create_button_image(&self, fx_button: &FxButton, is_playing: bool) -> Result<image::DynamicImage, String> {
+        println!("[Stream Deck] 🎨 Creating button image for: {} (id: {}, is_playing: {})", fx_button.name, fx_button.id, is_playing);
+        
         // Get button size
         let size = self.get_button_size();
+        println!("[Stream Deck] 📏 Button size: {}x{}", size, size);
         
         // Download image from authenticated URL (provided by Nuxt proxy with admin token)
         let decoded_image = if let Some(ref image_url) = fx_button.image_url {
-            println!("[Stream Deck] Downloading image for {} from: {}", fx_button.name, image_url);
+            println!("[Stream Deck] 🔗 Has image URL, downloading...");
             
             // Download image synchronously (we're already in render context)
             match self.download_image_from_url(image_url) {
@@ -554,6 +633,7 @@ impl StreamDeckManager {
                 }
             }
         } else {
+            println!("[Stream Deck] ℹ️ No image URL for {}, using colored background", fx_button.name);
             None
         };
         
@@ -658,6 +738,7 @@ impl StreamDeckManager {
             draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
         }
         
+        println!("[Stream Deck] ✅ Button image created successfully for: {}", fx_button.name);
         Ok(image::DynamicImage::ImageRgba8(img))
     }
     
