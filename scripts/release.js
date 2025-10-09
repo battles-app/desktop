@@ -509,7 +509,7 @@ async function createGitHubRelease(version, changelog, executable) {
     
     // Check if we're on private repo and push tag there
     const remoteUrl = execSync('git config --get remote.origin.url', { cwd: rootDir, encoding: 'utf-8' }).trim();
-    if (remoteUrl.includes('gkarmas/battles-desktop')) {
+    if (remoteUrl.includes('battles-app/desktop')) {
       execSync(`git push origin v${version}`, { cwd: rootDir });
       log.info('Tag pushed to PRIVATE repo');
     } else {
@@ -901,7 +901,7 @@ async function release() {
     
     // IMPORTANT: Check if we're on the private repo before pushing
     const remoteUrl = execSync('git config --get remote.origin.url', { cwd: rootDir, encoding: 'utf-8' }).trim();
-    if (remoteUrl.includes('gkarmas/battles-desktop')) {
+    if (remoteUrl.includes('battles-app/desktop')) {
       execSync('git push', { cwd: rootDir });
       log.success('Committed and pushed version changes to PRIVATE repo');
     } else {
