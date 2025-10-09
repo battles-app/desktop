@@ -1893,13 +1893,30 @@ async fn streamdeck_update_layout(
 
 #[command]
 async fn streamdeck_set_button_state(fx_id: String, is_playing: bool) -> Result<(), String> {
+    println!("[Stream Deck Command] 📥 streamdeck_set_button_state called");
+    println!("[Stream Deck Command]    → fx_id: {}", fx_id);
+    println!("[Stream Deck Command]    → is_playing: {}", is_playing);
+    
     let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
-        manager.set_button_state(&fx_id, is_playing)?;
+        println!("[Stream Deck Command] ✅ Manager found, calling set_button_state...");
+        match manager.set_button_state(&fx_id, is_playing) {
+            Ok(_) => {
+                println!("[Stream Deck Command] ✅ Button state updated successfully: {} -> {}", 
+                    fx_id, if is_playing { "PLAYING (GREEN)" } else { "STOPPED (NO BORDER)" });
+                Ok(())
+            }
+            Err(e) => {
+                println!("[Stream Deck Command] ❌ Failed to update button state: {}", e);
+                Err(e)
+            }
+        }
+    } else {
+        let err_msg = "Stream Deck manager not initialized".to_string();
+        println!("[Stream Deck Command] ❌ {}", err_msg);
+        Err(err_msg)
     }
-    
-    Ok(())
 }
 
 #[command]
@@ -2020,12 +2037,17 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                 if let Some(ref mut manager) = *manager_lock {
                     let pressed_buttons = manager.read_button_presses();
                     
+                    if !pressed_buttons.is_empty() {
+                        println!("[Stream Deck Watcher] 🔍 Detected {} button press(es): {:?}", pressed_buttons.len(), pressed_buttons);
+                    }
+                    
                     for button_idx in pressed_buttons {
-                        println!("[Stream Deck Watcher] 🔘 Button {} pressed", button_idx);
+                        println!("[Stream Deck Watcher] 🔘 Button {} pressed - processing...", button_idx);
                         
                         // Handle button press and get FX info
                         if let Some((fx_id, is_playing)) = manager.handle_button_press(button_idx) {
-                            println!("[Stream Deck Watcher] 🎮 Toggled {} to {}", fx_id, if is_playing { "PLAYING" } else { "STOPPED" });
+                            println!("[Stream Deck Watcher] 🎮 Button {} toggled FX '{}' to {}", 
+                                button_idx, fx_id, if is_playing { "PLAYING ▶" } else { "STOPPED ⏹" });
                             
                             // Emit event to frontend with FX ID and new state
                             #[derive(Clone, serde::Serialize)]
@@ -2035,11 +2057,23 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                                 button_idx: u8,
                             }
                             
-                            let _ = app.emit("streamdeck://button_press", ButtonPressEvent {
-                                fx_id,
+                            let event = ButtonPressEvent {
+                                fx_id: fx_id.clone(),
                                 is_playing,
                                 button_idx,
-                            });
+                            };
+                            
+                            println!("[Stream Deck Watcher] 📤 Emitting event to frontend: streamdeck://button_press");
+                            println!("[Stream Deck Watcher]    → fx_id: {}, is_playing: {}, button_idx: {}", 
+                                event.fx_id, event.is_playing, event.button_idx);
+                            
+                            if let Err(e) = app.emit("streamdeck://button_press", event) {
+                                println!("[Stream Deck Watcher] ❌ Failed to emit event: {}", e);
+                            } else {
+                                println!("[Stream Deck Watcher] ✅ Event emitted successfully");
+                            }
+                        } else {
+                            println!("[Stream Deck Watcher] ⚠️ Button {} press returned no FX info (empty slot or control button)", button_idx);
                         }
                     }
                 }
