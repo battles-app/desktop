@@ -1,10 +1,15 @@
 {
   "name": "battles-desktop",
   "version": "2.0.1",
-  "description": "Pro TikTok Tools",
+  "description": "Professional TikTok Live streaming tools with Elgato Stream Deck integration",
   "type": "module",
-  "author": "BATTLES™",
-  "license": "UNLICENSED",
+  "author": "BATTLES.app™",
+  "license": "BSL-1.1",
+  "homepage": "https://battles.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/battles-app/desktop"
+  },
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",

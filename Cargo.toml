@@ -1,9 +1,11 @@
 [package]
 name = "battles-desktop"
 version = "0.0.10"
-description = "Pro TikTok Tools"
-authors = ["BATTLES™"]
-license = ""
+description = "Professional TikTok Live streaming tools with Elgato Stream Deck integration"
+authors = ["BATTLES.app™"]
+license = "BSL-1.1"
+repository = "https://github.com/battles-app/desktop"
+homepage = "https://battles.app"
 edition = "2021"
 rust-version = "1.77.2"
 

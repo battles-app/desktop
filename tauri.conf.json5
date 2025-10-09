@@ -51,8 +51,8 @@
   },
   "bundle": {
     "active": true,
-    "category": null,
-    "copyright": "BATTLES.app™ ©2025",
+    "category": "Utility",
+    "copyright": "© 2025 BATTLES.app™. All rights reserved.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -60,7 +60,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "longDescription": "Pro TikTok Tools",
+    "longDescription": "Professional TikTok Live streaming tools with Elgato Stream Deck integration. Real-time FX control, GPU-accelerated chroma key, and professional broadcast features for content creators.",
+    "shortDescription": "Pro TikTok Live Tools with Stream Deck",
     "macOS": {
       "entitlements": "Release.entitlements",
       "exceptionDomain": "",
@@ -81,13 +82,28 @@
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
       "nsis": {
-        "compression": "bzip2",
+        "compression": "lzma",
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine",
+        "languages": ["English"],
+        "template": null,
         "headerImage": null,
-        "installMode": "perMachine"
+        "sidebarImage": null,
+        "license": "LICENSE",
+        "welcomePageMessage": "Welcome to Battles.app Desktop Setup!\n\nPro TikTok Live Tools with Stream Deck Integration\n\n✨ Real-time FX Control\n🎮 Elgato Stream Deck Support\n🎬 Professional Streaming Tools\n🔥 GPU-Accelerated Performance",
+        "finishPageMessage": "Battles.app Desktop has been successfully installed!\n\n🚀 Launch the application to get started\n💡 Visit battles.app for support and updates"
       },
       "timestampUrl": "https://timestamp.comodoca.com",
       "wix": {
-        "language": "en-US"
+        "language": "en-US",
+        "template": null,
+        "banner": null,
+        "dialog": null,
+        "license": "LICENSE"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
       }
     },
     "createUpdaterArtifacts": true,
@@ -98,8 +114,8 @@
     ],
     "externalBin": []
   },
-  "identifier": "io.battles.app",
-  "productName": "battles.app",
+  "identifier": "app.battles.desktop",
+  "productName": "Battles.app Desktop",
   "plugins": {
       "deep-link": {
       "mobile": [
