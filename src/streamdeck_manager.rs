@@ -636,7 +636,7 @@ impl StreamDeckManager {
         let cache_path_clone = cache_path.clone();
         
         std::thread::spawn(move || {
-            let full_url = format!("https://local.battles.app:3000{}", image_url);
+            let full_url = format!("https://battles.app{}", image_url);
             
             match reqwest::blocking::Client::builder()
                 .danger_accept_invalid_certs(true)

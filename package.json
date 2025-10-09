@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "dotenv": "^17.2.3",
+    "openai": "^6.2.0",
     "sharp": "^0.33.5",
     "to-ico": "^1.1.5"
   },

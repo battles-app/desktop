@@ -1393,10 +1393,10 @@ async fn play_composite_fx(
     
     // Check if already cached
     if !local_path.exists() {
-        println!("[Composite] 📥 Downloading FX from Nuxt proxy...");
+        println!("[Composite] 📥 Downloading FX from Battles.app...");
         
-        // Download from Nuxt proxy (handles authentication)
-        let full_url = format!("https://local.battles.app:3000{}", file_url);
+        // Download from Battles.app (handles authentication)
+        let full_url = format!("https://battles.app{}", file_url);
         
         // Download asynchronously in background
         let local_path_clone = local_path.clone();

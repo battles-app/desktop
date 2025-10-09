@@ -15,9 +15,15 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
+import OpenAI from 'openai';
 
 // Load environment variables from .env file
 config();
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,9 +86,9 @@ function updateTauriVersion(newVersion) {
   fs.writeFileSync(tauriPath, JSON.stringify(tauriConf, null, 2) + '\n');
 }
 
-// Generate AI changelog from git commits
+// Generate AI-powered changelog from git commits using OpenAI
 async function generateChangelog(fromVersion, toVersion) {
-  log.header('Generating Changelog');
+  log.header('Generating AI-Powered Changelog');
   
   try {
     // Get git commits since last tag
@@ -92,60 +98,109 @@ async function generateChangelog(fromVersion, toVersion) {
     ).trim();
     
     if (!gitLog) {
-      return '• Initial release\n• Stream Deck integration with beautiful branded animations\n• Dark theme with logo colors\n• Real-time FX control';
+      log.info('No commits found, using default changelog');
+      return '### ✨ New Features\n\n• Initial release\n• Stream Deck integration with beautiful branded animations\n• Dark theme with logo colors\n• Real-time FX control for TikTok Live';
     }
     
     const commits = gitLog.split('\n').filter(line => line.trim());
     
-    // Categorize commits
-    const features = [];
-    const fixes = [];
-    const improvements = [];
-    const other = [];
+    log.info(`Found ${commits.length} commits since v${fromVersion}`);
+    log.info('Sending to OpenAI GPT-4 for professional release notes...');
     
-    commits.forEach(commit => {
-      const lower = commit.toLowerCase();
-      if (lower.includes('feat') || lower.includes('add')) {
-        features.push(commit.replace(/^(feat|add)[:\s]*/i, ''));
-      } else if (lower.includes('fix') || lower.includes('bug')) {
-        fixes.push(commit.replace(/^(fix|bug)[:\s]*/i, ''));
-      } else if (lower.includes('improve') || lower.includes('optimize') || lower.includes('perf')) {
-        improvements.push(commit.replace(/^(improve|optimize|perf)[:\s]*/i, ''));
-      } else {
-        other.push(commit);
+    // Use OpenAI to generate professional release notes
+    try {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4-turbo-preview',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a professional release notes writer for Battles.app Desktop, a TikTok Live streaming utility with Elgato Stream Deck integration. 
+
+Transform git commit messages into polished, user-friendly release notes.
+
+Guidelines:
+- Group changes into: ✨ New Features, 🚀 Improvements, 🐛 Bug Fixes
+- Use clear, non-technical language that users understand
+- Highlight user benefits, not implementation details
+- Keep each bullet point concise (1-2 lines max)
+- Use emojis sparingly (only category headers)
+- Focus on what changed for the USER, not the developer
+- If Stream Deck is mentioned, emphasize visual/UX improvements
+- Mention performance gains if applicable
+
+Example transformation:
+"fix streamdeck polling rate" → "Fixed Stream Deck responsiveness with instant button feedback"
+"add loading animation" → "Beautiful branded loading animation with smooth gradients and logo colors"
+
+Return ONLY the formatted changelog in markdown, no extra text.`
+          },
+          {
+            role: 'user',
+            content: `Generate professional release notes from these commits:\n\n${commits.join('\n')}`
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 1000
+      });
+      
+      const aiChangelog = response.choices[0].message.content.trim();
+      log.success('✨ AI-generated changelog created!');
+      return aiChangelog;
+      
+    } catch (aiError) {
+      log.warn(`OpenAI API failed: ${aiError.message}`);
+      log.info('Falling back to basic changelog generation...');
+      
+      // Fallback: Basic categorization if AI fails
+      const features = [];
+      const fixes = [];
+      const improvements = [];
+      const other = [];
+      
+      commits.forEach(commit => {
+        const lower = commit.toLowerCase();
+        if (lower.includes('feat') || lower.includes('add')) {
+          features.push(commit.replace(/^(feat|add)[:\s]*/i, ''));
+        } else if (lower.includes('fix') || lower.includes('bug')) {
+          fixes.push(commit.replace(/^(fix|bug)[:\s]*/i, ''));
+        } else if (lower.includes('improve') || lower.includes('optimize') || lower.includes('perf')) {
+          improvements.push(commit.replace(/^(improve|optimize|perf)[:\s]*/i, ''));
+        } else {
+          other.push(commit);
+        }
+      });
+      
+      let changelog = '';
+      
+      if (features.length > 0) {
+        changelog += '### ✨ New Features\n\n';
+        features.forEach(feat => changelog += `• ${feat}\n`);
+        changelog += '\n';
       }
-    });
-    
-    let changelog = '';
-    
-    if (features.length > 0) {
-      changelog += '### ✨ New Features\n\n';
-      features.forEach(feat => changelog += `• ${feat}\n`);
-      changelog += '\n';
+      
+      if (improvements.length > 0) {
+        changelog += '### 🚀 Improvements\n\n';
+        improvements.forEach(imp => changelog += `• ${imp}\n`);
+        changelog += '\n';
+      }
+      
+      if (fixes.length > 0) {
+        changelog += '### 🐛 Bug Fixes\n\n';
+        fixes.forEach(fix => changelog += `• ${fix}\n`);
+        changelog += '\n';
+      }
+      
+      if (other.length > 0 && (features.length === 0 && improvements.length === 0 && fixes.length === 0)) {
+        changelog += '### 📝 Changes\n\n';
+        other.forEach(change => changelog += `• ${change}\n`);
+        changelog += '\n';
+      }
+      
+      return changelog || '• Bug fixes and improvements';
     }
-    
-    if (improvements.length > 0) {
-      changelog += '### 🚀 Improvements\n\n';
-      improvements.forEach(imp => changelog += `• ${imp}\n`);
-      changelog += '\n';
-    }
-    
-    if (fixes.length > 0) {
-      changelog += '### 🐛 Bug Fixes\n\n';
-      fixes.forEach(fix => changelog += `• ${fix}\n`);
-      changelog += '\n';
-    }
-    
-    if (other.length > 0 && (features.length === 0 && improvements.length === 0 && fixes.length === 0)) {
-      changelog += '### 📝 Changes\n\n';
-      other.forEach(change => changelog += `• ${change}\n`);
-      changelog += '\n';
-    }
-    
-    return changelog;
   } catch (error) {
     log.error(`Failed to generate changelog: ${error.message}`);
-    return '• Bug fixes and improvements';
+    return '### 🚀 Improvements\n\n• Bug fixes and performance improvements';
   }
 }
 

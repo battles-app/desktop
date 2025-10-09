@@ -30,7 +30,7 @@
         "title": "Battles.app",
         "titleBarStyle": "Overlay",
         "transparent": true,
-        "url": "https://local.battles.app:3000/",
+        "url": "https://battles.app/",
         "visible": true,
         "windowEffects": {
           "effects": [
@@ -47,7 +47,7 @@
   },
   "build": {
     "devUrl": "https://local.battles.app:3000/",
-    "frontendDist": "https://local.battles.app:3000/"
+    "frontendDist": "https://battles.app/"
   },
   "bundle": {
     "active": true,
