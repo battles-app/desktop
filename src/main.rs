@@ -1397,7 +1397,7 @@ async fn play_composite_fx(
         
         // Use different base URL based on build mode
         #[cfg(debug_assertions)]
-        let base_url = "https://battles.app";
+        let base_url = "https://local.battles.app:3000";
         #[cfg(not(debug_assertions))]
         let base_url = "https://battles.app";
         
