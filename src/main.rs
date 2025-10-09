@@ -1393,10 +1393,15 @@ async fn play_composite_fx(
     
     // Check if already cached
     if !local_path.exists() {
-        println!("[Composite] 📥 Downloading FX from Battles.app...");
+        println!("[Composite] 📥 Downloading FX from server...");
         
-        // Download from Battles.app (handles authentication)
-        let full_url = format!("https://battles.app{}", file_url);
+        // Use different base URL based on build mode
+        #[cfg(debug_assertions)]
+        let base_url = "https://local.battles.app:3000";
+        #[cfg(not(debug_assertions))]
+        let base_url = "https://battles.app";
+        
+        let full_url = format!("{}{}", base_url, file_url);
         
         // Download asynchronously in background
         let local_path_clone = local_path.clone();
