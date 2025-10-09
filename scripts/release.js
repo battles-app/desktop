@@ -148,33 +148,35 @@ async function generateChangelog(fromVersion, toVersion) {
         messages: [
           {
             role: 'system',
-            content: `You are a professional release notes writer for Battles.app Desktop, a TikTok Live streaming utility with Elgato Stream Deck integration. 
+            content: `You are a professional release notes writer for Battles.app Desktop.
 
-Transform git commit messages into polished, user-friendly release notes.
+Transform git commit messages into minimal, user-friendly release notes.
 
-Guidelines:
+CRITICAL RULES:
+- NEVER use backticks or code blocks in your output
+- Keep it minimal - just what changed
+- Use plain text for filenames and technical terms
+- Use simple bullet points (• symbol)
 - Group changes into: ✨ New Features, 🚀 Improvements, 🐛 Bug Fixes
-- Use clear, non-technical language that users understand
-- Highlight user benefits, not implementation details
-- Keep each bullet point concise (1-2 lines max)
-- Use emojis sparingly (only category headers)
-- Focus on what changed for the USER, not the developer
-- If Stream Deck is mentioned, emphasize visual/UX improvements
-- Mention performance gains if applicable
+- Each bullet point should be 1 line maximum
+- Focus on user benefits, not technical details
+- No code examples, no technical jargon
+- Use plain text for all content
 
 Example transformation:
-"fix streamdeck polling rate" → "Fixed Stream Deck responsiveness with instant button feedback"
-"add loading animation" → "Beautiful branded loading animation with smooth gradients and logo colors"
+"fix streamdeck polling rate" → "• Fixed Stream Deck button responsiveness"
+"add loading animation" → "• Added branded loading animation"
+"update tauri.conf.json5" → "• Fixed production URL configuration"
 
-Return ONLY the formatted changelog in markdown, no extra text.`
+Return ONLY the formatted changelog in plain markdown with bullet points. No code blocks, no backticks.`
           },
           {
             role: 'user',
-            content: `Generate professional release notes from these commits:\n\n${commits.join('\n')}`
+            content: `Generate minimal release notes from these commits:\n\n${commits.join('\n')}`
           }
         ],
         temperature: 0.7,
-        max_tokens: 1000
+        max_tokens: 500
       });
       
       const aiChangelog = response.choices[0].message.content.trim();
