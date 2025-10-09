@@ -503,6 +503,18 @@ async function release() {
   const changelog = await generateChangelog(currentVersion, newVersion);
   log.success('Generated changelog');
   
+  // Generate beautiful README for GitHub
+  log.header('Generating AI README');
+  try {
+    execSync(`node scripts/generate-readme.js "${changelog}"`, {
+      cwd: rootDir,
+      stdio: 'inherit'
+    });
+    log.success('AI-powered README generated');
+  } catch (error) {
+    log.error('Failed to generate README (continuing anyway)');
+  }
+  
   // Build
   if (!buildApp()) {
     process.exit(1);
