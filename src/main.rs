@@ -2014,10 +2014,34 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                 }
             }
             
-            // Note: Button reading would go here, but the elgato-streamdeck library
-            // doesn't provide an async button reading API. Button presses would need
-            // to be handled through a separate thread with blocking reads.
-            // For now, users can trigger FX from the dashboard.
+            // Poll for button presses if connected
+            if is_connected {
+                let mut manager_lock = STREAMDECK_MANAGER.lock();
+                if let Some(ref mut manager) = *manager_lock {
+                    // Read button presses (non-blocking)
+                    let presses = manager.read_button_presses();
+                    
+                    // Handle button down events (toggle on press)
+                    for (button_idx, is_down) in presses {
+                        if is_down {
+                            // Handle button press and get FX ID + new state
+                            if let Some((fx_id, new_state)) = manager.handle_button_press(button_idx) {
+                                // Emit event to frontend to trigger FX play/stop
+                                #[derive(Clone, serde::Serialize)]
+                                struct StreamDeckButtonPress {
+                                    fx_id: String,
+                                    should_play: bool,
+                                }
+                                
+                                let _ = app.emit("streamdeck://button-press", StreamDeckButtonPress {
+                                    fx_id,
+                                    should_play: new_state,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     });
 }

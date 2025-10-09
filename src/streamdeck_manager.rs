@@ -8,7 +8,6 @@ use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use ab_glyph::{FontRef, PxScale};
 use std::path::PathBuf;
-use std::io::Read;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FxButton {
@@ -103,6 +102,32 @@ impl StreamDeckManager {
         self.is_connected = false;
         self.button_states.clear();
         self.button_layout.clear();
+    }
+    
+    /// Read button presses (non-blocking)
+    pub fn read_button_presses(&mut self) -> Vec<(u8, bool)> {
+        let mut presses = Vec::new();
+        
+        if let Some(ref mut device) = self.device {
+            // Read all available input events (non-blocking with 0ms timeout)
+            while let Ok(input) = device.read_input(Some(std::time::Duration::from_millis(0))) {
+                match input {
+                    elgato_streamdeck::StreamDeckInput::ButtonStateChange(states) => {
+                        // Stream Deck returns current state of all buttons
+                        for (idx, is_pressed) in states.iter().enumerate() {
+                            if *is_pressed {
+                                println!("[Stream Deck] Button {} pressed", idx);
+                                presses.push((idx as u8, true));
+                            }
+                        }
+                    }
+                    // Ignore other input types (encoders, etc.)
+                    _ => {}
+                }
+            }
+        }
+        
+        presses
     }
     
     /// Check if device is connected
@@ -441,15 +466,27 @@ impl StreamDeckManager {
         
         // Now set all button images
         if let Some(ref mut device) = self.device {
+            let mut success_count = 0;
+            let mut fail_count = 0;
+            
             for (idx, image_opt) in button_images {
                 if let Some(image) = image_opt {
-                    device.set_button_image(idx, image)
-                        .map_err(|e| format!("Failed to set button image: {}", e))?;
+                    match device.set_button_image(idx, image) {
+                        Ok(_) => success_count += 1,
+                        Err(e) => {
+                            println!("[Stream Deck] ⚠️ Failed to set button {} image: {}", idx, e);
+                            fail_count += 1;
+                        }
+                    }
                 }
             }
             
+            println!("[Stream Deck] Set {} button images ({} success, {} failed)", 
+                success_count + fail_count, success_count, fail_count);
+            
             // Flush changes to device
             device.flush().map_err(|e| format!("Failed to flush device: {}", e))?;
+            println!("[Stream Deck] ✅ Flushed button updates to device");
         }
         
         Ok(())
@@ -666,6 +703,8 @@ impl StreamDeckManager {
     
     /// Update button state (called when FX stops playing)
     pub fn set_button_state(&mut self, fx_id: &str, is_playing: bool) -> Result<(), String> {
+        println!("[Stream Deck] Setting button state: {} -> {}", fx_id, if is_playing { "PLAYING" } else { "STOPPED" });
+        
         // Find button with this FX ID and update state
         let mut button_to_update: Option<(u8, FxButton)> = None;
         
@@ -679,6 +718,8 @@ impl StreamDeckManager {
         }
         
         if let Some((idx, fx_button)) = button_to_update {
+            println!("[Stream Deck] Found button {} ({}) at index {}", fx_button.name, fx_id, idx);
+            
             // Update state
             self.button_states
                 .entry(idx)
@@ -695,9 +736,12 @@ impl StreamDeckManager {
                         device.set_button_image(idx, image)
                             .map_err(|e| format!("Failed to set button image: {}", e))?;
                         device.flush().map_err(|e| format!("Failed to flush: {}", e))?;
+                        println!("[Stream Deck] ✅ Updated visual for button {}", idx);
                     }
                 }
             }
+        } else {
+            println!("[Stream Deck] ⚠️ Button not found: {}", fx_id);
         }
         
         Ok(())
