@@ -86,9 +86,10 @@
       }
     },
     "createUpdaterArtifacts": true,
-    "resources": [
-      "assets/sounds"
-    ],
+    "resources": {
+      "target/release/*.dll": "",
+      "target/release/gstreamer-1.0/*.dll": "gstreamer-1.0/"
+    },
     "externalBin": []
   },
   "identifier": "app.battles.desktop",
