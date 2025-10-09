@@ -2,6 +2,7 @@
   "name": "battles-desktop",
   "version": "2.0.1",
   "description": "Pro TikTok Tools",
+  "type": "module",
   "author": "BATTLES™",
   "license": "UNLICENSED",
   "scripts": {
