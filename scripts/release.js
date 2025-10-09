@@ -78,12 +78,38 @@ function updateCargoVersion(newVersion) {
   fs.writeFileSync(cargoPath, cargoToml);
 }
 
-// Update version in tauri.conf.json
+// Update version in tauri.conf.json5
 function updateTauriVersion(newVersion) {
-  const tauriPath = path.join(rootDir, 'tauri.conf.json');
-  const tauriConf = JSON.parse(fs.readFileSync(tauriPath, 'utf-8'));
-  tauriConf.version = newVersion;
-  fs.writeFileSync(tauriPath, JSON.stringify(tauriConf, null, 2) + '\n');
+  const tauriPath = path.join(rootDir, 'tauri.conf.json5');
+  const tauriContent = fs.readFileSync(tauriPath, 'utf-8');
+  
+  // Replace version in JSON5 file using regex (preserves formatting and comments)
+  const updatedContent = tauriContent.replace(
+    /"version":\s*"[\d.]+"/,
+    `"version": "${newVersion}"`
+  );
+  
+  fs.writeFileSync(tauriPath, updatedContent, 'utf-8');
+}
+
+// Verify version sync between Cargo.toml and tauri.conf.json5
+function verifyVersionSync() {
+  const cargoPath = path.join(rootDir, 'Cargo.toml');
+  const tauriPath = path.join(rootDir, 'tauri.conf.json5');
+  
+  const cargoContent = fs.readFileSync(cargoPath, 'utf-8');
+  const tauriContent = fs.readFileSync(tauriPath, 'utf-8');
+  
+  const cargoMatch = cargoContent.match(/^version\s*=\s*"([\d.]+)"/m);
+  const tauriMatch = tauriContent.match(/"version":\s*"([\d.]+)"/);
+  
+  const cargoVersion = cargoMatch ? cargoMatch[1] : null;
+  const tauriVersion = tauriMatch ? tauriMatch[1] : null;
+  
+  log.info(`Cargo.toml version: ${cargoVersion}`);
+  log.info(`tauri.conf.json5 version: ${tauriVersion}`);
+  
+  return { cargoVersion, tauriVersion, synced: cargoVersion === tauriVersion };
 }
 
 // Generate AI-powered changelog from git commits using OpenAI
@@ -148,7 +174,7 @@ Return ONLY the formatted changelog in markdown, no extra text.`
       return aiChangelog;
       
     } catch (aiError) {
-      log.warn(`OpenAI API failed: ${aiError.message}`);
+      console.log(`${colors.yellow}⚠️  OpenAI API failed: ${aiError.message}${colors.reset}`);
       log.info('Falling back to basic changelog generation...');
       
       // Fallback: Basic categorization if AI fails
@@ -402,6 +428,14 @@ async function release() {
   log.info(`Version type: ${versionType}`);
   console.log('');
   
+  // Verify version sync before starting
+  const versionCheck = verifyVersionSync();
+  if (!versionCheck.synced) {
+    console.log(`${colors.yellow}⚠️  Versions are not synced between Cargo.toml and tauri.conf.json5${colors.reset}`);
+    log.info('They will be synchronized during this release');
+  }
+  console.log('');
+  
   // Confirm
   if (!process.env.CI) {
     const readline = await import('readline');
@@ -427,7 +461,7 @@ async function release() {
   updateCargoVersion(newVersion);
   log.success('Updated Cargo.toml');
   updateTauriVersion(newVersion);
-  log.success('Updated tauri.conf.json');
+  log.success('Updated tauri.conf.json5');
   
   // Generate changelog
   const changelog = await generateChangelog(currentVersion, newVersion);
@@ -451,7 +485,7 @@ async function release() {
   // Commit version changes
   log.header('Committing Changes');
   try {
-    execSync('git add Cargo.toml tauri.conf.json Cargo.lock', { cwd: rootDir });
+    execSync('git add Cargo.toml tauri.conf.json5 Cargo.lock', { cwd: rootDir });
     execSync(`git commit -m "chore: bump version to ${newVersion}"`, { cwd: rootDir });
     execSync('git push', { cwd: rootDir });
     log.success('Committed and pushed version changes');
