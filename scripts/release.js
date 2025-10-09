@@ -243,72 +243,136 @@ Return ONLY the formatted changelog in plain markdown with bullet points. No cod
 // Build the application with production URLs
 function buildApp() {
   log.header('Building Application');
-  log.info('Ensuring production URLs for release build...');
   
-  // Backup and update tauri.conf.json5 to use production URLs
+  // ============================================================================
+  // CRITICAL VALIDATION: ABSOLUTE CHECK FOR PRODUCTION URL
+  // ============================================================================
+  console.log('');
+  console.log(`${colors.pink}╔═══════════════════════════════════════════════════════════════╗${colors.reset}`);
+  console.log(`${colors.pink}║  ${colors.yellow}CRITICAL: PRODUCTION URL VALIDATION${colors.pink}                        ║${colors.reset}`);
+  console.log(`${colors.pink}╚═══════════════════════════════════════════════════════════════╝${colors.reset}`);
+  console.log('');
+  
   const tauriConfigPath = path.join(rootDir, 'tauri.conf.json5');
   const tauriConfig = fs.readFileSync(tauriConfigPath, 'utf-8');
   const tauriConfigBackup = tauriConfig;
   
   try {
-    // Log current config state
+    // ============================================================================
+    // STEP 1: CHECK CURRENT STATE - FAIL IF local.battles.app IN WINDOW URL
+    // ============================================================================
     const currentUrl = tauriConfig.match(/"url":\s*"([^"]+)"/);
     const currentFrontendDist = tauriConfig.match(/"frontendDist":\s*"([^"]+)"/);
     
-    log.info(`Current window URL: ${currentUrl ? currentUrl[1] : 'NOT FOUND'}`);
-    log.info(`Current frontendDist: ${currentFrontendDist ? currentFrontendDist[1] : 'NOT FOUND'}`);
+    log.info(`Reading tauri.conf.json5...`);
+    log.info(`   Window URL: ${currentUrl ? currentUrl[1] : 'NOT FOUND'}`);
+    log.info(`   FrontendDist: ${currentFrontendDist ? currentFrontendDist[1] : 'NOT FOUND'}`);
     console.log('');
     
-    // Ensure window URL uses production (battles.app) - check both possible states
-    let updatedConfig = tauriConfig
-      .replace(
-        /"url":\s*"https:\/\/local\.battles\.app:3000\/?"/g,
-        '"url": "https://battles.app/"'
-      )
-      .replace(
-        /"url":\s*"https:\/\/local\.battles\.app\/?"/g,
-        '"url": "https://battles.app/"'
-      );
+    // CRITICAL CHECK: If window URL contains local.battles.app, FAIL IMMEDIATELY
+    if (currentUrl && currentUrl[1].includes('local.battles.app')) {
+      console.log(`${colors.red}╔═══════════════════════════════════════════════════════════════╗${colors.reset}`);
+      console.log(`${colors.red}║  ⛔ CRITICAL ERROR: LOCAL URL IN PRODUCTION BUILD            ║${colors.reset}`);
+      console.log(`${colors.red}╚═══════════════════════════════════════════════════════════════╝${colors.reset}`);
+      console.log('');
+      console.log(`${colors.red}Window URL contains: ${currentUrl[1]}${colors.reset}`);
+      console.log('');
+      console.log(`${colors.yellow}This URL MUST be: https://battles.app/${colors.reset}`);
+      console.log('');
+      throw new Error('FATAL: tauri.conf.json5 has local.battles.app in window URL. Fix this before releasing!');
+    }
     
-    // Ensure frontendDist is relative path, not URL
+    // ============================================================================
+    // STEP 2: ENSURE PRODUCTION URLs (in case they're missing)
+    // ============================================================================
+    let updatedConfig = tauriConfig;
+    
+    // Replace any local URLs with production
     updatedConfig = updatedConfig
-      .replace(
-        /"frontendDist":\s*"https:\/\/battles\.app\/?"/g,
-        '"frontendDist": "../battles.app/dist"'
-      )
-      .replace(
-        /"frontendDist":\s*"https:\/\/local\.battles\.app:3000\/?"/g,
-        '"frontendDist": "../battles.app/dist"'
-      );
+      .replace(/"url":\s*"https:\/\/local\.battles\.app:3000\/?"/g, '"url": "https://battles.app/"')
+      .replace(/"url":\s*"https:\/\/local\.battles\.app\/?"/g, '"url": "https://battles.app/"')
+      .replace(/"frontendDist":\s*"https:\/\/battles\.app\/?"/g, '"frontendDist": "../battles.app/dist"')
+      .replace(/"frontendDist":\s*"https:\/\/local\.battles\.app:3000\/?"/g, '"frontendDist": "../battles.app/dist"');
     
-    // Verify the URL is correct before building
+    // ============================================================================
+    // STEP 3: FINAL VALIDATION - VERIFY CORRECT URL
+    // ============================================================================
     const finalUrl = updatedConfig.match(/"url":\s*"([^"]+)"/);
-    if (!finalUrl || !finalUrl[1].includes('battles.app/')) {
-      throw new Error(`Invalid production URL detected: ${finalUrl ? finalUrl[1] : 'NONE'}`);
-    }
-    if (finalUrl[1].includes('local.battles.app')) {
-      throw new Error(`ERROR: Still using local URL: ${finalUrl[1]}`);
+    
+    if (!finalUrl || !finalUrl[1]) {
+      throw new Error('FATAL: Could not find window URL in tauri.conf.json5');
     }
     
+    // CHECK: Must contain battles.app
+    if (!finalUrl[1].includes('battles.app')) {
+      throw new Error(`FATAL: Invalid production URL: ${finalUrl[1]}`);
+    }
+    
+    // CHECK: Must NOT contain local.battles.app
+    if (finalUrl[1].includes('local.battles.app')) {
+      throw new Error(`FATAL: Window URL still contains local.battles.app: ${finalUrl[1]}`);
+    }
+    
+    // CHECK: Must be exactly https://battles.app/
+    if (finalUrl[1] !== 'https://battles.app/') {
+      console.log(`${colors.yellow}⚠️  Warning: URL is not exactly "https://battles.app/" but: ${finalUrl[1]}${colors.reset}`);
+      console.log(`${colors.yellow}   Proceeding anyway, but this may cause issues.${colors.reset}`);
+      console.log('');
+    }
+    
+    // Write the verified config
     fs.writeFileSync(tauriConfigPath, updatedConfig, 'utf-8');
-    log.success('✅ Config verified for production build:');
-    log.info(`   • Window URL: ${finalUrl[1]}`);
-    log.info('   • DevUrl: https://local.battles.app:3000/ (dev only)');
-    log.info(`   • FrontendDist: ../battles.app/dist`);
+    
+    console.log(`${colors.green}╔═══════════════════════════════════════════════════════════════╗${colors.reset}`);
+    console.log(`${colors.green}║  ✅ PRODUCTION URL VALIDATED                                  ║${colors.reset}`);
+    console.log(`${colors.green}╚═══════════════════════════════════════════════════════════════╝${colors.reset}`);
+    console.log('');
+    console.log(`${colors.green}✅ Window URL: ${finalUrl[1]}${colors.reset}`);
+    console.log(`${colors.cyan}   DevUrl: https://local.battles.app:3000/ (dev only)${colors.reset}`);
+    console.log(`${colors.cyan}   FrontendDist: ../battles.app/dist${colors.reset}`);
     console.log('');
     
+    // ============================================================================
+    // STEP 4: BUILD THE APPLICATION
+    // ============================================================================
     log.info('📦 Building Tauri application for Windows (Release mode)...');
+    log.info('   ENFORCING: https://battles.app/');
+    console.log('');
+    
     execSync('bun run tauri build', {
       cwd: rootDir,
       stdio: 'inherit',
       env: {
         ...process.env,
         NODE_ENV: 'production',
-        TAURI_ENV_PRODUCTION: 'true'
+        TAURI_ENV_PRODUCTION: 'true',
+        TAURI_PRIVATE_KEY: process.env.TAURI_SIGNING_PRIVATE_KEY
       }
     });
     
+    console.log('');
     log.success('Build completed successfully!');
+    
+    // ============================================================================
+    // STEP 5: POST-BUILD VERIFICATION
+    // ============================================================================
+    console.log('');
+    log.info('🔍 POST-BUILD VERIFICATION: Checking config after build...');
+    
+    const postBuildConfig = fs.readFileSync(tauriConfigPath, 'utf-8');
+    const postBuildUrl = postBuildConfig.match(/"url":\s*"([^"]+)"/);
+    
+    if (postBuildUrl && postBuildUrl[1].includes('local.battles.app')) {
+      console.log('');
+      console.log(`${colors.red}╔═══════════════════════════════════════════════════════════════╗${colors.reset}`);
+      console.log(`${colors.red}║  ⛔ CRITICAL: CONFIG WAS CHANGED DURING BUILD                ║${colors.reset}`);
+      console.log(`${colors.red}╚═══════════════════════════════════════════════════════════════╝${colors.reset}`);
+      console.log('');
+      throw new Error(`FATAL: Config was modified during build! URL is now: ${postBuildUrl[1]}`);
+    }
+    
+    log.success(`✅ POST-BUILD CHECK PASSED: ${postBuildUrl ? postBuildUrl[1] : 'URL verified'}`);
+    console.log('');
     
     // Check if config was changed
     const configChanged = tauriConfig !== updatedConfig;

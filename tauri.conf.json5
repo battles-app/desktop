@@ -46,7 +46,7 @@
     "withGlobalTauri": true
   },
   "build": {
-    "devUrl": "https://local.battles.app:3000/",
+    "devUrl": "https://battles.app/",
     "frontendDist": "../battles.app/dist"
   },
   "bundle": {
