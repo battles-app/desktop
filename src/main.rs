@@ -2185,6 +2185,41 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
 }
 
 fn main() {
+    // ============================================================================
+    // Configure GStreamer for bundled DLLs (Windows production builds)
+    // ============================================================================
+    #[cfg(target_os = "windows")]
+    {
+        use std::env;
+        use std::path::PathBuf;
+        
+        // Get the directory where the executable is located
+        if let Ok(exe_path) = env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let exe_dir_str = exe_dir.to_string_lossy().to_string();
+                
+                // Set GST_PLUGIN_PATH to our bundled plugins
+                let plugin_path = exe_dir.join("gstreamer-1.0");
+                if plugin_path.exists() {
+                    env::set_var("GST_PLUGIN_PATH", plugin_path.to_string_lossy().to_string());
+                    println!("[GStreamer] Using bundled plugins: {:?}", plugin_path);
+                } else {
+                    println!("[GStreamer] Bundled plugins not found, using system GStreamer");
+                }
+                
+                // Set GST_PLUGIN_SYSTEM_PATH to prevent loading conflicting system plugins
+                env::set_var("GST_PLUGIN_SYSTEM_PATH", "");
+                
+                // Add exe directory to PATH for DLL loading
+                if let Ok(current_path) = env::var("PATH") {
+                    env::set_var("PATH", format!("{};{}", exe_dir_str, current_path));
+                }
+                
+                println!("[GStreamer] DLL search path configured: {}", exe_dir_str);
+            }
+        }
+    }
+    
     // Configure cache plugin for FX files
     let cache_config = tauri_plugin_cache::CacheConfig {
         cache_dir: Some("battles_fx_cache".into()),

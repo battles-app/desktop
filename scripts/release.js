@@ -346,7 +346,9 @@ function buildApp() {
         ...process.env,
         NODE_ENV: 'production',
         TAURI_ENV_PRODUCTION: 'true',
-        TAURI_PRIVATE_KEY: process.env.TAURI_SIGNING_PRIVATE_KEY
+        TAURI_PRIVATE_KEY: process.env.TAURI_SIGNING_PRIVATE_KEY,
+        // Ensure GStreamer is available for DLL bundling
+        GSTREAMER_1_0_ROOT_MSVC_X86_64: process.env.GSTREAMER_1_0_ROOT_MSVC_X86_64 || 'E:\\gstreamer\\1.0\\msvc_x86_64'
       }
     });
     

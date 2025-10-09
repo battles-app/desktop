@@ -93,11 +93,12 @@
     "createUpdaterArtifacts": true,
     "resources": [
       "assets/sounds",
-      "src"
+      "src",
+      // GStreamer DLLs and plugins bundled by build.rs
+      "target/release/*.dll",
+      "target/release/gstreamer-1.0/*.dll"
     ],
-    "externalBin": [],
-    // GStreamer DLLs will be copied by build.rs to target directory
-    // and automatically included by Tauri bundler
+    "externalBin": []
   },
   "identifier": "io.battles.app",
   "productName": "battles.app",

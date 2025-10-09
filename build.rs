@@ -18,7 +18,8 @@ fn bundle_gstreamer_dlls() {
     let gst_path = env::var("GSTREAMER_1_0_ROOT_MSVC_X86_64")
         .unwrap_or_else(|_| "E:\\gstreamer\\1.0\\msvc_x86_64".to_string());
     
-    let gst_bin = PathBuf::from(gst_path).join("bin");
+    let gst_bin = PathBuf::from(&gst_path).join("bin");
+    let gst_plugins = PathBuf::from(&gst_path).join("lib").join("gstreamer-1.0");
     
     if !gst_bin.exists() {
         eprintln!("Warning: GStreamer bin directory not found at {:?}", gst_bin);
@@ -34,7 +35,12 @@ fn bundle_gstreamer_dlls() {
         .expect("Failed to get target directory")
         .to_path_buf();
     
-    println!("cargo:warning=Bundling GStreamer DLLs from {:?} to {:?}", gst_bin, target_dir);
+    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("cargo:warning=  📦 Bundling GStreamer Dependencies");
+    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("cargo:warning=From: {:?}", gst_bin);
+    println!("cargo:warning=  To: {:?}", target_dir);
+    println!("cargo:warning=");
     
     // Essential GStreamer DLLs - only copy what's absolutely needed
     let required_dlls = vec![
@@ -55,17 +61,27 @@ fn bundle_gstreamer_dlls() {
         "gstnet-1.0-0.dll",
         "gstgl-1.0-0.dll",
         "gstallocators-1.0-0.dll",
+        "gstrtp-1.0-0.dll",
+        "gstrtsp-1.0-0.dll",
+        "gsttag-1.0-0.dll",
         
         // Required dependencies
         "intl-8.dll",
         "ffi-7.dll",
         "z-1.dll",
         "winpthread-1.dll",
+        "pcre2-8-0.dll",
         
         // Video processing
         "orc-0.4-0.dll",
+        
+        // Graphics
+        "pixman-1-0.dll",
+        "png16-16.dll",
+        "graphene-1.0-0.dll",
     ];
     
+    println!("cargo:warning=📚 Core Libraries:");
     let mut copied = 0;
     let mut missing = Vec::new();
     
@@ -77,23 +93,75 @@ fn bundle_gstreamer_dlls() {
             match fs::copy(&src, &dst) {
                 Ok(_) => {
                     copied += 1;
-                    println!("cargo:warning=  ✓ Copied {}", dll);
+                    println!("cargo:warning=  ✓ {}", dll);
                 }
                 Err(e) => {
-                    println!("cargo:warning=  ✗ Failed to copy {}: {}", dll, e);
+                    println!("cargo:warning=  ✗ {} (error: {})", dll, e);
                 }
             }
         } else {
             missing.push(dll);
-            println!("cargo:warning=  ⚠ Missing: {}", dll);
+            println!("cargo:warning=  ⚠ {} (not found)", dll);
         }
     }
     
-    println!("cargo:warning=GStreamer DLL bundling complete: {} copied, {} missing", copied, missing.len());
-    
-    if !missing.is_empty() {
-        println!("cargo:warning=Missing DLLs may cause runtime errors: {:?}", missing);
+    // Bundle essential GStreamer plugins
+    if gst_plugins.exists() {
+        let plugins_dir = target_dir.join("gstreamer-1.0");
+        let _ = fs::create_dir_all(&plugins_dir);
+        
+        let essential_plugins = vec![
+            "gstapp.dll",
+            "gstcoreelements.dll",
+            "gstvideoconvertscale.dll",
+            "gstvideofilter.dll",
+            "gstvideotestsrc.dll",
+            "gstvideoparsersbad.dll",
+            "gstaudioconvert.dll",
+            "gstaudioresample.dll",
+            "gstaudiotestsrc.dll",
+            "gstautodetect.dll",
+            "gstplayback.dll",
+            "gsttypefindfunctions.dll",
+            "gstd3d11.dll",
+            "gstopengl.dll",
+            "gstd3dvideosink.dll",
+        ];
+        
+        println!("cargo:warning=");
+        println!("cargo:warning=🔌 GStreamer Plugins:");
+        let mut plugins_copied = 0;
+        
+        for plugin in &essential_plugins {
+            let src = gst_plugins.join(plugin);
+            let dst = plugins_dir.join(plugin);
+            
+            if src.exists() {
+                match fs::copy(&src, &dst) {
+                    Ok(_) => {
+                        plugins_copied += 1;
+                        println!("cargo:warning=  ✓ {}", plugin);
+                    }
+                    Err(e) => {
+                        println!("cargo:warning=  ✗ {} (error: {})", plugin, e);
+                    }
+                }
+            } else {
+                println!("cargo:warning=  ⚠ {} (not found)", plugin);
+            }
+        }
+        
+        println!("cargo:warning=");
+        println!("cargo:warning=✅ Plugins: {} bundled", plugins_copied);
     }
+    
+    println!("cargo:warning=");
+    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("cargo:warning=✅ Libraries: {} bundled", copied);
+    if !missing.is_empty() {
+        println!("cargo:warning=⚠️  Missing: {} (may cause runtime errors)", missing.len());
+    }
+    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     
     // Tell cargo to link GStreamer
     println!("cargo:rustc-link-search=native={}", gst_bin.display());
