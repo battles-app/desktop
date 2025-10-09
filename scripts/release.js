@@ -250,31 +250,44 @@ function buildApp() {
 
 // Find the built executable
 function findExecutable() {
-  const bundleDir = path.join(rootDir, 'src-tauri', 'target', 'release', 'bundle');
+  // Try both possible bundle directory locations
+  const possibleDirs = [
+    path.join(rootDir, 'target', 'release', 'bundle'),
+    path.join(rootDir, 'src-tauri', 'target', 'release', 'bundle')
+  ];
   
   log.info('Searching for installer in bundle directory...');
   
-  // Look for NSIS installer first (preferred)
-  const nsisDir = path.join(bundleDir, 'nsis');
-  if (fs.existsSync(nsisDir)) {
-    const exeFiles = fs.readdirSync(nsisDir).filter(f => f.endsWith('.exe'));
-    if (exeFiles.length > 0) {
-      log.success(`Found NSIS installer: ${exeFiles[0]}`);
-      return { path: path.join(nsisDir, exeFiles[0]), type: 'exe', name: exeFiles[0] };
+  for (const bundleDir of possibleDirs) {
+    if (!fs.existsSync(bundleDir)) {
+      continue;
     }
-  }
-  
-  // Look for MSI installer as fallback
-  const msiDir = path.join(bundleDir, 'msi');
-  if (fs.existsSync(msiDir)) {
-    const msiFiles = fs.readdirSync(msiDir).filter(f => f.endsWith('.msi'));
-    if (msiFiles.length > 0) {
-      log.success(`Found MSI installer: ${msiFiles[0]}`);
-      return { path: path.join(msiDir, msiFiles[0]), type: 'msi', name: msiFiles[0] };
+    
+    log.info(`Checking: ${bundleDir}`);
+    
+    // Look for NSIS installer first (preferred)
+    const nsisDir = path.join(bundleDir, 'nsis');
+    if (fs.existsSync(nsisDir)) {
+      const exeFiles = fs.readdirSync(nsisDir).filter(f => f.endsWith('.exe'));
+      if (exeFiles.length > 0) {
+        log.success(`Found NSIS installer: ${exeFiles[0]}`);
+        return { path: path.join(nsisDir, exeFiles[0]), type: 'exe', name: exeFiles[0] };
+      }
+    }
+    
+    // Look for MSI installer as fallback
+    const msiDir = path.join(bundleDir, 'msi');
+    if (fs.existsSync(msiDir)) {
+      const msiFiles = fs.readdirSync(msiDir).filter(f => f.endsWith('.msi'));
+      if (msiFiles.length > 0) {
+        log.success(`Found MSI installer: ${msiFiles[0]}`);
+        return { path: path.join(msiDir, msiFiles[0]), type: 'msi', name: msiFiles[0] };
+      }
     }
   }
   
   log.error('No installer found! Expected .exe or .msi in bundle directory');
+  log.error(`Checked directories: ${possibleDirs.join(', ')}`);
   return null;
 }
 
@@ -381,16 +394,39 @@ This software is in **closed beta**. Access required:
 *Made with ❤️ by the Battles.app team*
 `;
     
-    // Security: Only upload the installer file, nothing else
+    // Security: Only upload the installer file and updater artifacts
     const installerPath = executable.path;
     const installerName = executable.name;
     
     log.info(`Uploading installer: ${installerName}`);
     log.info(`File size: ${(fs.statSync(installerPath).size / 1024 / 1024).toFixed(2)} MB`);
     
-    // Create release with ONLY the installer file
+    // Find updater artifacts (for auto-update)
+    const bundleDir = path.dirname(path.dirname(installerPath));
+    const updaterFiles = [];
+    
+    // Look for .nsis.zip (updater artifact)
+    const nsisZip = path.join(bundleDir, 'nsis', `battles.app_${version}_x64-setup.nsis.zip`);
+    if (fs.existsSync(nsisZip)) {
+      updaterFiles.push(nsisZip);
+      log.info(`Found updater artifact: ${path.basename(nsisZip)}`);
+    }
+    
+    // Look for .sig files
+    const sigFile = path.join(bundleDir, 'nsis', `battles.app_${version}_x64-setup.nsis.zip.sig`);
+    if (fs.existsSync(sigFile)) {
+      updaterFiles.push(sigFile);
+      log.info(`Found signature file: ${path.basename(sigFile)}`);
+    }
+    
+    // Create file list for upload
+    const filesToUpload = [installerPath, ...updaterFiles].map(f => `"${f}"`).join(' ');
+    
+    log.info(`Uploading ${1 + updaterFiles.length} files...`);
+    
+    // Create release with installer and updater artifacts
     execSync(
-      `gh release create v${version} "${installerPath}" --title "Battles.app Desktop v${version}" --notes "${releaseNotes.replace(/"/g, '\\"')}" --repo battles-app/desktop-releases`,
+      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes "${releaseNotes.replace(/"/g, '\\"')}" --repo battles-app/desktop-releases`,
       { cwd: rootDir, stdio: 'inherit' }
     );
     

@@ -47,3 +47,6 @@ build_output.txt
 # Temporary files
 *.tmp
 *.temp
+
+# Tauri Updater Keys (NEVER COMMIT!)
+src-tauri/updater-keys.key

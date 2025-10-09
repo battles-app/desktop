@@ -2197,6 +2197,7 @@ fn main() {
     };
     
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_cache::init_with_config(cache_config))
         .setup(|app| {
             let app_handle = app.handle().clone();

@@ -90,7 +90,7 @@
         "language": "en-US"
       }
     },
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "resources": [
       "assets/sounds",
       "src"
@@ -116,14 +116,6 @@
           "battles.app"
         ]
       }
-    },
-    "updater": {
-      "active": false,
-      "endpoints": [
-        "https://battles.app/update/v2/check"
-      ],
-      "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY5RjAwMUEwQjFGMzBFODUKUldTRkR2T3hvQUh3YVVEVFFTY2I3YnB5cUxjbzFqZnlDQmNJME1FTTVSdktSdVArM213dzZyWFYK"
     }
   },
   "version": "0.0.4"
