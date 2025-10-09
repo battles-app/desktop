@@ -85,9 +85,13 @@ impl StreamDeckManager {
         self.is_connected = true;
         self.loading_animation_active = true; // Start animation flag
         
-        // DON'T play full animation here - let background thread handle it!
-        // This way update_layout() can stop it immediately when data is ready
-        println!("[Stream Deck] 🎬 Loading animation enabled, will start in background thread...");
+        // Play the beautiful reveal animation (BATTLES appears, then LOADING)
+        // This is non-blocking since it's just rendering frames
+        println!("[Stream Deck] 🎬 Playing beautiful reveal animation...");
+        let _ = self.play_loading_animation();
+        
+        // Background thread will continue looping after this
+        println!("[Stream Deck] 🔄 Animation will loop until FX loaded...");
 
         Ok(info)
     }
