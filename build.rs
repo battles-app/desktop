@@ -164,6 +164,11 @@ fn bundle_gstreamer_dlls() {
     
     // Tell cargo to link GStreamer
     println!("cargo:rustc-link-search=native={}", gst_bin.display());
+    
+    // Tell Tauri bundler about DLL locations for NSIS packaging
+    // NSIS will automatically include all DLLs from target/release directory
+    println!("cargo:warning=📦 DLLs will be bundled from: {:?}", target_dir);
+    println!("cargo:warning=   NSIS bundler will include all .dll files automatically");
 }
 
 

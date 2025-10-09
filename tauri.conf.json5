@@ -87,8 +87,7 @@
     },
     "createUpdaterArtifacts": true,
     "resources": [
-      "assets/sounds",
-      "src"
+      "assets/sounds"
     ],
     "externalBin": []
   },
