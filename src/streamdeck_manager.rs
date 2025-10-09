@@ -217,59 +217,62 @@ impl StreamDeckManager {
     /// Download image from Nuxt proxy and cache it (static method for thread safety)
     fn download_image_to_cache_sync(image_url: String, name: String, cache_path: std::path::PathBuf) {
         // image_url is already a full URL from the frontend (e.g., https://local.battles.app:3000/directus-assets/xxx)
-        println!("[Stream Deck] Downloading image from: {}", image_url);
+        println!("[Stream Deck] Downloading {} from: {}", name, &image_url[..image_url.len().min(80)]);
         
-        match reqwest::blocking::Client::builder()
+        // Use a simple blocking client (no async runtime involved)
+        let client = match reqwest::blocking::Client::builder()
             .danger_accept_invalid_certs(true)
-            .timeout(std::time::Duration::from_secs(15))
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .pool_max_idle_per_host(0) // Don't reuse connections to avoid conflicts
+            .timeout(std::time::Duration::from_secs(10))
+            .connect_timeout(std::time::Duration::from_secs(3))
             .build()
         {
-            Ok(client) => {
-                match client.get(&image_url).send() {
-                    Ok(mut response) if response.status().is_success() => {
-                        // Check content type to see if it's actually an image
-                        let content_type = response.headers()
-                            .get("content-type")
-                            .and_then(|v| v.to_str().ok())
-                            .unwrap_or("unknown")
-                            .to_string();
-                        
-                        println!("[Stream Deck] Content-Type for {}: {}", name, content_type);
-                        
-                        // Skip videos - we only want images
-                        if content_type.starts_with("video/") {
-                            println!("[Stream Deck] ⚠️ Skipping {} - it's a video, not an image!", name);
-                            return;
-                        }
-                        
-                        // Validate it's an actual image
-                        if !content_type.starts_with("image/") && content_type != "application/octet-stream" {
-                            println!("[Stream Deck] ⚠️ Skipping {} - unexpected content type: {}", name, content_type);
-                            return;
-                        }
-                        
-                        // Read body with better error handling
-                        let mut bytes = Vec::new();
-                        match std::io::copy(&mut response, &mut bytes) {
-                            Ok(_) => {
-                                if bytes.is_empty() {
-                                    println!("[Stream Deck] ⚠️ Empty response for {}", name);
-                                } else if let Err(e) = std::fs::write(&cache_path, &bytes) {
-                                    println!("[Stream Deck] ⚠️ Failed to write image for {}: {}", name, e);
-                                } else {
-                                    println!("[Stream Deck] ✅ Cached {} ({} bytes, type: {})", name, bytes.len(), content_type);
-                                }
-                            }
-                            Err(e) => println!("[Stream Deck] ⚠️ Failed to read response for {}: {}", name, e),
+            Ok(c) => c,
+            Err(e) => {
+                println!("[Stream Deck] ❌ Failed to create HTTP client for {}: {}", name, e);
+                return;
+            }
+        };
+        
+        match client.get(&image_url).send() {
+            Ok(mut response) if response.status().is_success() => {
+                // Check content type to see if it's actually an image
+                let content_type = response.headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("unknown")
+                    .to_string();
+                
+                println!("[Stream Deck] Content-Type for {}: {}", name, content_type);
+                
+                // Skip videos - we only want images
+                if content_type.starts_with("video/") {
+                    println!("[Stream Deck] ⚠️ Skipping {} - it's a video, not an image!", name);
+                    return;
+                }
+                
+                // Validate it's an actual image
+                if !content_type.starts_with("image/") && content_type != "application/octet-stream" {
+                    println!("[Stream Deck] ⚠️ Skipping {} - unexpected content type: {}", name, content_type);
+                    return;
+                }
+                
+                // Read body with better error handling
+                let mut bytes = Vec::new();
+                match std::io::copy(&mut response, &mut bytes) {
+                    Ok(_) => {
+                        if bytes.is_empty() {
+                            println!("[Stream Deck] ⚠️ Empty response for {}", name);
+                        } else if let Err(e) = std::fs::write(&cache_path, &bytes) {
+                            println!("[Stream Deck] ⚠️ Failed to write image for {}: {}", name, e);
+                        } else {
+                            println!("[Stream Deck] ✅ Cached {} ({} bytes, type: {})", name, bytes.len(), content_type);
                         }
                     }
-                    Ok(response) => println!("[Stream Deck] ⚠️ HTTP {} for {}", response.status(), name),
-                    Err(e) => println!("[Stream Deck] ⚠️ Download failed for {}: {}", name, e),
+                    Err(e) => println!("[Stream Deck] ⚠️ Failed to read response for {}: {}", name, e),
                 }
             }
-            Err(e) => println!("[Stream Deck] ⚠️ Failed to create HTTP client for {}: {}", name, e),
+            Ok(response) => println!("[Stream Deck] ⚠️ HTTP {} for {}", response.status(), name),
+            Err(e) => println!("[Stream Deck] ⚠️ Download failed for {}: {}", name, e),
         }
     }
     
@@ -297,24 +300,29 @@ impl StreamDeckManager {
             }
         }
         
-        // Download missing images synchronously (fast with rate limiting)
+        // Download missing images in background (non-blocking)
         if !needs_download.is_empty() {
-            println!("[Stream Deck] Downloading {} missing images...", needs_download.len());
+            println!("[Stream Deck] Downloading {} missing images in background...", needs_download.len());
             
-            for (i, (image_url, name, cache_path)) in needs_download.iter().enumerate() {
-                // Small delay between requests
-                if i > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(150));
+            // Spawn background thread for downloads (avoids tokio runtime issues)
+            std::thread::spawn(move || {
+                for (i, (image_url, name, cache_path)) in needs_download.iter().enumerate() {
+                    // Small delay between requests
+                    if i > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                    }
+                    
+                    Self::download_image_to_cache_sync(
+                        image_url.clone(),
+                        name.clone(),
+                        cache_path.clone()
+                    );
                 }
                 
-                Self::download_image_to_cache_sync(
-                    image_url.clone(),
-                    name.clone(),
-                    cache_path.clone()
-                );
-            }
+                println!("[Stream Deck] ✅ Background image downloads complete");
+            });
             
-            println!("[Stream Deck] ✅ Image download complete, rendering layout...");
+            println!("[Stream Deck] Rendering layout with placeholders (images will load in background)...");
         }
         
         println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
