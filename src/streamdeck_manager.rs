@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use image::RgbaImage;
+use image::{RgbaImage, Rgba};
 use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, draw_filled_circle_mut};
 use imageproc::rect::Rect;
 use ab_glyph::{FontRef, PxScale};
@@ -81,11 +81,15 @@ impl StreamDeckManager {
         
         self.device = Some(device);
         self.is_connected = true;
-        
-        // Clear all buttons AFTER setting device (timing fix)
-        println!("[Stream Deck] 🧹 Clearing all buttons on connect...");
+
+        // Play loading animation BEFORE clearing
+        println!("[Stream Deck] 🎬 Playing loading animation...");
+        let _ = self.play_loading_animation();
+
+        // Clear all buttons AFTER animation
+        println!("[Stream Deck] 🧹 Clearing buttons after animation...");
         let _ = self.clear_all_buttons();
-        
+
         Ok(info)
     }
     
@@ -162,6 +166,128 @@ impl StreamDeckManager {
             Some(Kind::Pedal) => 0,
             None => 144,
         }
+    }
+    
+    /// Convert HSV to RGB (for smooth gradient animations)
+    fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+        let c = v * s;
+        let h_prime = h / 60.0;
+        let x = c * (1.0 - ((h_prime % 2.0) - 1.0).abs());
+        let m = v - c;
+        
+        let (r, g, b) = if h_prime < 1.0 {
+            (c, x, 0.0)
+        } else if h_prime < 2.0 {
+            (x, c, 0.0)
+        } else if h_prime < 3.0 {
+            (0.0, c, x)
+        } else if h_prime < 4.0 {
+            (0.0, x, c)
+        } else if h_prime < 5.0 {
+            (x, 0.0, c)
+        } else {
+            (c, 0.0, x)
+        };
+        
+        (
+            ((r + m) * 255.0) as u8,
+            ((g + m) * 255.0) as u8,
+            ((b + m) * 255.0) as u8,
+        )
+    }
+    
+    /// Play a loading animation with gradient wave and appearing text
+    fn play_loading_animation(&mut self) -> Result<(), String> {
+        if self.device.is_none() {
+            return Err("No device connected".to_string());
+        }
+        
+        let size = self.get_button_size();
+        let button_count = self.button_count();
+        
+        // Get grid dimensions
+        let (cols, rows) = match self.device_kind {
+            Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) | Some(Kind::Mk2Scissor) => (5, 3),
+            Some(Kind::Mini) | Some(Kind::MiniMk2) => (3, 2),
+            Some(Kind::Xl) | Some(Kind::XlV2) => (8, 4),
+            Some(Kind::Plus) | Some(Kind::Neo) => (4, 2),
+            Some(Kind::Pedal) => (3, 1),
+            None => return Err("Unknown device type".to_string()),
+        };
+        
+        let text_row_1 = "BATTLES";
+        let text_row_2 = "LOADING";
+        let max_letters = text_row_1.len().max(text_row_2.len());
+        
+        // Animation: 3 frames per letter + 10 extra frames for full wave effect
+        let total_frames = (max_letters * 3) + 10;
+        
+        let font_data = include_bytes!("../assets/DejaVuSans.ttf");
+        let font = FontRef::try_from_slice(font_data)
+            .map_err(|e| format!("Failed to load font: {:?}", e))?;
+        
+        for frame in 0..total_frames {
+            let mut images = Vec::new();
+            
+            // How many letters to show (one letter appears every 3 frames)
+            let letters_visible = (frame / 3).min(max_letters);
+            
+            for button_idx in 0..button_count {
+                let row = button_idx / cols;
+                let col = button_idx % cols;
+                
+                // Create gradient background (wave effect across all keys)
+                let mut img = RgbaImage::new(size, size);
+                
+                // Animated gradient wave (moving diagonally)
+                let wave_offset = frame as f32 * 10.0;
+                let position_factor = (col as f32 + row as f32) * 30.0;
+                let hue = ((position_factor + wave_offset) % 360.0) / 360.0 * 360.0;
+                let (r, g, b) = Self::hsv_to_rgb(hue, 0.8, 0.6);
+                let bg_color = Rgba([r, g, b, 255]);
+                
+                draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
+                
+                // Draw text letters (white) on specific rows
+                let should_show_text_1 = row == 1 && col < text_row_1.len() && col < letters_visible;
+                let should_show_text_2 = row == 2 && col < text_row_2.len() && col < letters_visible;
+                
+                if should_show_text_1 || should_show_text_2 {
+                    let letter = if should_show_text_1 {
+                        text_row_1.chars().nth(col).unwrap()
+                    } else {
+                        text_row_2.chars().nth(col).unwrap()
+                    };
+                    
+                    // Large, centered white text
+                    let scale = PxScale::from((size as f32 * 0.5).max(40.0));
+                    let letter_str = letter.to_string();
+                    let text_color = Rgba([255, 255, 255, 255]);
+                    
+                    // Center the letter
+                    let text_x = (size as f32 * 0.25) as i32;
+                    let text_y = (size as f32 * 0.25) as i32;
+                    
+                    draw_text_mut(&mut img, text_color, text_x, text_y, scale, &font, &letter_str);
+                }
+                
+                images.push(image::DynamicImage::ImageRgba8(img));
+            }
+            
+            // Set all button images for this frame
+            if let Some(ref mut device) = self.device {
+                for (idx, img) in images.into_iter().enumerate() {
+                    let _ = device.set_button_image(idx as u8, img);
+                }
+                let _ = device.flush();
+            }
+            
+            // Frame delay (30ms per frame = ~33 FPS, smooth animation)
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        
+        println!("[Stream Deck] ✅ Loading animation complete");
+        Ok(())
     }
     
     /// Update button layout with FX buttons
