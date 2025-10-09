@@ -393,7 +393,7 @@ This software is in **closed beta**. Access required:
 
 - 🌐 Website: https://battles.app
 - 📧 Support: support@battles.app
-- 🐛 Issues: https://github.com/battles-app/desktop-releases/issues
+- 🐛 Issues: https://github.com/battles-app/desktop/issues
 
 ---
 
