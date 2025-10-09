@@ -14,31 +14,20 @@
 - **Homepage**: https://battles.app
 
 #### NSIS Installer Features
-- **Compression**: LZMA (better compression than bzip2)
-- **Install Mode**: Per-machine (all users)
+- **Product Name**: "Battles.app Desktop" (shown in installer title and shortcuts)
+- **Installer Filename**: `Battles.app Desktop_X.X.X_x64-setup.exe`
+- **Install Mode**: Default (Tauri managed)
 - **Language**: English
-- **Installer Icon**: Custom battles.app icon
-- **License File**: Included in installer
+- **Icon**: Uses app icon from bundle configuration
+- **Compression**: Default (Tauri managed)
 
-#### Custom Welcome Message
-```
-Welcome to Battles.app Desktop Setup!
-
-Pro TikTok Live Tools with Stream Deck Integration
-
-✨ Real-time FX Control
-🎮 Elgato Stream Deck Support
-🎬 Professional Streaming Tools
-🔥 GPU-Accelerated Performance
-```
-
-#### Custom Finish Message
-```
-Battles.app Desktop has been successfully installed!
-
-🚀 Launch the application to get started
-💡 Visit battles.app for support and updates
-```
+#### Installer Branding
+The installer displays:
+- Professional product name: "Battles.app Desktop"
+- Proper copyright: "© 2025 BATTLES.app™. All rights reserved."
+- Category: Utility
+- Complete descriptions and metadata
+- Desktop and Start Menu shortcuts with proper branding
 
 #### Product Descriptions
 - **Short**: "Pro TikTok Live Tools with Stream Deck"
