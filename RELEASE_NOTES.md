@@ -1,14 +1,14 @@
 <div align="center">
 
-# 🎮 Battles.app Desktop v0.0.5
+# 🎮 Battles.app Desktop v0.0.6
 
 **Pro TikTok Live Utilities** • Stream Deck Integration • Real-Time FX
 
-<a href="https://github.com/battles-app/desktop/releases/download/v0.0.5/battles.app_0.0.5_x64-setup.exe">
-  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_FOR_WINDOWS-battles.app_0.0.5_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4), 0 0 0 1px rgba(255,255,255,0.1); padding: 16px 32px; font-size: 18px; font-weight: bold; backdrop-filter: blur(10px);">
+<a href="https://github.com/battles-app/desktop/releases/download/v0.0.6/battles.app_0.0.6_x64-setup.exe">
+  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_FOR_WINDOWS-battles.app_0.0.6_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4), 0 0 0 1px rgba(255,255,255,0.1); padding: 16px 32px; font-size: 18px; font-weight: bold; backdrop-filter: blur(10px);">
 </a>
 
-[![Version](https://img.shields.io/badge/version-0.0.5-blue?style=for-the-badge)](https://github.com/battles-app/desktop/releases)
+[![Version](https://img.shields.io/badge/version-0.0.6-blue?style=for-the-badge)](https://github.com/battles-app/desktop/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows_10/11-blueviolet?style=for-the-badge&logo=windows)](https://github.com/battles-app/desktop)
 [![Beta](https://img.shields.io/badge/status-Closed_Beta-red?style=for-the-badge)](https://battles.app)
 
@@ -26,8 +26,8 @@
 
 <div align="center">
 
-<a href="https://github.com/battles-app/desktop/releases/download/v0.0.5/battles.app_0.0.5_x64-setup.exe">
-  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_NOW-battles.app_0.0.5_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4); padding: 16px; font-weight: bold;">
+<a href="https://github.com/battles-app/desktop/releases/download/v0.0.6/battles.app_0.0.6_x64-setup.exe">
+  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_NOW-battles.app_0.0.6_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4); padding: 16px; font-weight: bold;">
 </a>
 
 **Size:** ~10 MB • **Platform:** Windows 10/11 (64-bit)
@@ -36,7 +36,7 @@
 
 ### Quick Start:
 1. 📥 Download the installer above
-2. 🔓 Run battles.app_0.0.5_x64-setup.exe
+2. 🔓 Run battles.app_0.0.6_x64-setup.exe
 3. 🎮 Launch Battles.app Desktop
 4. 🔌 Connect your Elgato Stream Deck (optional)
 5. 🚀 Start streaming with professional FX!

@@ -1,11 +1,11 @@
 {
-  "version": "0.0.5",
-  "notes": "``` ## What's New in Battles.app Desktop  ### 🐛 Bug Fixes - Enhanced the reliability of automatic backup processes to ensure your settings are always safe. ```...",
-  "pub_date": "2025-10-09T20:27:48.519Z",
+  "version": "0.0.6",
+  "notes": "``` ## What's New in This Update  ### ✨ New Features - Automatically upload the `.github` folder to a public repository upon release, making project management smoother and more efficient.  ### 🚀 Imp...",
+  "pub_date": "2025-10-09T20:35:10.137Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.5/battles.app_0.0.10_x64-setup.exe"
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.6/battles.app_0.0.10_x64-setup.exe"
     }
   }
 }
