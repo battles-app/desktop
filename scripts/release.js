@@ -575,6 +575,50 @@ Access required. Request access at: https://battles.app
       }
     }
     
+    // Upload .github folder contents to repository
+    const githubFolder = path.join(rootDir, '.github');
+    if (fs.existsSync(githubFolder)) {
+      log.info('Uploading .github folder contents...');
+      try {
+        const files = fs.readdirSync(githubFolder);
+        for (const file of files) {
+          const filePath = path.join(githubFolder, file);
+          const stats = fs.statSync(filePath);
+          
+          // Only upload files, not directories
+          if (stats.isFile()) {
+            try {
+              const fileContent = fs.readFileSync(filePath);
+              const fileBase64 = Buffer.from(fileContent).toString('base64');
+              const remotePath = `.github/${file}`;
+              
+              // Get current file SHA (if exists)
+              const getShaCmd = `gh api repos/battles-app/desktop/contents/${remotePath} --jq .sha`;
+              let sha = '';
+              try {
+                sha = execSync(getShaCmd, { encoding: 'utf-8' }).trim();
+              } catch (e) {
+                // File doesn't exist yet
+              }
+              
+              // Update or create file
+              const updateCmd = sha 
+                ? `gh api repos/battles-app/desktop/contents/${remotePath} -X PUT -f message="chore: update ${remotePath} for v${version}" -f content="${fileBase64}" -f sha="${sha}"`
+                : `gh api repos/battles-app/desktop/contents/${remotePath} -X PUT -f message="chore: add ${remotePath}" -f content="${fileBase64}"`;
+              
+              execSync(updateCmd, { cwd: rootDir, stdio: 'pipe' });
+              log.success(`  • Uploaded ${remotePath}`);
+            } catch (fileError) {
+              console.log(`${colors.yellow}⚠${colors.reset} Could not upload .github/${file}`);
+            }
+          }
+        }
+        log.success('.github folder contents uploaded');
+      } catch (error) {
+        log.info('Could not upload .github folder contents');
+      }
+    }
+    
     log.success(`Release v${version} created successfully!`);
     log.info(`View at: https://github.com/battles-app/desktop/releases/tag/v${version}`);
     return true;
