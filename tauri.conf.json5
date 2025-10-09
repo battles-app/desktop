@@ -73,7 +73,7 @@
       "app",
       "dmg",
       "nsis",
-      "msi"
+      "msi" 
     ],
     "windows": {
       "signCommand": null,

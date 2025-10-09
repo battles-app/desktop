@@ -1,6 +1,6 @@
 [package]
 name = "battles-desktop"
-version = "2.0.1"
+version = "0.0.1"
 description = "Pro TikTok Tools"
 authors = ["BATTLES™"]
 license = ""
@@ -10,7 +10,7 @@ rust-version = "1.77.2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
-tauri-build = { version = "2.0", features = [] }
+tauri-build = { version = "2.0", features = ["config-json5"] }
 
 [dependencies]
 serde_json = "1.0"
@@ -38,7 +38,6 @@ gstreamer-video = { version = "0.24", features = ["v1_20"] }
 gstreamer-audio = { version = "0.24", features = ["v1_20"] }
 gstreamer-sys = { version = "0.24", features = ["v1_20"] }
 glib = "0.20"
-image = { version = "0.25", features = ["png", "jpeg"] }
 tauri-plugin-cache = "0.1"
 
 # WGPU - Modern graphics API for hardware-accelerated chroma key and compositing
