@@ -503,10 +503,18 @@ async function createGitHubRelease(version, changelog, executable) {
   }
   
   try {
-    // Create tag
-    log.info(`Creating tag v${version}...`);
+    // Create tag locally only (DO NOT push tags to battles-app/desktop)
+    log.info(`Creating tag v${version} locally...`);
     execSync(`git tag -a v${version} -m "Release v${version}"`, { cwd: rootDir });
-    execSync(`git push origin v${version}`, { cwd: rootDir });
+    
+    // Check if we're on private repo and push tag there
+    const remoteUrl = execSync('git config --get remote.origin.url', { cwd: rootDir, encoding: 'utf-8' }).trim();
+    if (remoteUrl.includes('gkarmas/battles-desktop')) {
+      execSync(`git push origin v${version}`, { cwd: rootDir });
+      log.info('Tag pushed to PRIVATE repo');
+    } else {
+      log.info('Tag created locally only (not pushed to battles-app/desktop)');
+    }
     
     // Prepare release notes (NO source code references)
     log.info('Preparing secure release notes...');
