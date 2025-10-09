@@ -140,12 +140,11 @@ ${changelog || 'Initial release with comprehensive feature set'}
 **REQUIRED SECTIONS (IN ORDER):**
 
 1. **Hero Section** (centered):
-   - Logo: https://battles.app/assets/battles-logo.svg (use img tag, 120px width)
+   - Banner: ![Github banner](./.github/banner.gif) - MUST be the first line after opening div
    - Title: # 🎮 Battles.app Desktop
    - Tagline subtitle
+   - Beautiful download button: Use <a> tag with glassmorphic styling (green gradients #1a4d2e to #2d5a3d, rounded corners, shadow, bold text)
    - Badge row (for-the-badge style):
-     * Download (blue Windows badge linking to releases)
-     * Website (red badge)
      * Version (blue)
      * Platform (purple with Windows logo)
      * Status (red "Closed Beta")
@@ -196,12 +195,16 @@ ${changelog || 'Initial release with comprehensive feature set'}
 ✅ ALL badges must use style=for-the-badge
 ✅ Use centered <div align="center"> sections
 ✅ Use tables for features and requirements
-✅ Include direct download links
+✅ Include direct download links with version number in URL: https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe
 ✅ Professional, modern, clean layout
 ✅ Emojis for visual interest (but not excessive)
-✅ Clear hierarchy with ---separators
-✅ NO code examples (this is desktop app, not library)
+✅ Clear hierarchy with --- separators
+✅ NO code examples (this is Desktop app, not library)
 ✅ Focus on benefits, not implementation
+✅ NEVER use backticks or code blocks - they don't render properly in GitHub
+✅ Always capitalize "Desktop" when referring to the app
+✅ Use plain text for filenames, not code formatting
+✅ Banner must be FIRST line after opening <div align="center">
 
 **BADGE COLORS:**
 - Download: 0078D4 (Windows blue)
@@ -256,7 +259,7 @@ Study the style of popular repositories like microsoft/vscode, tauri-apps/tauri,
 function generateFallbackReadme(version, changelog) {
   return `<div align="center">
 
-<img src="https://battles.app/assets/battles-logo.svg" alt="Battles.app Logo" width="120"/>
+![Github banner](./.github/banner.gif)
 
 # 🎮 Battles.app Desktop
 
@@ -331,7 +334,7 @@ ${appContext.useCases.map(u => `- ${u}`).join('\n')}
 ### 🚀 Quick Start Guide:
 
 1. **📥 Download** the latest installer from [Releases](https://github.com/battles-app/desktop/releases/latest)
-2. **🔓 Run** \`battles.app_${version}_x64-setup.exe\`
+2. **🔓 Run** battles.app_${version}_x64-setup.exe
 3. **🎮 Launch** Battles.app Desktop
 4. **🔌 Connect** your Elgato Stream Deck (optional)
 5. **🚀 Login** and start streaming with professional FX!
@@ -445,14 +448,17 @@ Made with ❤️ by the Battles.app team
 
 // Generate release notes (for GitHub release)
 async function generateReleaseNotes(version, changelog) {
-  // Create beautiful release notes with download button
+  // Create beautiful release notes with glassmorphic download button
   return `<div align="center">
 
 # 🎮 Battles.app Desktop v${version}
 
 **Pro TikTok Live Utilities** • Stream Deck Integration • Real-Time FX
 
-[![Download](https://img.shields.io/badge/⬇️_Download-Windows_Installer-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe)
+<a href="https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe">
+  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_FOR_WINDOWS-battles.app_${version}_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4), 0 0 0 1px rgba(255,255,255,0.1); padding: 16px 32px; font-size: 18px; font-weight: bold; backdrop-filter: blur(10px);">
+</a>
+
 [![Version](https://img.shields.io/badge/version-${version}-blue?style=for-the-badge)](https://github.com/battles-app/desktop/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows_10/11-blueviolet?style=for-the-badge&logo=windows)](https://github.com/battles-app/desktop)
 [![Beta](https://img.shields.io/badge/status-Closed_Beta-red?style=for-the-badge)](https://battles.app)
@@ -471,7 +477,9 @@ ${changelog}
 
 <div align="center">
 
-### **[⬇️ Download battles.app_${version}_x64-setup.exe](https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe)**
+<a href="https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe">
+  <img src="https://img.shields.io/badge/⬇️_DOWNLOAD_NOW-battles.app_${version}_x64--setup.exe-0d1117?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d1117" alt="Download" style="background: linear-gradient(135deg, #1a4d2e 0%, #2d5a3d 50%, #1a4d2e 100%); border-radius: 12px; box-shadow: 0 8px 32px rgba(26, 77, 46, 0.4); padding: 16px; font-weight: bold;">
+</a>
 
 **Size:** ~10 MB • **Platform:** Windows 10/11 (64-bit)
 
@@ -479,7 +487,7 @@ ${changelog}
 
 ### Quick Start:
 1. 📥 Download the installer above
-2. 🔓 Run \`battles.app_${version}_x64-setup.exe\`
+2. 🔓 Run battles.app_${version}_x64-setup.exe
 3. 🎮 Launch Battles.app Desktop
 4. 🔌 Connect your Elgato Stream Deck (optional)
 5. 🚀 Start streaming with professional FX!
