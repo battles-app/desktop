@@ -1,82 +1,88 @@
 ```markdown
-# Battles.app Desktop :desktop_computer:
-> Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI
+<div align="center">
 
-![Version](https://img.shields.io/badge/version-0.0.9-blue.svg?cacheSeconds=2592000)
-![Platform](https://img.shields.io/badge/platform-Windows%2010/11%20(64--bit)-blueviolet)
-![Status](https://img.shields.io/badge/status-Closed%20Beta-orange)
+# 🎮 Battles.app Desktop 🎮
+### Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI
+---
+
+![Version](https://img.shields.io/badge/version-0.0.10-blue.svg?cacheSeconds=2592000) ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20(64--bit)-lightgrey) ![Status](https://img.shields.io/badge/status-Closed%20Beta-red)
+
+Unlock the full potential of your TikTok Live streams with **Battles.app Desktop**, the ultimate tool for real-time animations, interactive light shows, and AI-powered streaming enhancements. 
+
+[📥 Download Beta](#installation) | [🌐 Website](https://battles.app) | [📄 Privacy Policy](https://battles.app/policy) | [⚖️ Terms of Service](https://battles.app/terms) | [📧 Support](mailto:support@battles.app)
+
+</div>
 
 ---
 
-Battles.app Desktop brings your TikTok Live streams to life with **real-time animations**, **interactive light shows**, and **AI-powered tools**. Designed for professional streamers, it's the ultimate tool for creating engaging and dynamic live performances on TikTok.
+## 🌟 Features
 
-## :sparkles: Features
+- 🎮 **Elgato Stream Deck Integration**: Elevate your streaming with full Stream Deck support.
+- 🎭 **Real-Time Animations**: Instantly trigger animations, sound effects, and visual FX.
+- 💡 **Interactive Light Shows**: Create captivating light effects and visual shows.
+- 🤖 **AI-Powered Tools**: Leverage smart automation and AI for a professional stream.
+- 🎨 **Beautiful UI**: Enjoy a modern, dark-themed interface.
+- 🔄 **Auto-Updates**: Stay updated effortlessly with automatic GitHub releases.
+- ⚔️ **Battle Board**: Access a global effects library for your streams.
+- ✨ **User FX Board**: Customize your streaming experience with personal effects and media.
 
-- 🎮 **Elgato Stream Deck Integration**: Enhance your streaming with full Stream Deck support.
-- 🎭 **Real-Time Animations**: Instantly trigger animations for captivating visuals.
-- 💡 **Interactive Light Shows**: Sync lights to your streams for mesmerizing effects.
-- 🤖 **AI-Powered Tools**: Streamline your content with smart automation.
-- 🎨 **Beautiful UI**: A modern, intuitive interface designed for creators.
-- 🔄 **Auto-Updates**: Effortless updates for the latest features and fixes.
-- ⚔️ **Battle Board**: Access a library of global effects, animations, and sounds.
-- ✨ **User FX Board**: Customize your streams with personal media and effects.
+## 💡 Use Cases
 
-## :bulb: Use Cases
+Battles.app Desktop is perfect for:
+- TikTok Live streaming with enhanced effects.
+- Interactive audience engagement.
+- Competitive battle and competition streams.
+- Live performances with synchronized effects.
+- Stream automation and control for professional content creators.
 
-- **TikTok Live streaming** with enhanced professional effects.
-- **Interactive audience engagement** with instant FX.
-- **Battle and competition streams** with dynamic visuals.
-- **Live performances** showcasing synchronized effects.
-- **Professional content creation** made easy.
-- **Stream automation** and control for a seamless experience.
+## 🚀 Getting Started
 
-## :wrench: Installation
+### Installation
 
-Battles.app Desktop is currently in closed beta. To get started:
+1. **Download the latest release**: Navigate to the [releases page](#) and download the latest version for Windows.
+2. **Install**: Run the installer and follow the prompts to install Battles.app Desktop on your system.
+3. **Launch**: Open Battles.app Desktop and log in with your TikTok credentials to start streaming like a pro.
 
-1. Request beta access at [support@battles.app](mailto:support@battles.app).
-2. Download the latest release from our [GitHub repository](#).
-3. Run the installer and follow the on-screen instructions.
+> 🔑 **Beta Access**: Battles.app Desktop is currently in closed beta. To request access, please visit our [website](https://battles.app).
 
-## :link: Links
+### System Requirements
 
-- Website: [https://battles.app](https://battles.app)
-- Privacy Policy: [https://battles.app/policy](https://battles.app/policy)
-- Terms of Service: [https://battles.app/terms](https://battles.app/terms)
-- Support: [support@battles.app](mailto:support@battles.app)
+- OS: Windows 10/11 (64-bit)
+- Processor: Intel Core i5 or equivalent
+- Memory: 8 GB RAM
+- Graphics: Dedicated GPU recommended for best performance
+- Storage: 500 MB available space
 
-## :camera_flash: Screenshots/Demo
+## 📸 Screenshots
 
-> Screenshots and demo videos will be added soon.
+> *Screenshots of Battles.app Desktop in action coming soon!*
 
-## :closed_lock_with_key: Beta Access
+## 👥 Community and Support
 
-To join the Battles.app Desktop closed beta, please email [support@battles.app](mailto:support@battles.app) with the subject line "Beta Access Request".
+Join the Battles.app Desktop community for support, discussions, and sharing experiences:
+- **Support Email**: [support@battles.app](mailto:support@battles.app)
+- **FAQs**: Visit our [FAQ section](#faqs) for answers to common questions.
 
-## :computer: System Requirements
+## ❓ FAQs
 
-- **OS**: Windows 10/11 (64-bit)
-- **Processor**: Intel i5 or equivalent
-- **Memory**: 8 GB RAM
-- **Graphics**: DirectX 11 compatible
-- **Storage**: At least 500 MB of free space
+> **Q: Can I use Battles.app Desktop on a Mac?**  
+> A: Currently, Battles.app Desktop is only available for Windows 10/11 (64-bit).
 
-## :question: FAQ
+> **Q: How do I request a new feature or report a bug?**  
+> A: Please send your feature requests and bug reports to [support@battles.app](mailto:support@battles.app).
 
-- **Q**: Can I use Battles.app Desktop on Mac?
-- **A**: Currently, Battles.app Desktop is only available for Windows 10/11 (64-bit).
+## 📬 Stay in Touch
 
-- **Q**: How can I report a bug or request a feature?
-- **A**: Please email [support@battles.app](mailto:support@battles.app) with details.
+For the latest updates and news, follow us on:
+- [Website](https://battles.app)
+- [Privacy Policy](https://battles.app/policy)
+- [Terms of Service](https://battles.app/terms)
+
+<div align="center">
 
 ---
-
-> :star: **Enjoying Battles.app Desktop?** Please star our repo and share with friends!
-
-[![star this repo](https://img.shields.io/github/stars/BattlesApp/battles.desktop?style=social)](https://github.com/BattlesApp/battles.desktop)
-
-## :copyright: Copyright
 
 © 2023 Battles.app. All rights reserved.
 
+</div>
 ```

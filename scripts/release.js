@@ -20,14 +20,22 @@ import OpenAI from 'openai';
 // Load environment variables from .env file
 config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, '..');
+
+// Load updater private key if it exists
+const updaterKeyPath = path.join(rootDir, 'updater-keys.key');
+if (fs.existsSync(updaterKeyPath)) {
+  const privateKey = fs.readFileSync(updaterKeyPath, 'utf-8').trim();
+  process.env.TAURI_SIGNING_PRIVATE_KEY = privateKey;
+  console.log('✅ Loaded updater signing key');
+}
+
 // Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const rootDir = path.resolve(__dirname, '..');
 
 // ANSI color codes
 const colors = {
