@@ -601,15 +601,30 @@ Access required. Request access at: https://battles.app
                 // File doesn't exist yet
               }
               
-              // Update or create file
-              const updateCmd = sha 
-                ? `gh api repos/battles-app/desktop/contents/${remotePath} -X PUT -f message="chore: update ${remotePath} for v${version}" -f content="${fileBase64}" -f sha="${sha}"`
-                : `gh api repos/battles-app/desktop/contents/${remotePath} -X PUT -f message="chore: add ${remotePath}" -f content="${fileBase64}"`;
+              // Create JSON payload
+              const payload = {
+                message: sha ? `chore: update ${remotePath} for v${version}` : `chore: add ${remotePath}`,
+                content: fileBase64
+              };
               
+              if (sha) {
+                payload.sha = sha;
+              }
+              
+              // Write payload to temp file
+              const tempFile = path.join(rootDir, `.temp-${file}.json`);
+              fs.writeFileSync(tempFile, JSON.stringify(payload));
+              
+              // Upload using input file
+              const updateCmd = `gh api repos/battles-app/desktop/contents/${remotePath} -X PUT --input "${tempFile}"`;
               execSync(updateCmd, { cwd: rootDir, stdio: 'pipe' });
+              
+              // Clean up temp file
+              fs.unlinkSync(tempFile);
+              
               log.success(`  • Uploaded ${remotePath}`);
             } catch (fileError) {
-              console.log(`${colors.yellow}⚠${colors.reset} Could not upload .github/${file}`);
+              console.log(`${colors.yellow}⚠${colors.reset} Could not upload .github/${file}: ${fileError.message}`);
             }
           }
         }
