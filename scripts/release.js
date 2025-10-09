@@ -14,6 +14,10 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { config } from 'dotenv';
+
+// Load environment variables from .env file
+config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -167,41 +171,82 @@ function buildApp() {
 function findExecutable() {
   const bundleDir = path.join(rootDir, 'src-tauri', 'target', 'release', 'bundle');
   
-  // Look for MSI installer
-  const msiDir = path.join(bundleDir, 'msi');
-  if (fs.existsSync(msiDir)) {
-    const msiFiles = fs.readdirSync(msiDir).filter(f => f.endsWith('.msi'));
-    if (msiFiles.length > 0) {
-      return { path: path.join(msiDir, msiFiles[0]), type: 'msi' };
-    }
-  }
+  log.info('Searching for installer in bundle directory...');
   
-  // Look for NSIS installer
+  // Look for NSIS installer first (preferred)
   const nsisDir = path.join(bundleDir, 'nsis');
   if (fs.existsSync(nsisDir)) {
     const exeFiles = fs.readdirSync(nsisDir).filter(f => f.endsWith('.exe'));
     if (exeFiles.length > 0) {
-      return { path: path.join(nsisDir, exeFiles[0]), type: 'exe' };
+      log.success(`Found NSIS installer: ${exeFiles[0]}`);
+      return { path: path.join(nsisDir, exeFiles[0]), type: 'exe', name: exeFiles[0] };
     }
   }
   
+  // Look for MSI installer as fallback
+  const msiDir = path.join(bundleDir, 'msi');
+  if (fs.existsSync(msiDir)) {
+    const msiFiles = fs.readdirSync(msiDir).filter(f => f.endsWith('.msi'));
+    if (msiFiles.length > 0) {
+      log.success(`Found MSI installer: ${msiFiles[0]}`);
+      return { path: path.join(msiDir, msiFiles[0]), type: 'msi', name: msiFiles[0] };
+    }
+  }
+  
+  log.error('No installer found! Expected .exe or .msi in bundle directory');
   return null;
 }
 
+// Verify the file is a valid installer (security check)
+function verifyInstaller(filePath) {
+  const stats = fs.statSync(filePath);
+  const filename = path.basename(filePath);
+  
+  log.info('Verifying installer...');
+  log.info(`  File: ${filename}`);
+  log.info(`  Size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+  
+  // Security checks
+  if (stats.size < 1024 * 100) { // Less than 100KB is suspicious
+    throw new Error('Installer file is too small - possible build failure');
+  }
+  
+  if (stats.size > 1024 * 1024 * 500) { // More than 500MB is suspicious
+    throw new Error('Installer file is too large - possible issue');
+  }
+  
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext !== '.exe' && ext !== '.msi') {
+    throw new Error('Invalid file type - only .exe or .msi allowed');
+  }
+  
+  log.success('Installer verified successfully');
+  return true;
+}
+
 // Create GitHub release
-async function createGitHubRelease(version, changelog, exePath) {
+async function createGitHubRelease(version, changelog, executable) {
   log.header('Creating GitHub Release');
   
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
-    log.error('GITHUB_TOKEN environment variable not set!');
-    log.info('Please set GITHUB_TOKEN to create releases automatically');
+    log.error('GITHUB_TOKEN not found in .env file!');
+    log.info('Please add GITHUB_TOKEN to .env file');
     log.info(`\nManual release instructions:`);
     log.info(`1. Go to: https://github.com/battles-app/desktop-releases/releases/new`);
     log.info(`2. Tag: v${version}`);
     log.info(`3. Title: Battles.app Desktop v${version}`);
     log.info(`4. Description:\n${changelog}`);
-    log.info(`5. Upload: ${exePath}`);
+    log.info(`5. Upload: ${executable.path}`);
+    return false;
+  }
+  
+  // Security: Verify installer before uploading
+  try {
+    verifyInstaller(executable.path);
+  } catch (error) {
+    log.error(`Installer verification failed: ${error.message}`);
+    log.error('Release aborted for security reasons');
     return false;
   }
   
@@ -211,8 +256,8 @@ async function createGitHubRelease(version, changelog, exePath) {
     execSync(`git tag -a v${version} -m "Release v${version}"`, { cwd: rootDir });
     execSync(`git push origin v${version}`, { cwd: rootDir });
     
-    // Create release using GitHub CLI
-    log.info('Creating GitHub release...');
+    // Prepare release notes (NO source code references)
+    log.info('Preparing secure release notes...');
     const releaseNotes = `
 # 🎮 Battles.app Desktop v${version}
 
@@ -220,42 +265,51 @@ ${changelog}
 
 ## 📦 Installation
 
-**Windows (Stream Deck Required)**
+**Windows 10/11 (64-bit)**
 
-1. Download \`Battles-Desktop-Setup.exe\` below
-2. Run the installer
+1. Download the installer below
+2. Run the setup file
 3. Launch Battles.app Desktop
-4. Connect your Stream Deck
-5. Enjoy the beautiful branded loading animation!
+4. Connect your Elgato Stream Deck
+5. Login and start streaming!
 
 ## ⚠️ Closed Beta
 
-This software is in **closed beta**. You need access to use it:
+This software is in **closed beta**. Access required:
 - Request access in the app
 - Or visit: https://battles.app
 
 ## 🎨 Features
 
-- ✨ Beautiful Stream Deck integration
-- 🎬 Branded loading animations with logo colors
-- 🎮 Real-time FX control
-- 🌊 Smooth dark gradient backgrounds
+- 🎭 Real-time animations for TikTok Live
+- 💡 Interactive light shows and effects
+- 🤖 AI-powered streaming tools
+- 🎮 Stream Deck integration
 - ⚡ Lightning-fast performance
 
 ## 🔗 Links
 
 - 🌐 Website: https://battles.app
 - 📧 Support: support@battles.app
-- 🐛 Report Issues: Create an issue in this repository
+- 🐛 Issues: https://github.com/battles-app/desktop-releases/issues
 
 ---
 
-*Made with ${colors.pink}❤${colors.reset} by the Battles.app team*
+**⚠️ Security Notice:** This release contains only the compiled installer. No source code is included.
+
+*Made with ❤️ by the Battles.app team*
 `;
     
-    const fileName = path.basename(exePath);
+    // Security: Only upload the installer file, nothing else
+    const installerPath = executable.path;
+    const installerName = executable.name;
+    
+    log.info(`Uploading installer: ${installerName}`);
+    log.info(`File size: ${(fs.statSync(installerPath).size / 1024 / 1024).toFixed(2)} MB`);
+    
+    // Create release with ONLY the installer file
     execSync(
-      `gh release create v${version} "${exePath}" --title "Battles.app Desktop v${version}" --notes "${releaseNotes.replace(/"/g, '\\"')}" --repo battles-app/desktop-releases`,
+      `gh release create v${version} "${installerPath}" --title "Battles.app Desktop v${version}" --notes "${releaseNotes.replace(/"/g, '\\"')}" --repo battles-app/desktop-releases`,
       { cwd: rootDir, stdio: 'inherit' }
     );
     
@@ -333,9 +387,11 @@ async function release() {
   const executable = findExecutable();
   if (!executable) {
     log.error('Could not find built executable!');
+    log.error('Make sure the build completed successfully');
     process.exit(1);
   }
-  log.success(`Found executable: ${executable.path}`);
+  log.success(`Found installer: ${executable.name}`);
+  log.info(`Location: ${executable.path}`);
   
   // Commit version changes
   log.header('Committing Changes');
