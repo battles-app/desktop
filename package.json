@@ -7,6 +7,10 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "release": "node scripts/release.js",
+    "release:major": "node scripts/release.js major",
+    "release:minor": "node scripts/release.js minor",
+    "release:patch": "node scripts/release.js patch",
     "check": "cargo check",
     "tauri": "tauri",
     "generate-icons": "node generate-icons.js"
