@@ -110,6 +110,8 @@ async function generateReadme(version, changelog = '') {
   
   const prompt = `You are an expert at creating stunning, professional GitHub README files. Create a beautiful README.md for "${appContext.name}" following modern GitHub best practices.
 
+CRITICAL: Output ONLY the raw markdown content. DO NOT wrap it in code blocks like \`\`\`markdown or any other formatting. Start directly with the opening <div>.
+
 **EXAMPLE STRUCTURE TO FOLLOW:**
 Study this example structure and style:
 - Hero section: Centered logo + title + tagline + badges in a row
