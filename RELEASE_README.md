@@ -4,9 +4,10 @@
 
 ![Battles.app Logo](https://battles.app/logo.svg)
 
-**Professional live streaming software with Elgato Stream Deck integration**
+**Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI**
 
 [![Windows](https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/battles-app/desktop-releases/releases)
+[![TikTok Live](https://img.shields.io/badge/TikTok_Live-000000?style=for-the-badge&logo=tiktok&logoColor=white)](https://battles.app)
 [![Stream Deck](https://img.shields.io/badge/Stream_Deck-Required-8B5CF6?style=for-the-badge)](https://www.elgato.com/stream-deck)
 [![Closed Beta](https://img.shields.io/badge/Status-Closed_Beta-EE2B63?style=for-the-badge)](https://battles.app)
 
@@ -22,18 +23,20 @@
 <tr>
 <td width="50%">
 
-### 🎬 **Beautiful Animations**
-- Branded loading screens with logo colors
-- Smooth dark gradient backgrounds  
-- Professional polish from first launch
+### 🎭 **Real-Time Animations**
+- Professional visual effects for TikTok Live
+- Interactive light shows
+- AI-powered content tools
+- Seamless OBS/VMIX integration
 
 </td>
 <td width="50%">
 
-### 🎮 **Stream Deck Integration**
-- Real-time FX control at your fingertips
-- Dynamic button layouts
-- Instant visual feedback
+### 🎮 **Stream Deck Control**
+- Instant FX triggering at your fingertips
+- Beautiful branded button layouts
+- Real-time status indicators
+- Professional workflow
 
 </td>
 </tr>
@@ -42,16 +45,18 @@
 
 ### ⚡ **Lightning Fast**
 - High-performance Rust backend
-- 166 FPS animation rendering
-- Zero lag, maximum responsiveness
+- Zero-lag FX switching
+- Smooth 166 FPS animations
+- Professional reliability
 
 </td>
 <td width="50%">
 
-### 🎨 **Brand Consistency**
-- Pink (#ee2b63), White, Yellow (#e9b320)
-- Matches your streaming setup
-- Professional appearance
+### 🎨 **Built for TikTok Live**
+- Compatible with TikTok Live Studio
+- Works with OBS, VMIX, Resolume
+- Smart TV preview support
+- Professional streaming setup
 
 </td>
 </tr>

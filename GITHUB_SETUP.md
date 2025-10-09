@@ -9,7 +9,7 @@ Go to https://github.com/organizations/battles-app/repositories/new
 **Settings:**
 - **Owner**: `battles-app`
 - **Repository name**: `desktop-releases`
-- **Description**: `🎮 Professional live streaming software with Elgato Stream Deck integration - Windows Desktop App (Closed Beta)`
+- **Description**: `🎮 Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI with Elgato Stream Deck Integration (Closed Beta)`
 - **Visibility**: ✅ Public
 - **Initialize**: ❌ Do NOT initialize with README (we have our own)
 
@@ -19,13 +19,13 @@ After creating, go to Settings:
 
 #### About Section (top right)
 - **Website**: `https://battles.app`
-- **Topics**: `streamdeck`, `elgato`, `streaming`, `desktop-app`, `windows`, `tauri`, `rust`
+- **Topics**: `tiktok-live`, `streamdeck`, `elgato`, `streaming`, `animations`, `desktop-app`, `windows`, `tauri`, `rust`, `obs`, `vmix`
 - **Releases**: ✅ Check
 - **Packages**: ❌ Uncheck
 
 #### Description
 ```
-🎮 Battles.app Desktop - Professional live streaming software with Elgato Stream Deck integration. Beautiful branded animations, real-time FX control, lightning-fast performance. Windows only. Closed Beta.
+🎮 Battles.app Desktop - Pro TikTok Live Utilities with real-time animations, light shows, and AI. Elgato Stream Deck integration for instant FX control. Windows only. Closed Beta.
 ```
 
 #### Features (in Settings)
