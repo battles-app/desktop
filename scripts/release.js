@@ -422,13 +422,52 @@ This software is in **closed beta**. Access required:
     // Create file list for upload
     const filesToUpload = [installerPath, ...updaterFiles].map(f => `"${f}"`).join(' ');
     
+    // Check if AI-generated README exists
+    const readmePath = path.join(rootDir, 'RELEASE_README.md');
+    let readmeContent = '';
+    if (fs.existsSync(readmePath)) {
+      readmeContent = fs.readFileSync(readmePath, 'utf-8');
+      log.info('Using AI-generated README for release notes');
+    } else {
+      readmeContent = releaseNotes;
+      log.info('Using standard release notes');
+    }
+    
     log.info(`Uploading ${1 + updaterFiles.length} files...`);
     
     // Create release with installer and updater artifacts
     execSync(
-      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes "${releaseNotes.replace(/"/g, '\\"')}" --repo battles-app/desktop-releases`,
+      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes "${readmeContent.replace(/"/g, '\\"')}" --repo battles-app/desktop-releases`,
       { cwd: rootDir, stdio: 'inherit' }
     );
+    
+    // Update repository README with latest version
+    log.info('Updating repository README.md...');
+    const repoReadmePath = path.join(rootDir, '..', 'desktop-releases', 'README.md');
+    if (fs.existsSync(readmePath)) {
+      try {
+        // Copy AI-generated README to repository
+        const repoDir = path.dirname(repoReadmePath);
+        if (!fs.existsSync(repoDir)) {
+          log.info('Repository directory not found, skipping README update');
+        } else {
+          fs.copyFileSync(readmePath, repoReadmePath);
+          log.success('Repository README.md updated');
+          
+          // Commit and push README update
+          try {
+            execSync('git add README.md', { cwd: repoDir });
+            execSync(`git commit -m "docs: update README for v${version}"`, { cwd: repoDir });
+            execSync('git push', { cwd: repoDir });
+            log.success('README committed and pushed to repository');
+          } catch (gitError) {
+            log.info('Could not commit README (repository may not be cloned locally)');
+          }
+        }
+      } catch (error) {
+        log.info('Could not update repository README');
+      }
+    }
     
     log.success(`Release v${version} created successfully!`);
     log.info(`View at: https://github.com/battles-app/desktop-releases/releases/tag/v${version}`);
