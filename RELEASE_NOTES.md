@@ -1,29 +1,85 @@
-```markdown
-# Battles.app Desktop v0.0.2 Release Notes
+<div align="center">
 
-We're excited to bring you the latest update for Battles.app Desktop, packed with improvements to enhance your experience.
+# 🎮 Battles.app Desktop v0.0.2
 
-## 🚀 What's New in v0.0.2?
-- **Performance Enhancements:** We've fine-tuned the app to run smoother and faster, ensuring a seamless experience.
-- **Bug Fixes:** Squashed some pesky bugs to improve reliability and stability.
+**Pro TikTok Live Utilities** • Stream Deck Integration • Real-Time FX
 
-## Installation Instructions
-To get started with Battles.app Desktop v0.0.2, follow these simple steps:
-1. Visit our [Download Page](https://battles.app/download)
-2. Click on the download link for your operating system.
-3. Once downloaded, run the installer and follow the on-screen instructions.
+[![Download](https://img.shields.io/badge/⬇️_Download-Windows_Installer-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/battles-app/desktop/releases/download/v0.0.2/battles.app_0.0.2_x64-setup.exe)
+[![Version](https://img.shields.io/badge/version-0.0.2-blue?style=for-the-badge)](https://github.com/battles-app/desktop/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows_10/11-blueviolet?style=for-the-badge&logo=windows)](https://github.com/battles-app/desktop)
+[![Beta](https://img.shields.io/badge/status-Closed_Beta-red?style=for-the-badge)](https://battles.app)
 
-## System Requirements
-- OS: Windows 10 (64-bit) or macOS 10.14 and later
-- Processor: Dual-core processor
-- Memory: 4 GB RAM
-- Storage: 2 GB available space
+</div>
 
-## Closed Beta Status
-Please note that Battles.app Desktop is currently in closed beta. We're working hard to polish the app for its full release. Your feedback is invaluable during this phase!
+---
 
-## Need Help?
-For more information and support, visit our [Website](https://battles.app) or reach out to our [Support Team](https://battles.app/support).
+## ✨ What's New
 
-Thank you for trying out Battles.app Desktop v0.0.2. We're excited to have you on board and look forward to your feedback!
-```
+Initial release with Stream Deck integration, real-time FX, and beautiful branded animations
+
+---
+
+## 📥 Installation
+
+<div align="center">
+
+### **[⬇️ Download battles.app_0.0.2_x64-setup.exe](https://github.com/battles-app/desktop/releases/download/v0.0.2/battles.app_0.0.2_x64-setup.exe)**
+
+**Size:** ~10 MB • **Platform:** Windows 10/11 (64-bit)
+
+</div>
+
+### Quick Start:
+1. 📥 Download the installer above
+2. 🔓 Run `battles.app_0.0.2_x64-setup.exe`
+3. 🎮 Launch Battles.app Desktop
+4. 🔌 Connect your Elgato Stream Deck (optional)
+5. 🚀 Start streaming with professional FX!
+
+---
+
+## 💻 System Requirements
+
+| Component | Requirement |
+|-----------|------------|
+| **OS** | Windows 10/11 (64-bit) |
+| **Processor** | Intel i5 or equivalent |
+| **RAM** | 4 GB minimum |
+| **Graphics** | DirectX 11 compatible |
+| **Accessories** | Elgato Stream Deck (optional) |
+
+---
+
+## 🎯 Closed Beta Access
+
+This software is currently in **closed beta**. To request access:
+- 🌐 Visit [battles.app](https://battles.app)
+- 📧 Email [support@battles.app](mailto:support@battles.app)
+
+---
+
+## 🔗 Quick Links
+
+<div align="center">
+
+[![Website](https://img.shields.io/badge/🌐_Website-battles.app-pink?style=for-the-badge)](https://battles.app)
+[![Support](https://img.shields.io/badge/📧_Support-Email_Us-yellow?style=for-the-badge)](mailto:support@battles.app)
+[![Issues](https://img.shields.io/badge/🐛_Report_Bug-GitHub_Issues-green?style=for-the-badge)](https://github.com/battles-app/desktop/issues)
+
+</div>
+
+---
+
+<div align="center">
+
+**⚠️ Security Notice:** This release contains only the compiled installer. No source code is included.
+
+**🔐 Auto-Updates Enabled:** The app will automatically check for updates and notify you.
+
+---
+
+Made with ❤️ by the **Battles.app** team
+
+© 2025 BATTLES.app™ • All Rights Reserved
+
+</div>

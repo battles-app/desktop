@@ -196,16 +196,24 @@ Generate ONLY the markdown content, no additional text or explanations.`;
 function generateFallbackReadme(version, changelog) {
   return `<div align="center">
 
+<img src="https://battles.app/assets/battles-logo.svg" alt="Battles.app Logo" width="120"/>
+
 # 🎮 Battles.app Desktop
 
 ### ${appContext.tagline}
 
-![Version](https://img.shields.io/badge/version-${version}-blue)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
-![Status](https://img.shields.io/badge/status-Closed%20Beta-orange)
-![License](https://img.shields.io/badge/license-BSL%201.1-purple)
+[![Version](https://img.shields.io/badge/version-${version}-blue?style=for-the-badge)](https://github.com/battles-app/desktop/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows_10/11-blueviolet?style=for-the-badge&logo=windows)](https://github.com/battles-app/desktop)
+[![Status](https://img.shields.io/badge/status-Closed_Beta-red?style=for-the-badge)](https://battles.app)
+[![License](https://img.shields.io/badge/license-BSL_1.1-green?style=for-the-badge)](./LICENSE)
 
-[Download](#-installation) • [Website](https://battles.app) • [Support](mailto:support@battles.app)
+[![Download](https://img.shields.io/badge/⬇️_Download-Latest_Release-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/battles-app/desktop/releases/latest)
+[![Website](https://img.shields.io/badge/🌐_Visit-battles.app-FF1744?style=for-the-badge)](https://battles.app)
+[![Support](https://img.shields.io/badge/📧_Support-Email_Us-FFC107?style=for-the-badge)](mailto:support@battles.app)
+
+---
+
+**🚀 Transform your TikTok Live streams with professional-grade effects, animations, and Stream Deck integration**
 
 </div>
 
@@ -213,25 +221,60 @@ function generateFallbackReadme(version, changelog) {
 
 ## ✨ Features
 
-${appContext.features.map(f => `### ${f.icon} ${f.name}\n${f.description}\n`).join('\n')}
+<table>
+<tr>
+<td width="50%">
+
+${appContext.features.slice(0, 4).map(f => `
+#### ${f.icon} ${f.name}
+${f.description}
+`).join('\n')}
+
+</td>
+<td width="50%">
+
+${appContext.features.slice(4).map(f => `
+#### ${f.icon} ${f.name}
+${f.description}
+`).join('\n')}
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## 🎯 Use Cases
 
+<div align="center">
+
+| 🎭 Live Streaming | 🎮 Gaming | ⚔️ Battles | 🎪 Events |
+|-------------------|-----------|-----------|-----------|
+| TikTok Live with professional FX | Interactive gameplay streams | Battle and competition streams | Live performances & shows |
+
+</div>
+
 ${appContext.useCases.map(u => `- ${u}`).join('\n')}
 
 ---
 
-## 📦 Installation
+## 📥 Installation
 
-### Windows 10/11 (64-bit)
+<div align="center">
 
-1. **Download** the latest installer from [Releases](https://github.com/battles-app/desktop-releases/releases/latest)
-2. **Run** \`battles.app_${version}_x64-setup.exe\`
-3. **Launch** Battles.app Desktop
-4. **Connect** your Elgato Stream Deck (optional)
-5. **Login** and start streaming!
+### **[⬇️ Download Latest Version (v${version})](https://github.com/battles-app/desktop/releases/latest)**
+
+**Quick Install • Windows 10/11 (64-bit) • ~10 MB**
+
+</div>
+
+### 🚀 Quick Start Guide:
+
+1. **📥 Download** the latest installer from [Releases](https://github.com/battles-app/desktop/releases/latest)
+2. **🔓 Run** \`battles.app_${version}_x64-setup.exe\`
+3. **🎮 Launch** Battles.app Desktop
+4. **🔌 Connect** your Elgato Stream Deck (optional)
+5. **🚀 Login** and start streaming with professional FX!
 
 ### System Requirements
 
@@ -342,63 +385,92 @@ Made with ❤️ by the Battles.app team
 
 // Generate release notes (for GitHub release)
 async function generateReleaseNotes(version, changelog) {
-  try {
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
-      messages: [
-        {
-          role: 'system',
-          content: `You are a professional release notes writer for Battles.app Desktop.
-          
-Create concise, engaging release notes that:
-- Start with the app name and version
-- Highlight what's new in this version (from changelog)
-- Include installation instructions
-- Mention system requirements
-- Note closed beta status
-- Include links to website and support
+  // Create beautiful release notes with download button
+  return `<div align="center">
 
-Keep it focused on THIS specific release. Be concise and professional.
-Format in markdown. Use emojis sparingly.`
-        },
-        {
-          role: 'user',
-          content: `Create release notes for v${version}. Changelog:\n\n${changelog}`
-        }
-      ],
-      temperature: 0.7,
-      max_tokens: 800
-    });
-    
-    return response.choices[0].message.content.trim();
-  } catch (error) {
-    console.log('⚠️  AI generation failed, using fallback release notes');
-    return `# 🎮 Battles.app Desktop v${version}
+# 🎮 Battles.app Desktop v${version}
 
-${changelog}
+**Pro TikTok Live Utilities** • Stream Deck Integration • Real-Time FX
 
-## 📦 Installation
+[![Download](https://img.shields.io/badge/⬇️_Download-Windows_Installer-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe)
+[![Version](https://img.shields.io/badge/version-${version}-blue?style=for-the-badge)](https://github.com/battles-app/desktop/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows_10/11-blueviolet?style=for-the-badge&logo=windows)](https://github.com/battles-app/desktop)
+[![Beta](https://img.shields.io/badge/status-Closed_Beta-red?style=for-the-badge)](https://battles.app)
 
-Download the installer below and run it on Windows 10/11 (64-bit).
-
-**Requirements:**
-- Windows 10/11 (64-bit)
-- Elgato Stream Deck (optional)
-
-## ⚠️ Closed Beta
-
-Access required. Request access at: https://battles.app
-
-## 🔗 Links
-
-- 🌐 Website: https://battles.app
-- 📧 Support: support@battles.app
-- 🐛 Issues: https://github.com/battles-app/desktop/issues
+</div>
 
 ---
 
-**Security Notice:** This release contains only the compiled installer.`;
-  }
+## ✨ What's New
+
+${changelog}
+
+---
+
+## 📥 Installation
+
+<div align="center">
+
+### **[⬇️ Download battles.app_${version}_x64-setup.exe](https://github.com/battles-app/desktop/releases/download/v${version}/battles.app_${version}_x64-setup.exe)**
+
+**Size:** ~10 MB • **Platform:** Windows 10/11 (64-bit)
+
+</div>
+
+### Quick Start:
+1. 📥 Download the installer above
+2. 🔓 Run \`battles.app_${version}_x64-setup.exe\`
+3. 🎮 Launch Battles.app Desktop
+4. 🔌 Connect your Elgato Stream Deck (optional)
+5. 🚀 Start streaming with professional FX!
+
+---
+
+## 💻 System Requirements
+
+| Component | Requirement |
+|-----------|------------|
+| **OS** | Windows 10/11 (64-bit) |
+| **Processor** | Intel i5 or equivalent |
+| **RAM** | 4 GB minimum |
+| **Graphics** | DirectX 11 compatible |
+| **Accessories** | Elgato Stream Deck (optional) |
+
+---
+
+## 🎯 Closed Beta Access
+
+This software is currently in **closed beta**. To request access:
+- 🌐 Visit [battles.app](https://battles.app)
+- 📧 Email [support@battles.app](mailto:support@battles.app)
+
+---
+
+## 🔗 Quick Links
+
+<div align="center">
+
+[![Website](https://img.shields.io/badge/🌐_Website-battles.app-pink?style=for-the-badge)](https://battles.app)
+[![Support](https://img.shields.io/badge/📧_Support-Email_Us-yellow?style=for-the-badge)](mailto:support@battles.app)
+[![Issues](https://img.shields.io/badge/🐛_Report_Bug-GitHub_Issues-green?style=for-the-badge)](https://github.com/battles-app/desktop/issues)
+
+</div>
+
+---
+
+<div align="center">
+
+**⚠️ Security Notice:** This release contains only the compiled installer. No source code is included.
+
+**🔐 Auto-Updates Enabled:** The app will automatically check for updates and notify you.
+
+---
+
+Made with ❤️ by the **Battles.app** team
+
+© 2025 BATTLES.app™ • All Rights Reserved
+
+</div>`;
 }
 
 // Main function
