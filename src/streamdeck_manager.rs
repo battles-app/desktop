@@ -85,13 +85,11 @@ impl StreamDeckManager {
         self.is_connected = true;
         self.loading_animation_active = true; // Start animation flag
         
-        // Play the beautiful reveal animation (BATTLES appears, then LOADING)
-        // This is non-blocking since it's just rendering frames
-        println!("[Stream Deck] 🎬 Playing beautiful reveal animation...");
-        let _ = self.play_loading_animation();
-        
-        // Background thread will continue looping after this
-        println!("[Stream Deck] 🔄 Animation will loop until FX loaded...");
+        // DON'T play animation here - it blocks everything!
+        // Background thread will handle ALL animation (including initial reveal)
+        // This allows frontend to load data in PARALLEL with animation
+        println!("[Stream Deck] 🎬 Animation enabled - background thread will handle it");
+        println!("[Stream Deck] ⚡ Frontend can now load data in parallel!");
 
         Ok(info)
     }
@@ -395,11 +393,34 @@ impl StreamDeckManager {
     }
     
     /// Keep the gradient background animating (call from watcher until FX loaded)
-    /// This loops infinitely showing logo + "BATTLES LOADING"
+    /// This handles BOTH initial reveal and infinite loop
     pub fn continue_loading_background(&mut self, frame: usize) -> Result<(), String> {
         if self.device.is_none() || !self.loading_animation_active {
             return Err("No device or animation stopped".to_string());
         }
+        
+        // Calculate animation phase based on frame number
+        let text_battles = "BATTLES";
+        let text_loading = "LOADING";
+        let battles_frames = text_battles.len() * 3;
+        let loading_frames = text_loading.len() * 3;
+        let hold_frames = 5;
+        let cycle_frames = battles_frames + loading_frames + hold_frames;
+        
+        // Loop the animation by taking modulo
+        let cycle_frame = frame % cycle_frames;
+        
+        let battles_visible = if cycle_frame < battles_frames {
+            (cycle_frame / 3).min(text_battles.len())
+        } else {
+            text_battles.len()
+        };
+        
+        let loading_visible = if cycle_frame >= battles_frames {
+            ((cycle_frame - battles_frames) / 3).min(text_loading.len())
+        } else {
+            0
+        };
         
         let size = self.get_button_size();
         let button_count = self.button_count();
@@ -412,9 +433,6 @@ impl StreamDeckManager {
             Some(Kind::Pedal) => (3, 1),
             None => return Err("Unknown device type".to_string()),
         };
-        
-        let text_battles = "BATTLES";
-        let text_loading = "LOADING";
         
         let logo_colors = [
             Rgba([238, 43, 99, 255]),   // Pink
@@ -451,10 +469,10 @@ impl StreamDeckManager {
             
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), Rgba([r, g, b, 255]));
             
-            // Keep text visible (adjust for logo taking first button of row 1)
+            // Keep text visible with progressive reveal (adjust for logo taking first button of row 1)
             let text_col = if row == 1 && col > 0 { col - 1 } else { col };
-            let should_show_battles = row == 1 && col > 0 && text_col < text_battles.len();
-            let should_show_loading = row == 2 && col < text_loading.len();
+            let should_show_battles = row == 1 && col > 0 && text_col < text_battles.len() && text_col < battles_visible;
+            let should_show_loading = row == 2 && col < text_loading.len() && col < loading_visible;
             
             if should_show_battles || should_show_loading {
                 let (letter, color_idx) = if should_show_battles {
