@@ -31,7 +31,7 @@ fn bundle_gstreamer_dlls() {
     // NSIS bundler will automatically include DLLs from this location
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
-    let target_dir = PathBuf::from(manifest_dir).join("target").join(profile);
+    let target_dir = PathBuf::from(&manifest_dir).join("target").join(profile);
     
     println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("cargo:warning=  📦 Bundling GStreamer Dependencies");
