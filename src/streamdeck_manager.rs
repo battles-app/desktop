@@ -14,7 +14,7 @@ use std::io::Read;
 pub struct FxButton {
     pub id: String,
     pub name: String,
-    pub image_url: Option<String>,
+    pub image_data: Option<String>, // base64 encoded image from browser
     pub is_global: bool, // true for battle board, false for user FX
     pub position: usize, // Original position in the list
 }
@@ -282,50 +282,10 @@ impl StreamDeckManager {
             return Err("No device connected".to_string());
         }
         
-        // Download missing images BEFORE rendering (ensures images are ready)
-        let cache_dir = std::env::temp_dir().join("battles_fx_cache");
-        let _ = std::fs::create_dir_all(&cache_dir);
+        println!("[Stream Deck] Updating layout with {} battle board + {} user FX items (images from browser cache)", battle_board.len(), user_fx.len());
         
-        let all_fx: Vec<FxButton> = battle_board.iter().chain(user_fx.iter()).cloned().collect();
-        let mut needs_download = Vec::new();
-        
-        for fx in &all_fx {
-            if let Some(ref image_url) = fx.image_url {
-                let cache_filename = format!("{}.jpg", fx.name);
-                let cache_path = cache_dir.join(&cache_filename);
-                
-                if !cache_path.exists() {
-                    needs_download.push((image_url.clone(), fx.name.clone(), cache_path));
-                }
-            }
-        }
-        
-        // Download missing images in background (non-blocking)
-        if !needs_download.is_empty() {
-            println!("[Stream Deck] Downloading {} missing images in background...", needs_download.len());
-            
-            // Spawn background thread for downloads (avoids tokio runtime issues)
-            std::thread::spawn(move || {
-                for (i, (image_url, name, cache_path)) in needs_download.iter().enumerate() {
-                    // Small delay between requests
-                    if i > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(150));
-                    }
-                    
-                    Self::download_image_to_cache_sync(
-                        image_url.clone(),
-                        name.clone(),
-                        cache_path.clone()
-                    );
-                }
-                
-                println!("[Stream Deck] ✅ Background image downloads complete");
-            });
-            
-            println!("[Stream Deck] Rendering layout with placeholders (images will load in background)...");
-        }
-        
-        println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
+        // Store button mapping for press handling
+        self.button_states.clear();
         
         // Initialize layout with None
         self.button_layout = vec![None; button_count];
@@ -341,32 +301,108 @@ impl StreamDeckManager {
             None => return Err("Unknown device type".to_string()),
         };
         
-        // Calculate split point (left side for battle board, right side for user FX)
-        let mid_col = cols / 2;
-        
-        // Place battle board effects on left side (top to bottom, left to right)
-        let mut battle_index = 0;
-        for row in 0..rows {
-            for col in 0..mid_col {
-                if battle_index < battle_board.len() {
-                    let button_idx = row * cols + col;
-                    if button_idx < button_count {
-                        self.button_layout[button_idx] = Some(battle_board[battle_index].clone());
-                        battle_index += 1;
+        // Special layout for XL: Reserve rightmost column for control buttons
+        if matches!(self.device_kind, Some(Kind::Xl) | Some(Kind::XlV2)) {
+            // XL Layout (8 columns × 4 rows = 32 buttons):
+            // - Columns 0-4 (left 5 columns): Battle board (up to 20 buttons)
+            // - Columns 5-6 (2 columns): User FX (up to 8 buttons, but limit to 12 total)
+            // - Column 7 (rightmost): Control buttons (INTRO, PARTY, BREAK, END)
+            
+            // Place battle board on left (columns 0-4)
+            let mut battle_index = 0;
+            for row in 0..rows {
+                for col in 0..5 {
+                    if battle_index < battle_board.len() {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(battle_board[battle_index].clone());
+                            // Store button state for press handling
+                            self.button_states.insert(button_idx as u8, ButtonState {
+                                is_playing: false,
+                                button: Some(battle_board[battle_index].clone()),
+                            });
+                            battle_index += 1;
+                        }
                     }
                 }
             }
-        }
-        
-        // Place user FX on right side (top to bottom, left to right)
-        let mut user_index = 0;
-        for row in 0..rows {
-            for col in mid_col..cols {
-                if user_index < user_fx.len() {
-                    let button_idx = row * cols + col;
-                    if button_idx < button_count {
-                        self.button_layout[button_idx] = Some(user_fx[user_index].clone());
-                        user_index += 1;
+            
+            // Place user FX in columns 5-6 (limit to 12 buttons)
+            let mut user_index = 0;
+            for row in 0..rows {
+                for col in 5..7 {
+                    if user_index < user_fx.len() && user_index < 12 {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(user_fx[user_index].clone());
+                            // Store button state for press handling
+                            self.button_states.insert(button_idx as u8, ButtonState {
+                                is_playing: false,
+                                button: Some(user_fx[user_index].clone()),
+                            });
+                            user_index += 1;
+                        }
+                    }
+                }
+            }
+            
+            // Place control buttons in rightmost column (column 7)
+            let control_buttons = vec![
+                ("INTRO", [138, 43, 226]), // Purple
+                ("PARTY", [255, 105, 180]), // Hot pink
+                ("BREAK", [30, 144, 255]),  // Blue
+                ("END", [220, 20, 60]),     // Crimson
+            ];
+            
+            for (row, (name, color)) in control_buttons.iter().enumerate() {
+                let button_idx = row * cols + 7; // Column 7 (rightmost)
+                if button_idx < button_count {
+                    // Create control button
+                    self.button_layout[button_idx] = Some(FxButton {
+                        id: format!("control_{}", name.to_lowercase()),
+                        name: name.to_string(),
+                        image_data: None,
+                        is_global: false,
+                        position: row,
+                    });
+                }
+            }
+        } else {
+            // Standard layout for other devices (left = battle board, right = user FX)
+            let mid_col = cols / 2;
+            
+            // Place battle board effects on left side
+            let mut battle_index = 0;
+            for row in 0..rows {
+                for col in 0..mid_col {
+                    if battle_index < battle_board.len() {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(battle_board[battle_index].clone());
+                            self.button_states.insert(button_idx as u8, ButtonState {
+                                is_playing: false,
+                                button: Some(battle_board[battle_index].clone()),
+                            });
+                            battle_index += 1;
+                        }
+                    }
+                }
+            }
+            
+            // Place user FX on right side
+            let mut user_index = 0;
+            for row in 0..rows {
+                for col in mid_col..cols {
+                    if user_index < user_fx.len() {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(user_fx[user_index].clone());
+                            self.button_states.insert(button_idx as u8, ButtonState {
+                                is_playing: false,
+                                button: Some(user_fx[user_index].clone()),
+                            });
+                            user_index += 1;
+                        }
                     }
                 }
             }
@@ -424,99 +460,137 @@ impl StreamDeckManager {
         // Get button size
         let size = self.get_button_size();
         
-        // Try to load cached image from frontend cache (NO downloading!)
-        // Cache files are named after the FX name, e.g., "x2.jpg", "galaxy.mp4"
-        let cached_image = if let Some(cached_path) = self.find_cached_image(&fx_button.name) {
-            println!("[Stream Deck] ✅ Found cached image for {}: {:?}", fx_button.name, cached_path.file_name());
+        // Decode base64 image data from browser
+        let decoded_image = if let Some(ref base64_data) = fx_button.image_data {
+            // Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
+            let base64_str = if base64_data.contains(',') {
+                base64_data.split(',').nth(1).unwrap_or(base64_data)
+            } else {
+                base64_data
+            };
             
-            match image::open(&cached_path) {
-                Ok(img) => {
-                    println!("[Stream Deck] ✅ Successfully loaded image for {}: {}x{}", 
-                        fx_button.name, img.width(), img.height());
-                    Some(img)
+            match base64::decode(base64_str) {
+                Ok(bytes) => {
+                    match image::load_from_memory(&bytes) {
+                        Ok(img) => {
+                            println!("[Stream Deck] ✅ Decoded image for {} ({}x{})", fx_button.name, img.width(), img.height());
+                            Some(img)
+                        }
+                        Err(e) => {
+                            println!("[Stream Deck] ❌ Failed to decode image for {}: {}", fx_button.name, e);
+                            None
+                        }
+                    }
                 }
                 Err(e) => {
-                    println!("[Stream Deck] ❌ Failed to load image for {}: {} (file might be video)", 
-                        fx_button.name, e);
+                    println!("[Stream Deck] ❌ Failed to decode base64 for {}: {}", fx_button.name, e);
                     None
                 }
             }
         } else {
-            println!("[Stream Deck] ⚠️ No cached image found for {}", fx_button.name);
             None
         };
         
         // Create base button image
-        let mut img = if let Some(cached_img) = cached_image {
-            // Use cached image, resize to fit button
-            let resized = cached_img.resize_exact(size, size, image::imageops::FilterType::Triangle);
+        let mut img = if let Some(decoded_img) = decoded_image {
+            // Use decoded image, resize to fit button
+            let resized = decoded_img.resize_exact(size, size, image::imageops::FilterType::Triangle);
             resized.to_rgba8()
         } else {
             // Fall back to colored background if no image
             let mut img = RgbaImage::new(size, size);
-            let bg_color = if is_playing {
+            
+            // Check if this is a control button
+            let bg_color = if fx_button.id.starts_with("control_") {
+                // Control buttons have specific colors
+                match fx_button.name.as_str() {
+                    "INTRO" => image::Rgba([138, 43, 226, 255]), // Purple
+                    "PARTY" => image::Rgba([255, 105, 180, 255]), // Hot pink
+                    "BREAK" => image::Rgba([30, 144, 255, 255]),  // Blue
+                    "END" => image::Rgba([220, 20, 60, 255]),     // Crimson
+                    _ => image::Rgba([80, 80, 80, 255]), // Gray fallback
+                }
+            } else if is_playing {
                 image::Rgba([50, 205, 50, 255]) // Green when playing
             } else if fx_button.is_global {
                 image::Rgba([138, 43, 226, 255]) // Purple for battle board
             } else {
                 image::Rgba([30, 144, 255, 255]) // Blue for user FX
             };
+            
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
             img
         };
         
         // Add colored border overlay for playing state or type indicator
-        if is_playing {
-            // Bright green border when playing
-            let border_color = image::Rgba([50, 255, 50, 255]);
-            for i in 0..6 {
-                let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
-                imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
-            }
-        } else {
-            // Subtle colored border to indicate type
-            let border_color = if fx_button.is_global {
-                image::Rgba([138, 43, 226, 180]) // Purple tint for battle board
+        // Skip borders for control buttons
+        if !fx_button.id.starts_with("control_") {
+            if is_playing {
+                // Bright green border when playing
+                let border_color = image::Rgba([50, 255, 50, 255]);
+                for i in 0..6 {
+                    let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
+                    imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+                }
             } else {
-                image::Rgba([30, 144, 255, 180]) // Blue tint for user FX
-            };
-            for i in 0..3 {
-                let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
-                imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+                // Subtle colored border to indicate type
+                let border_color = if fx_button.is_global {
+                    image::Rgba([138, 43, 226, 180]) // Purple tint for battle board
+                } else {
+                    image::Rgba([30, 144, 255, 180]) // Blue tint for user FX
+                };
+                for i in 0..3 {
+                    let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
+                    imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+                }
             }
         }
-        
-        // Add semi-transparent text background at bottom for better readability
-        let text_bg_height = (size as f32 * 0.25) as u32;
-        let text_bg_y = size - text_bg_height;
-        draw_filled_rect_mut(
-            &mut img,
-            Rect::at(0, text_bg_y as i32).of_size(size, text_bg_height),
-            image::Rgba([0, 0, 0, 180])
-        );
         
         // Render text with FX name
         let font_data = include_bytes!("../assets/DejaVuSans.ttf");
         let font = FontRef::try_from_slice(font_data)
             .map_err(|e| format!("Failed to load font: {:?}", e))?;
         
-        // Calculate font size based on button size
-        let font_scale = PxScale::from((size as f32 * 0.13).max(10.0));
-        
-        // Prepare text (truncate if too long)
-        let display_name = if fx_button.name.len() > 10 {
-            format!("{}...", &fx_button.name[..7])
+        // Control buttons get larger centered text, FX buttons get bottom text bar
+        if fx_button.id.starts_with("control_") {
+            // Large centered text for control buttons
+            let font_scale = PxScale::from((size as f32 * 0.18).max(14.0));
+            let display_name = fx_button.name.clone();
+            let text_color = image::Rgba([255, 255, 255, 255]);
+            
+            // Center text both horizontally and vertically
+            let text_x = ((size as f32 - (display_name.len() as f32 * font_scale.x * 0.5)) / 2.0) as i32;
+            let text_y = ((size as f32 - font_scale.y) / 2.0) as i32;
+            
+            draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
         } else {
-            fx_button.name.clone()
-        };
-        
-        // Position text in the text background area (bottom of button)
-        let text_color = image::Rgba([255, 255, 255, 255]); // White text
-        let text_x = ((size as f32 - (display_name.len() as f32 * font_scale.x * 0.5)) / 2.0) as i32;
-        let text_y = (text_bg_y + (text_bg_height / 2) - (font_scale.y as u32 / 2)) as i32;
-        
-        // Draw text (no shadow needed on dark background)
-        draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
+            // Add semi-transparent text background at bottom for FX buttons
+            let text_bg_height = (size as f32 * 0.25) as u32;
+            let text_bg_y = size - text_bg_height;
+            draw_filled_rect_mut(
+                &mut img,
+                Rect::at(0, text_bg_y as i32).of_size(size, text_bg_height),
+                image::Rgba([0, 0, 0, 180])
+            );
+            
+            // Calculate font size based on button size
+            let font_scale = PxScale::from((size as f32 * 0.13).max(10.0));
+            
+            // Prepare text (truncate if too long)
+            let display_name = if fx_button.name.len() > 10 {
+                format!("{}...", &fx_button.name[..7])
+            } else {
+                fx_button.name.clone()
+            };
+            
+            // Position text in the text background area (bottom of button)
+            let text_color = image::Rgba([255, 255, 255, 255]); // White text
+            let text_x = ((size as f32 - (display_name.len() as f32 * font_scale.x * 0.5)) / 2.0) as i32;
+            let text_y = (text_bg_y + (text_bg_height / 2) - (font_scale.y as u32 / 2)) as i32;
+            
+            // Draw text (no shadow needed on dark background)
+            draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
+        }
         
         Ok(image::DynamicImage::ImageRgba8(img))
     }
