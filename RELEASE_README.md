@@ -1,6 +1,6 @@
 <div align="center">
 
-![Github banner](./.github/banner.gif)
+![Github banner](./.github/banner.jpg)
 
 # 🎮 Battles.app Desktop
 

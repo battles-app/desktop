@@ -142,7 +142,7 @@ ${changelog || 'Initial release with comprehensive feature set'}
 **REQUIRED SECTIONS (IN ORDER):**
 
 1. **Hero Section** (centered):
-   - Banner: ![Github banner](./.github/banner.gif) - MUST be the first line after opening div
+   - Banner: ![Github banner](./.github/banner.jpg) - MUST be the first line after opening div
    - Title: # 🎮 Battles.app Desktop
    - Tagline subtitle
    - Beautiful download button: Use <a> tag with glassmorphic styling (green gradients #1a4d2e to #2d5a3d, rounded corners, shadow, bold text)
@@ -261,7 +261,7 @@ Study the style of popular repositories like microsoft/vscode, tauri-apps/tauri,
 function generateFallbackReadme(version, changelog) {
   return `<div align="center">
 
-![Github banner](./.github/banner.gif)
+![Github banner](./.github/banner.jpg)
 
 # 🎮 Battles.app Desktop
 
