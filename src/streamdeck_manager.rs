@@ -251,7 +251,20 @@ impl StreamDeckManager {
         
         // Skip if already cached
         if cache_path.exists() {
+            println!("[Stream Deck] ℹ️ Image already cached: {}", cache_filename);
             return;
+        }
+        
+        // Delete old cached files with different extensions (e.g., x2.jpg when x2.png is requested)
+        let all_extensions = vec!["webp", "jpg", "jpeg", "png", "avif", "gif"];
+        for old_ext in all_extensions {
+            if old_ext != extension {
+                let old_cache_path = cache_dir.join(format!("{}.{}", fx_button.name, old_ext));
+                if old_cache_path.exists() {
+                    println!("[Stream Deck] 🗑️ Removing old cached file: {}.{} (new format: {})", fx_button.name, old_ext, extension);
+                    let _ = std::fs::remove_file(&old_cache_path);
+                }
+            }
         }
         
         // Download from Nuxt proxy (non-blocking in background)
