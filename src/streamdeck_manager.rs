@@ -83,14 +83,11 @@ impl StreamDeckManager {
         
         self.device = Some(device);
         self.is_connected = true;
-        self.loading_animation_active = true; // Start animation
-
-        // Play INITIAL loading animation (one cycle)
-        println!("[Stream Deck] 🎬 Starting loading animation...");
-        let _ = self.play_loading_animation();
+        self.loading_animation_active = true; // Start animation flag
         
-        // Animation will continue looping in the background thread
-        println!("[Stream Deck] 🔄 Animation will loop until FX loaded...");
+        // DON'T play full animation here - let background thread handle it!
+        // This way update_layout() can stop it immediately when data is ready
+        println!("[Stream Deck] 🎬 Loading animation enabled, will start in background thread...");
 
         Ok(info)
     }
