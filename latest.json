@@ -1,11 +1,11 @@
 {
-  "version": "0.0.4",
-  "notes": "``` ### ✨ New Features - Introduced a VIP bypass system for prioritized access during peak times.  ### 🚀 Improvements - Enhanced GitHub release formatting for better readability.  ### 🐛 Bug Fixes - ...",
-  "pub_date": "2025-10-09T20:10:22.635Z",
+  "version": "0.0.5",
+  "notes": "``` ## What's New in Battles.app Desktop  ### 🐛 Bug Fixes - Enhanced the reliability of automatic backup processes to ensure your settings are always safe. ```...",
+  "pub_date": "2025-10-09T20:27:48.519Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.4/battles.app_0.0.10_x64-setup.exe"
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.5/battles.app_0.0.10_x64-setup.exe"
     }
   }
 }
