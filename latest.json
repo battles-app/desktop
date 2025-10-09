@@ -1,11 +1,11 @@
 {
-  "version": "0.0.17",
-  "notes": "🐛 Bug Fixes • Ensured GStreamer DLLs are included in the installer...",
-  "pub_date": "2025-10-09T22:40:04.714Z",
+  "version": "0.0.18",
+  "notes": "🐛 Bug Fixes • Fixed correct URLs usage for development vs production builds...",
+  "pub_date": "2025-10-09T22:47:40.290Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT3N4eHlEeXZsbzBEWEM4RldoY05MTWJjRE4vUy9zSHZxZ0hDa2ZhaFF0UlFLa29penQzRGJDOU9lWGFsMlkxWWM2V0lzTDdodHE2RU93VWFHVlFKTHdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwMDQ5NjAxCWZpbGU6QmF0dGxlcy5hcHAgRGVza3RvcF8wLjAuMTdfeDY0LXNldHVwLmV4ZQp1eGlLMjBFUkRUZE4vUDVpanBKNW1RNkdKMjZGUEw5WjJkajg2a1JDYTU5cW5kamxlckJEamYyVDU2RHVJdytEWTI5clJrWks1TTVvMklhL1FQYTVBUT09Cg==",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.17/Battles.app Desktop_0.0.17_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT2g0SmdQR0JxcVBvbE9Db0xud3ZJNmt6L1NHK2tWSkpBanJabGhjbktUU09zWDdvSXJJbWRNdGdjMVVCV1VOWlpBKzJienFqSXA0Nm5ZQndHQkVya1FFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwMDUwMDU3CWZpbGU6QmF0dGxlcy5hcHAgRGVza3RvcF8wLjAuMThfeDY0LXNldHVwLmV4ZQpWcEVkOGo1Q3FsdVl4TGxzL041ZWtqWWNjYncrSVNzWlpmR2JOQVhqMjBIaVVtUVJ3TVhnT2RLMjJoWXBKUDdBcmRJY1lXdm1KQjgyc2dxaWlGYmRDdz09Cg==",
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.18/Battles.app Desktop_0.0.18_x64-setup.exe"
     }
   }
 }
