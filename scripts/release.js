@@ -444,15 +444,45 @@ This software is in **closed beta**. Access required:
     // Create file list for upload
     const filesToUpload = [installerPath, ...updaterFiles].map(f => `"${f}"`).join(' ');
     
-    // Check if AI-generated README exists
-    const readmePath = path.join(rootDir, 'RELEASE_README.md');
-    let readmeContent = '';
-    if (fs.existsSync(readmePath)) {
-      readmeContent = fs.readFileSync(readmePath, 'utf-8');
-      log.info('Using AI-generated README for release notes');
+    // Prepare release notes and repository README
+    const releaseNotesPath = path.join(rootDir, 'RELEASE_NOTES.md');
+    const repoReadmePath = path.join(rootDir, 'RELEASE_README.md');
+    
+    // Generate release notes (for GitHub release)
+    let releaseNotesContent = '';
+    if (fs.existsSync(releaseNotesPath)) {
+      releaseNotesContent = fs.readFileSync(releaseNotesPath, 'utf-8');
+      log.info('Using AI-generated release notes');
     } else {
-      readmeContent = releaseNotes;
-      log.info('Using standard release notes');
+      // Fallback to standard release notes
+      releaseNotesContent = `# 🎮 Battles.app Desktop v${version}
+
+${changelog}
+
+## 📦 Installation
+
+Download \`${installerName}\` below and run the installer.
+
+**System Requirements:**
+- Windows 10/11 (64-bit)
+- Elgato Stream Deck (optional)
+
+## ⚠️ Closed Beta
+
+Access required. Request access at: https://battles.app
+
+## 🔗 Links
+
+- 🌐 Website: https://battles.app
+- 📧 Support: support@battles.app
+- 🐛 Issues: https://github.com/battles-app/desktop/issues
+
+---
+
+**⚠️ Security Notice:** This release contains only the compiled installer. No source code is included.
+`;
+      fs.writeFileSync(releaseNotesPath, releaseNotesContent);
+      log.info('Generated standard release notes');
     }
     
     log.info(`Uploading ${1 + updaterFiles.length} files to battles-app/desktop...`);
@@ -462,35 +492,47 @@ This software is in **closed beta**. Access required:
     
     // Create release on PUBLIC repo (battles-app/desktop) - NO source code!
     execSync(
-      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes-file "${readmePath}" --repo battles-app/desktop`,
+      `gh release create v${version} ${filesToUpload} --title "Battles.app Desktop v${version}" --notes-file "${releaseNotesPath}" --repo battles-app/desktop`,
       { cwd: rootDir, stdio: 'inherit' }
     );
     
-    // Update repository README with latest version
-    log.info('Updating repository README.md...');
-    const repoReadmePath = path.join(rootDir, '..', 'desktop', 'README.md');
-    if (fs.existsSync(readmePath)) {
+    // Upload README to repository (if AI-generated README exists)
+    if (fs.existsSync(repoReadmePath)) {
+      log.info('Uploading repository README.md...');
       try {
-        // Copy AI-generated README to repository
-        const repoDir = path.dirname(repoReadmePath);
-        if (!fs.existsSync(repoDir)) {
-          log.info('Repository directory not found, skipping README update');
-        } else {
-          fs.copyFileSync(readmePath, repoReadmePath);
-          log.success('Repository README.md updated');
+        // Upload README as an asset to the release (for documentation)
+        execSync(
+          `gh release upload v${version} "${repoReadmePath}" --repo battles-app/desktop --clobber`,
+          { cwd: rootDir }
+        );
+        log.success('Repository README uploaded as asset');
+        
+        // Also try to update the repository's README.md file via GitHub API
+        try {
+          const readmeContent = fs.readFileSync(repoReadmePath, 'utf-8');
+          const readmeBase64 = Buffer.from(readmeContent).toString('base64');
           
-          // Commit and push README update
+          // Get current README SHA
+          const getShaCmd = `gh api repos/battles-app/desktop/contents/README.md --jq .sha`;
+          let sha = '';
           try {
-            execSync('git add README.md', { cwd: repoDir });
-            execSync(`git commit -m "docs: update README for v${version}"`, { cwd: repoDir });
-            execSync('git push', { cwd: repoDir });
-            log.success('README committed and pushed to repository');
-          } catch (gitError) {
-            log.info('Could not commit README (repository may not be cloned locally)');
+            sha = execSync(getShaCmd, { encoding: 'utf-8' }).trim();
+          } catch (e) {
+            // README doesn't exist yet
           }
+          
+          // Update or create README
+          const updateCmd = sha 
+            ? `gh api repos/battles-app/desktop/contents/README.md -X PUT -f message="docs: update README for v${version}" -f content="${readmeBase64}" -f sha="${sha}"`
+            : `gh api repos/battles-app/desktop/contents/README.md -X PUT -f message="docs: create README" -f content="${readmeBase64}"`;
+          
+          execSync(updateCmd, { cwd: rootDir, stdio: 'pipe' });
+          log.success('Repository README.md updated via GitHub API');
+        } catch (apiError) {
+          log.info('Could not update README via API (may need to set it manually)');
         }
       } catch (error) {
-        log.info('Could not update repository README');
+        log.info('Could not upload repository README');
       }
     }
     
@@ -567,16 +609,16 @@ async function release() {
   const changelog = await generateChangelog(currentVersion, newVersion);
   log.success('Generated changelog');
   
-  // Generate beautiful README for GitHub
-  log.header('Generating AI README');
+  // Generate AI content (release notes + repository README)
+  log.header('Generating AI Content');
   try {
     execSync(`node scripts/generate-readme.js "${changelog}"`, {
       cwd: rootDir,
       stdio: 'inherit'
     });
-    log.success('AI-powered README generated');
+    log.success('AI-powered content generated');
   } catch (error) {
-    log.error('Failed to generate README (continuing anyway)');
+    log.error('Failed to generate AI content (continuing anyway)');
   }
   
   // Build

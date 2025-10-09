@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
 /**
- * AI-Powered README Generator for Battles.app Desktop Releases
+ * AI-Powered Content Generator for Battles.app Desktop Releases
  * 
- * Generates a beautiful, professional README.md for GitHub releases
+ * Generates:
+ * 1. RELEASE_NOTES.md - Release-specific notes for GitHub releases
+ * 2. RELEASE_README.md - Repository README for battles-app/desktop
+ * 
  * Uses OpenAI GPT-4 to create engaging content based on app features
  */
 
@@ -337,28 +340,94 @@ Made with ❤️ by the Battles.app team
 </div>`;
 }
 
+// Generate release notes (for GitHub release)
+async function generateReleaseNotes(version, changelog) {
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4-turbo-preview',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a professional release notes writer for Battles.app Desktop.
+          
+Create concise, engaging release notes that:
+- Start with the app name and version
+- Highlight what's new in this version (from changelog)
+- Include installation instructions
+- Mention system requirements
+- Note closed beta status
+- Include links to website and support
+
+Keep it focused on THIS specific release. Be concise and professional.
+Format in markdown. Use emojis sparingly.`
+        },
+        {
+          role: 'user',
+          content: `Create release notes for v${version}. Changelog:\n\n${changelog}`
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 800
+    });
+    
+    return response.choices[0].message.content.trim();
+  } catch (error) {
+    console.log('⚠️  AI generation failed, using fallback release notes');
+    return `# 🎮 Battles.app Desktop v${version}
+
+${changelog}
+
+## 📦 Installation
+
+Download the installer below and run it on Windows 10/11 (64-bit).
+
+**Requirements:**
+- Windows 10/11 (64-bit)
+- Elgato Stream Deck (optional)
+
+## ⚠️ Closed Beta
+
+Access required. Request access at: https://battles.app
+
+## 🔗 Links
+
+- 🌐 Website: https://battles.app
+- 📧 Support: support@battles.app
+- 🐛 Issues: https://github.com/battles-app/desktop/issues
+
+---
+
+**Security Notice:** This release contains only the compiled installer.`;
+  }
+}
+
 // Main function
 async function main() {
   const version = getCurrentVersion();
   
   console.log('');
   console.log('════════════════════════════════════════');
-  console.log('  AI README Generator');
+  console.log('  AI Content Generator');
   console.log('════════════════════════════════════════');
   console.log('');
   
   // Check for changelog argument
   const changelog = process.argv[2] || '';
   
-  // Generate README
+  // Generate release notes (for GitHub release)
+  console.log('📝 Generating release notes...');
+  const releaseNotes = await generateReleaseNotes(version, changelog);
+  const releaseNotesPath = path.join(rootDir, 'RELEASE_NOTES.md');
+  fs.writeFileSync(releaseNotesPath, releaseNotes, 'utf-8');
+  console.log('✅ Release notes saved to:', releaseNotesPath);
+  
+  // Generate repository README
+  console.log('📝 Generating repository README...');
   const readme = await generateReadme(version, changelog);
+  const readmePath = path.join(rootDir, 'RELEASE_README.md');
+  fs.writeFileSync(readmePath, readme, 'utf-8');
+  console.log('✅ Repository README saved to:', readmePath);
   
-  // Save to file
-  const outputPath = path.join(rootDir, 'RELEASE_README.md');
-  fs.writeFileSync(outputPath, readme, 'utf-8');
-  
-  console.log('');
-  console.log('✅ README saved to:', outputPath);
   console.log('');
 }
 

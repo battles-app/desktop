@@ -1,95 +1,87 @@
 ```markdown
-<!-- BATTLES.APP DESKTOP README -->
+<h1 align="center">🎮 Battles.app Desktop 🎮</h1>
+<p align="center">Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI</p>
+
 <div align="center">
 
-# 🎮 Battles.app Desktop
-
-### Pro TikTok Live Utilities - Real-Time Animations, Light Shows, and AI
-
-🔥 **Current Version:** 0.0.15  
-🖥 **Platform:** Windows 10/11 (64-bit)  
-🔒 **Status:** Closed Beta
-
----
-
-![Version](https://img.shields.io/badge/version-0.0.15-blue?style=flat-square) ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20(64--bit)-blueviolet?style=flat-square) ![Status](https://img.shields.io/badge/status-Closed%20Beta-red?style=flat-square) ![License](https://img.shields.io/badge/license-BSL%201.1-green?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.0.2-blue.svg?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20(64--bit)-brightgreen.svg?style=flat-square)
+![Status](https://img.shields.io/badge/status-Closed%20Beta-red.svg?style=flat-square)
+![License](https://img.shields.io/badge/license-BSL%201.1-orange.svg?style=flat-square)
 
 </div>
 
-## 🚀 Features
+---
 
-- 🎮 **Elgato Stream Deck Integration**: Full Stream Deck support with real-time button updates, beautiful branded animations, and instant FX triggering.
-- 🎭 **Real-Time Animations**: Trigger animations, sound effects, and visual FX instantly during TikTok Live streams.
-- 💡 **Interactive Light Shows**: Synchronized light effects and visual shows for engaging live performances.
-- 🤖 **AI-Powered Tools**: Smart automation and AI features for professional streaming.
-- 🎨 **Beautiful UI**: Modern, dark-themed interface with smooth gradients and logo colors.
-- 🔄 **Auto-Updates**: Automatic updates from GitHub releases with cryptographic signature verification.
-- ⚔️ **Battle Board**: Global effects library with pre-configured animations and sounds.
-- ✨ **User FX Board**: Custom effects and media management for personalized streaming.
+Battles.app Desktop brings the most advanced live streaming tools to your desktop, enabling TikTok creators to captivate their audience with real-time animations, interactive light shows, and smart AI-driven utilities. Designed for professional streamers, Battles.app Desktop elevates your TikTok live sessions to new heights.
 
-## 🌟 Use Cases
+## 🌟 Features
 
-Battles.app Desktop is perfect for:
-- TikTok Live streaming with professional effects.
-- Interactive audience engagement with instant FX.
-- Battle and competition streams.
-- Live performances with synchronized effects.
-- Professional content creation.
-- Stream automation and control.
+- 🎮 **Elgato Stream Deck Integration**
+- 🎭 **Real-Time Animations**
+- 💡 **Interactive Light Shows**
+- 🤖 **AI-Powered Tools**
+- 🎨 **Beautiful UI**
+- 🔄 **Auto-Updates**
+- ⚔️ **Battle Board**
+- ✨ **User FX Board**
+
+## 🚀 Use Cases
+
+- TikTok Live streaming with professional effects
+- Interactive audience engagement
+- Battle and competition streams
+- Live performances
+- Professional content creation
+- Stream automation and control
 
 ## 🛠 Installation
 
-**Currently available for Windows 10/11 (64-bit):**
+> 🚧 **Note**: Battles.app Desktop is currently in closed beta. Access is limited to selected users.
 
-1. Visit the [latest release](https://github.com/BattlesApp/BattlesAppDesktop/releases/latest) page.
-2. Download the installer for Windows.
-3. Run the installer and follow the on-screen instructions.
-
-> 🔑 **Beta Access**: To gain access to the closed beta, please send a request to [support@battles.app](mailto:support@battles.app).
-
-## 🔗 Links
-
-- 🌐 [Website](https://battles.app)
-- 📖 [Privacy Policy](https://battles.app/policy)
-- 📄 [Terms of Service](https://battles.app/terms)
-- 📧 [Support](mailto:support@battles.app)
+1. Download the latest release from the [GitHub releases page](https://github.com/BattlesApp/Battles.app-Desktop/releases).
+2. Run the installer and follow the on-screen instructions.
+3. Launch Battles.app Desktop and log in with your beta access credentials.
 
 ## 📸 Screenshots
 
-> 🚧 *Screenshots and demos coming soon!*
+> Screenshots and demos coming soon!
 
-## 🎯 Beta Access Information
+## 🤖 Technical Highlights
 
-The application is currently in **closed beta**. To participate and provide feedback, please contact [support@battles.app](mailto:support@battles.app).
+- Built with Tauri + Rust for speed and efficiency
+- GStreamer for top-notch video/audio processing
+- Hardware-accelerated effects
+- Real-time WebSocket communication
+- Secure auto-updates
 
-## 💻 System Requirements
+## 📋 System Requirements
 
 - OS: Windows 10/11 (64-bit)
-- RAM: 4GB minimum
-- Processor: Intel i5 or equivalent
-- Graphics: DirectX 11 compatible
+- Processor: Intel Core i5 or equivalent
+- RAM: 8GB minimum
+- GPU: DirectX 11 compatible
 
 ## ❓ FAQ
 
-> **Can I use Battles.app Desktop for commercial purposes?**
-
-- For commercial usage, a commercial license is required. Non-production use is free under the BSL 1.1 license.
-
-> **How do I report a bug or suggest a feature?**
-
-- Please send your feedback or report bugs to [support@battles.app](mailto:support@battles.app).
+> Frequently Asked Questions will be updated based on community feedback.
 
 ## 📜 License
 
-Battles.app Desktop is distributed under the BSL 1.1 license. For non-production use, the software is free. Production use requires a commercial license. API ownership is held by BATTLES.app™. For commercial licensing, please contact [legal@battles.app](mailto:legal@battles.app).
+Battles.app Desktop is licensed under the Business Source License 1.1 ([BSL 1.1](LICENSE)). Non-production use is free of charge, whereas production use requires a commercial license. The API is owned and copyrighted by BATTLES.app™. For commercial licensing inquiries, please contact [legal@battles.app](mailto:legal@battles.app).
 
-- [LICENSE File](LICENSE)
+## 📬 Beta Access
+
+To request access to the closed beta, please visit our [website](https://battles.app) and sign up for the waiting list.
+
+## 📌 Links
+
+- **Website:** [https://battles.app](https://battles.app)
+- **Privacy Policy:** [https://battles.app/policy](https://battles.app/policy)
+- **Terms of Service:** [https://battles.app/terms](https://battles.app/terms)
+- **Support:** [support@battles.app](mailto:support@battles.app)
 
 ---
 
-<div align="center">
-
-🔥 **Battles.app™** © 2023 All Rights Reserved.
-
-</div>
+<p align="center">© 2023 BATTLES.app™. All rights reserved.</p>
 ```
