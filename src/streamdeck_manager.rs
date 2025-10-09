@@ -79,17 +79,12 @@ impl StreamDeckManager {
         // Set initial brightness
         let _ = device.set_brightness(50);
         
-        // Clear all buttons
-        for i in 0..self.button_count() as u8 {
-            let size = self.get_button_size();
-            let img = image::RgbaImage::new(size, size);
-            let dynamic_img = image::DynamicImage::ImageRgba8(img);
-            let _ = device.set_button_image(i, dynamic_img);
-        }
-        let _ = device.flush();
-        
         self.device = Some(device);
         self.is_connected = true;
+        
+        // Clear all buttons AFTER setting device (timing fix)
+        println!("[Stream Deck] 🧹 Clearing all buttons on connect...");
+        let _ = self.clear_all_buttons();
         
         Ok(info)
     }
@@ -197,7 +192,8 @@ impl StreamDeckManager {
                         // Must be an image file (not video)
                         if let Some(ext) = path.extension() {
                             let ext_str = ext.to_string_lossy().to_lowercase();
-                            if ext_str == "jpg" || ext_str == "jpeg" || ext_str == "png" || ext_str == "webp" || ext_str == "gif" {
+                            if ext_str == "jpg" || ext_str == "jpeg" || ext_str == "png" || ext_str == "webp" || ext_str == "gif" || ext_str == "avif" {
+                                println!("[Stream Deck] 📸 Found cached image: {} (ext: {})", filename_str, ext_str);
                                 return Some(path);
                             }
                         }
@@ -208,15 +204,18 @@ impl StreamDeckManager {
         
         // Also try direct patterns with the FX name
         let possible_patterns = vec![
+            format!("{}.webp", fx_name), // Check WebP first (preferred)
             format!("{}.jpg", fx_name),
             format!("{}.jpeg", fx_name),
             format!("{}.png", fx_name),
-            format!("{}.webp", fx_name),
+            format!("{}.avif", fx_name),
+            format!("{}.gif", fx_name),
         ];
         
         for pattern in possible_patterns {
             let path = cache_dir.join(&pattern);
             if path.exists() {
+                println!("[Stream Deck] 📸 Found cached image (direct): {} ({})", fx_name, pattern);
                 return Some(path);
             }
         }
@@ -233,8 +232,21 @@ impl StreamDeckManager {
         let cache_dir = std::env::temp_dir().join("battles_fx_cache");
         let _ = std::fs::create_dir_all(&cache_dir);
         
-        // Cache filename: {name}.jpg (e.g., "x2.jpg", "galaxy.jpg")
-        let cache_filename = format!("{}.jpg", fx_button.name);
+        // Cache filename: Try to preserve extension from URL or default to .jpg
+        let extension = if let Some(url) = &fx_button.image_url {
+            if url.contains(".webp") {
+                "webp"
+            } else if url.contains(".png") {
+                "png"
+            } else if url.contains(".avif") {
+                "avif"
+            } else {
+                "jpg"
+            }
+        } else {
+            "jpg"
+        };
+        let cache_filename = format!("{}.{}", fx_button.name, extension);
         let cache_path = cache_dir.join(&cache_filename);
         
         // Skip if already cached
@@ -293,10 +305,6 @@ impl StreamDeckManager {
         }
         
         println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
-        
-        // Clear all buttons first before mounting new layout
-        println!("[Stream Deck] Clearing all buttons before mounting...");
-        self.clear_all_buttons()?;
         
         // Start downloading images in background (non-blocking)
         // They will trigger re-renders when complete
@@ -596,12 +604,29 @@ impl StreamDeckManager {
         Ok(())
     }
     
-    /// Get button state changes (returns list of pressed buttons since last check)
-    pub fn get_button_changes(&mut self) -> Result<Vec<(u8, bool)>, String> {
-        // Note: The elgato-streamdeck library doesn't have async button reading
-        // We'll need to implement a polling mechanism in the frontend
-        // For now, return an empty list
-        Ok(vec![])
+    /// Read button presses (non-blocking)
+    pub fn read_button_presses(&mut self) -> Vec<u8> {
+        let mut pressed_buttons = Vec::new();
+        
+        if let Some(ref mut device) = self.device {
+            // Read all available input events (non-blocking with 0ms timeout)
+            while let Ok(input) = device.read_input(Some(std::time::Duration::from_millis(0))) {
+                match input {
+                    elgato_streamdeck::StreamDeckInput::ButtonStateChange(states) => {
+                        // Stream Deck returns current state of all buttons
+                        for (idx, is_pressed) in states.iter().enumerate() {
+                            if *is_pressed {
+                                pressed_buttons.push(idx as u8);
+                            }
+                        }
+                    }
+                    // Ignore other input types (encoders, etc.)
+                    _ => {}
+                }
+            }
+        }
+        
+        pressed_buttons
     }
     
     /// Handle button press (toggle play/stop)
