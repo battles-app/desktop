@@ -146,15 +146,16 @@ impl StreamDeckManager {
     }
     
     /// Get button size for the device
+    /// Using high-DPI sizes per Elgato documentation: 144x144 for standard, 96x96 for XL
     fn get_button_size(&self) -> u32 {
         match self.device_kind {
             Some(Kind::Original) | Some(Kind::OriginalV2) |
             Some(Kind::Mk2) | Some(Kind::Mk2Scissor) | 
-            Some(Kind::Mini) | Some(Kind::MiniMk2) => 72,
-            Some(Kind::Xl) | Some(Kind::XlV2) => 96,
+            Some(Kind::Mini) | Some(Kind::MiniMk2) => 144, // High-DPI: 144x144
+            Some(Kind::Xl) | Some(Kind::XlV2) => 96, // XL uses 96x96
             Some(Kind::Plus) | Some(Kind::Neo) => 200,
             Some(Kind::Pedal) => 0,
-            None => 72,
+            None => 144,
         }
     }
     
@@ -294,32 +295,85 @@ impl StreamDeckManager {
             None => return Err("Unknown device type".to_string()),
         };
         
-        // Calculate split point (left side for battle board, right side for user FX)
-        let mid_col = cols / 2;
-        
-        // Place battle board effects on left side (top to bottom, left to right)
-        let mut battle_index = 0;
-        for row in 0..rows {
-            for col in 0..mid_col {
-                if battle_index < battle_board.len() {
-                    let button_idx = row * cols + col;
-                    if button_idx < button_count {
-                        self.button_layout[button_idx] = Some(battle_board[battle_index].clone());
-                        battle_index += 1;
+        // For XL devices: Reserve rightmost column for control buttons
+        // Layout: [Battle Board (left 5 cols)] [User FX (2 cols, max 12)] [Controls (right col)]
+        if matches!(self.device_kind, Some(Kind::Xl) | Some(Kind::XlV2)) {
+            // Place battle board on left (columns 0-4, max 20 buttons)
+            let mut battle_index = 0;
+            for row in 0..rows {
+                for col in 0..5 {
+                    if battle_index < battle_board.len() {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(battle_board[battle_index].clone());
+                            battle_index += 1;
+                        }
                     }
                 }
             }
-        }
-        
-        // Place user FX on right side (top to bottom, left to right)
-        let mut user_index = 0;
-        for row in 0..rows {
-            for col in mid_col..cols {
-                if user_index < user_fx.len() {
-                    let button_idx = row * cols + col;
-                    if button_idx < button_count {
-                        self.button_layout[button_idx] = Some(user_fx[user_index].clone());
-                        user_index += 1;
+            
+            // Place user FX in columns 5-6 (max 8 buttons, but limit to 12 total across both columns)
+            let mut user_index = 0;
+            for row in 0..rows {
+                for col in 5..7 {
+                    if user_index < user_fx.len() && user_index < 12 {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(user_fx[user_index].clone());
+                            user_index += 1;
+                        }
+                    }
+                }
+            }
+            
+            // Place control buttons in rightmost column (column 7)
+            let control_buttons = vec![
+                ("INTRO", [138, 43, 226]), // Purple
+                ("PARTY", [255, 105, 180]), // Hot pink
+                ("BREAK", [30, 144, 255]),  // Blue
+                ("END", [220, 20, 60]),     // Crimson
+            ];
+            
+            for (row, (name, _color)) in control_buttons.iter().enumerate() {
+                let button_idx = row * cols + 7; // Column 7 (rightmost)
+                if button_idx < button_count {
+                    self.button_layout[button_idx] = Some(FxButton {
+                        id: format!("control_{}", name.to_lowercase()),
+                        name: name.to_string(),
+                        image_url: None,
+                        is_global: false,
+                        position: row,
+                    });
+                }
+            }
+        } else {
+            // Standard layout for smaller devices (left = battle board, right = user FX)
+            let mid_col = cols / 2;
+            
+            // Place battle board effects on left side
+            let mut battle_index = 0;
+            for row in 0..rows {
+                for col in 0..mid_col {
+                    if battle_index < battle_board.len() {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(battle_board[battle_index].clone());
+                            battle_index += 1;
+                        }
+                    }
+                }
+            }
+            
+            // Place user FX on right side
+            let mut user_index = 0;
+            for row in 0..rows {
+                for col in mid_col..cols {
+                    if user_index < user_fx.len() {
+                        let button_idx = row * cols + col;
+                        if button_idx < button_count {
+                            self.button_layout[button_idx] = Some(user_fx[user_index].clone());
+                            user_index += 1;
+                        }
                     }
                 }
             }
@@ -394,69 +448,98 @@ impl StreamDeckManager {
         } else {
             // Fall back to colored background if no image
             let mut img = RgbaImage::new(size, size);
-            let bg_color = if is_playing {
+            
+            // Check if this is a control button
+            let bg_color = if fx_button.id.starts_with("control_") {
+                // Control buttons have specific colors
+                match fx_button.name.as_str() {
+                    "INTRO" => image::Rgba([138, 43, 226, 255]), // Purple
+                    "PARTY" => image::Rgba([255, 105, 180, 255]), // Hot pink
+                    "BREAK" => image::Rgba([30, 144, 255, 255]),  // Blue
+                    "END" => image::Rgba([220, 20, 60, 255]),     // Crimson
+                    _ => image::Rgba([80, 80, 80, 255]), // Gray fallback
+                }
+            } else if is_playing {
                 image::Rgba([50, 205, 50, 255]) // Green when playing
             } else if fx_button.is_global {
                 image::Rgba([138, 43, 226, 255]) // Purple for battle board
             } else {
                 image::Rgba([30, 144, 255, 255]) // Blue for user FX
             };
+            
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
             img
         };
         
         // Add colored border overlay for playing state or type indicator
-        if is_playing {
-            // Bright green border when playing
-            let border_color = image::Rgba([50, 255, 50, 255]);
-            for i in 0..6 {
-                let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
-                imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
-            }
-        } else {
-            // Subtle colored border to indicate type
-            let border_color = if fx_button.is_global {
-                image::Rgba([138, 43, 226, 180]) // Purple tint for battle board
+        // Skip borders for control buttons
+        if !fx_button.id.starts_with("control_") {
+            if is_playing {
+                // Bright green border when playing
+                let border_color = image::Rgba([50, 255, 50, 255]);
+                for i in 0..6 {
+                    let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
+                    imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+                }
             } else {
-                image::Rgba([30, 144, 255, 180]) // Blue tint for user FX
-            };
-            for i in 0..3 {
-                let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
-                imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+                // Subtle colored border to indicate type
+                let border_color = if fx_button.is_global {
+                    image::Rgba([138, 43, 226, 180]) // Purple tint for battle board
+                } else {
+                    image::Rgba([30, 144, 255, 180]) // Blue tint for user FX
+                };
+                for i in 0..3 {
+                    let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
+                    imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
+                }
             }
         }
-        
-        // Add semi-transparent text background at bottom for better readability
-        let text_bg_height = (size as f32 * 0.25) as u32;
-        let text_bg_y = size - text_bg_height;
-        draw_filled_rect_mut(
-            &mut img,
-            Rect::at(0, text_bg_y as i32).of_size(size, text_bg_height),
-            image::Rgba([0, 0, 0, 180])
-        );
         
         // Render text with FX name
         let font_data = include_bytes!("../assets/DejaVuSans.ttf");
         let font = FontRef::try_from_slice(font_data)
             .map_err(|e| format!("Failed to load font: {:?}", e))?;
         
-        // Calculate font size based on button size
-        let font_scale = PxScale::from((size as f32 * 0.13).max(10.0));
-        
-        // Prepare text (truncate if too long)
-        let display_name = if fx_button.name.len() > 10 {
-            format!("{}...", &fx_button.name[..7])
+        // Control buttons get larger centered text, FX buttons get bottom text bar
+        if fx_button.id.starts_with("control_") {
+            // Large centered text for control buttons
+            let font_scale = PxScale::from((size as f32 * 0.18).max(14.0));
+            let display_name = fx_button.name.clone();
+            let text_color = image::Rgba([255, 255, 255, 255]);
+            
+            // Center text both horizontally and vertically
+            let text_x = ((size as f32 - (display_name.len() as f32 * font_scale.x * 0.5)) / 2.0) as i32;
+            let text_y = ((size as f32 - font_scale.y) / 2.0) as i32;
+            
+            draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
         } else {
-            fx_button.name.clone()
-        };
-        
-        // Position text in the text background area (bottom of button)
-        let text_color = image::Rgba([255, 255, 255, 255]); // White text
-        let text_x = ((size as f32 - (display_name.len() as f32 * font_scale.x * 0.5)) / 2.0) as i32;
-        let text_y = (text_bg_y + (text_bg_height / 2) - (font_scale.y as u32 / 2)) as i32;
-        
-        // Draw text (no shadow needed on dark background)
-        draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
+            // Add semi-transparent text background at bottom for FX buttons
+            let text_bg_height = (size as f32 * 0.25) as u32;
+            let text_bg_y = size - text_bg_height;
+            draw_filled_rect_mut(
+                &mut img,
+                Rect::at(0, text_bg_y as i32).of_size(size, text_bg_height),
+                image::Rgba([0, 0, 0, 180])
+            );
+            
+            // Calculate font size based on button size
+            let font_scale = PxScale::from((size as f32 * 0.13).max(10.0));
+            
+            // Prepare text (truncate if too long)
+            let display_name = if fx_button.name.len() > 10 {
+                format!("{}...", &fx_button.name[..7])
+            } else {
+                fx_button.name.clone()
+            };
+            
+            // Position text in the text background area (bottom of button)
+            let text_color = image::Rgba([255, 255, 255, 255]); // White text
+            let text_x = ((size as f32 - (display_name.len() as f32 * font_scale.x * 0.5)) / 2.0) as i32;
+            let text_y = (text_bg_y + (text_bg_height / 2) - (font_scale.y as u32 / 2)) as i32;
+            
+            // Draw text (no shadow needed on dark background)
+            draw_text_mut(&mut img, text_color, text_x, text_y, font_scale, &font, &display_name);
+        }
         
         Ok(image::DynamicImage::ImageRgba8(img))
     }
