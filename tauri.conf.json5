@@ -90,7 +90,7 @@
         "language": "en-US"
       }
     },
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "resources": [
       "assets/sounds",
       "src"
@@ -118,8 +118,8 @@
       }
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY5RjAwMUEwQjFGMzBFODUKUldTRkR2T3hvQUh3YVVEVFFTY2I3YnB5cUxjbzFqZnlDQmNJME1FTTVSdktSdVArM213dzZyWFYK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBQTdCNzZFNDIwREY0NEUKUldSTzlBMUNicmVuT21aSnBOTVB4U0dFblpGL0hDUU9uZ1IycHRrVzdvWi9Jb3hNK1BQNGpNOUcK"
     }
   },
-  "version": "0.0.8"
+  "version": "0.0.9"
 }
