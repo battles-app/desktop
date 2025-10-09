@@ -2044,6 +2044,8 @@ fn main() {
             start_streamdeck_watcher(app_handle.clone());
             println!("[Stream Deck] Watcher started");
             
+            // Stream Deck cleanup is handled by disconnect() in frontend onUnmounted
+            
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

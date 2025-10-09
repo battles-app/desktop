@@ -96,12 +96,22 @@ impl StreamDeckManager {
     
     /// Disconnect from Stream Deck
     pub fn disconnect(&mut self) {
+        println!("[Stream Deck] Disconnecting and cleaning up...");
+        
+        // Clear all buttons before disconnect
+        if self.device.is_some() {
+            let _ = self.clear_all_buttons();
+        }
+        
         if let Some(device) = self.device.take() {
             let _ = device.reset();
         }
+        
         self.is_connected = false;
         self.button_states.clear();
         self.button_layout.clear();
+        
+        println!("[Stream Deck] ✅ Disconnected and cleaned up");
     }
     
     /// Check if device is connected
@@ -214,7 +224,7 @@ impl StreamDeckManager {
         None
     }
     
-    /// Download image from Nuxt proxy and cache it
+    /// Download image from Nuxt proxy, cache it, and trigger re-render
     fn download_image_to_cache(&self, fx_button: &FxButton) {
         if fx_button.image_url.is_none() {
             return;
@@ -235,6 +245,7 @@ impl StreamDeckManager {
         // Download from Nuxt proxy (non-blocking in background)
         let image_url = fx_button.image_url.clone().unwrap();
         let name = fx_button.name.clone();
+        let fx_id = fx_button.id.clone();
         let cache_path_clone = cache_path.clone();
         
         std::thread::spawn(move || {
@@ -254,6 +265,13 @@ impl StreamDeckManager {
                                         println!("[Stream Deck] ⚠️ Failed to cache image for {}: {}", name, e);
                                     } else {
                                         println!("[Stream Deck] ✅ Cached image for {}: {:?}", name, cache_path_clone.file_name());
+                                        
+                                        // Trigger re-render of this specific button
+                                        let mut manager_lock = STREAMDECK_MANAGER.lock();
+                                        if let Some(ref mut manager) = *manager_lock {
+                                            // Find and re-render the button
+                                            let _ = manager.refresh_button_by_id(&fx_id);
+                                        }
                                     }
                                 }
                                 Err(e) => println!("[Stream Deck] ⚠️ Failed to read image for {}: {}", name, e),
@@ -274,12 +292,17 @@ impl StreamDeckManager {
             return Err("No device connected".to_string());
         }
         
+        println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
+        
+        // Clear all buttons first before mounting new layout
+        println!("[Stream Deck] Clearing all buttons before mounting...");
+        self.clear_all_buttons()?;
+        
         // Start downloading images in background (non-blocking)
+        // They will trigger re-renders when complete
         for fx in battle_board.iter().chain(user_fx.iter()) {
             self.download_image_to_cache(fx);
         }
-        
-        println!("[Stream Deck] Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
         
         // Initialize layout with None
         self.button_layout = vec![None; button_count];
@@ -611,6 +634,42 @@ impl StreamDeckManager {
         
         // Return (fx_id, is_playing)
         Some((fx_id, new_state))
+    }
+    
+    /// Refresh a single button by FX ID (called after image downloads)
+    pub fn refresh_button_by_id(&mut self, fx_id: &str) -> Result<(), String> {
+        // Find button with this FX ID
+        let mut button_to_update: Option<(u8, FxButton)> = None;
+        
+        for (idx, button_opt) in self.button_layout.iter().enumerate() {
+            if let Some(fx_button) = button_opt {
+                if fx_button.id == fx_id {
+                    button_to_update = Some((idx as u8, fx_button.clone()));
+                    break;
+                }
+            }
+        }
+        
+        if let Some((idx, fx_button)) = button_to_update {
+            let is_playing = self.button_states
+                .get(&idx)
+                .map(|s| s.is_playing)
+                .unwrap_or(false);
+            
+            // Re-render button with cached image
+            if self.device.is_some() {
+                if let Ok(image) = self.create_button_image(&fx_button, is_playing) {
+                    if let Some(ref mut device) = self.device {
+                        device.set_button_image(idx, image)
+                            .map_err(|e| format!("Failed to set button image: {}", e))?;
+                        device.flush().map_err(|e| format!("Failed to flush: {}", e))?;
+                        println!("[Stream Deck] 🔄 Refreshed button {} ({}) with cached image", idx, fx_button.name);
+                    }
+                }
+            }
+        }
+        
+        Ok(())
     }
     
     /// Update button state (called when FX stops playing)
