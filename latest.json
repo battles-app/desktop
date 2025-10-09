@@ -1,11 +1,11 @@
 {
-  "version": "0.0.3",
-  "notes": "``` ## Release Notes  ✨ New Features - Now featuring AI-generated professional GitHub-style READMEs and release notes, making documentation sleek and informative. - Automated production URL configurat...",
-  "pub_date": "2025-10-09T19:25:49.264Z",
+  "version": "0.0.4",
+  "notes": "``` ### ✨ New Features - Introduced a VIP bypass system for prioritized access during peak times.  ### 🚀 Improvements - Enhanced GitHub release formatting for better readability.  ### 🐛 Bug Fixes - ...",
+  "pub_date": "2025-10-09T20:10:22.635Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.3/battles.app_0.0.10_x64-setup.exe"
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.4/battles.app_0.0.10_x64-setup.exe"
     }
   }
 }
