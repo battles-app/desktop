@@ -2019,6 +2019,32 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
             println!("[Stream Deck Watcher] ⚠️ No devices found, will wait for device connection...");
         }
         
+        // Spawn animation thread to keep loading animation looping
+        std::thread::spawn(move || {
+            println!("[Stream Deck Animation Thread] 🎬 Starting loading animation loop...");
+            let mut frame_counter = 0usize;
+            
+            loop {
+                let should_animate = {
+                    let manager_lock = STREAMDECK_MANAGER.lock();
+                    manager_lock.as_ref()
+                        .map(|m| m.is_connected() && m.is_loading_animation_active())
+                        .unwrap_or(false)
+                };
+                
+                if should_animate {
+                    let mut manager_lock = STREAMDECK_MANAGER.lock();
+                    if let Some(ref mut manager) = *manager_lock {
+                        let _ = manager.continue_loading_background(frame_counter);
+                        frame_counter = frame_counter.wrapping_add(1);
+                    }
+                }
+                
+                // 30ms per frame = ~33 FPS
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+        });
+        
         // Spawn a dedicated BLOCKING thread for real-time button event detection
         // This is much more efficient than polling - it waits for actual hardware events
         let app_for_button_thread = app.clone();

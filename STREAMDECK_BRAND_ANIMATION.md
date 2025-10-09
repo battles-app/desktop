@@ -1,30 +1,42 @@
 # Stream Deck - Brand Loading Animation
 
-## 🎨 Updated Animation with Brand Colors
+## 🎨 Updated Animation with Brand Colors + Logo
 
 ### **What You'll See**
 
-**Phase 1: "BATTLES" Appears** (0.6 seconds)
+**First Button (Button 0):** Logo with animated gradient background
+```
+┌────────┐
+│   🟣   │  ← Pink square (top)
+│ ⚪  🟡 │  ← White (right) + Yellow (bottom-left)
+└────────┘
+Background: Flowing dark gradient
+```
+
+**Phase 1: Logo + "BATTLES" Appears** (0.6 seconds)
 ```
 Dark gradient background (subtle, dark theme)
+Button 0: [🎨 LOGO]
 Row 1: B → BA → BAT → BATT → BATTL → BATTLE → BATTLES
        🔴 ⚪ 🟡 🔴 ⚪ 🟡 🔴
        (Pink)(White)(Yellow) repeating logo colors
 ```
 
-**Phase 2: "LOADING" Appears** (0.6 seconds)
+**Phase 2: Logo + "LOADING" Appears** (0.6 seconds)
 ```
 Dark gradient continues
+Button 0: [🎨 LOGO] (stays visible)
 Row 2: L → LO → LOA → LOAD → LOADI → LOADIN → LOADING
        🔴 ⚪ 🟡 🔴 ⚪ 🟡 🔴
 ```
 
-**Phase 3: Hold & Wave** (0.3 seconds)
+**Phase 3: Infinite Loop** (until FX loaded)
 ```
-Both words visible, dark gradient keeps flowing
+Logo + both words visible, dark gradient keeps flowing
+Animation loops forever at 33 FPS until user logs in
 ```
 
-**Total Duration: ~1.5 seconds**
+**Total Duration: ~1.5 seconds per cycle, then LOOPS INFINITELY**
 
 ## 🎨 Brand Colors (from logo.svg)
 
@@ -101,10 +113,12 @@ let text_y = (button_size - letter_height) / 2;
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ Row 0: [Dark] [Dark] [Dark] [Dark] [Dark] [Dark] [Dark] [Dark]            │
+│ Row 0: [🎨LOGO] [Dark] [Dark] [Dark] [Dark] [Dark] [Dark] [Dark]           │
+│        ↑ First button shows animated logo!                                  │
 │                                                                              │
-│ Row 1: [  🔴B  ] [  ⚪A  ] [  🟡T  ] [  🔴T  ] [  ⚪L  ] [  🟡E  ] [  🔴S  ] [Dark] │
-│        BATTLES - Large, bold, centered, logo colors                         │
+│ Row 1: [Dark] [  🔴B  ] [  ⚪A  ] [  🟡T  ] [  🔴T  ] [  ⚪L  ] [  🟡E  ] [  🔴S  ] │
+│               BATTLES - Large, bold, centered, logo colors                  │
+│               (starts from column 1, logo takes column 0)                   │
 │                                                                              │
 │ Row 2: [  🔴L  ] [  ⚪O  ] [  🟡A  ] [  🔴D  ] [  ⚪I  ] [  🟡N  ] [  🔴G  ] [Dark] │
 │        LOADING - Large, bold, centered, logo colors                         │
@@ -112,7 +126,9 @@ let text_y = (button_size - letter_height) / 2;
 │ Row 3: [Dark] [Dark] [Dark] [Dark] [Dark] [Dark] [Dark] [Dark]            │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-All buttons have subtle dark gradient wave flowing diagonally →
+🎨 Logo button: 3 colored squares (Pink, White, Yellow) on dark gradient
+🌊 All buttons have subtle dark gradient wave flowing diagonally →
+♾️  Animation LOOPS FOREVER until FX buttons load (user logs in)
 ```
 
 ## ⏱️ Timing Breakdown
@@ -137,15 +153,39 @@ All buttons have subtle dark gradient wave flowing diagonally →
 - **Duration**: 1.56 seconds
 - **FPS**: 33 (30ms per frame)
 
-## 🔄 Continuous Background Animation
+## 🔄 Infinite Loop Animation
 
-After the main animation completes, you can keep the background flowing by calling:
+The animation now LOOPS FOREVER until the user logs in and FX buttons are loaded!
+
+### How It Works
+
+1. **Connection**: Device connects → plays initial animation (logo appears, then "BATTLES", then "LOADING")
+2. **Loop Starts**: Animation thread continuously calls `continue_loading_background(frame_count)` at 33 FPS
+3. **Stops When**: User logs in → `DashboardView.updateStreamDeckLayout()` → `manager.update_layout()` → calls `stop_loading_animation()` → animation stops, FX buttons appear
+
+### Code
 
 ```rust
-manager.continue_loading_background(frame_count)
+// In main.rs - Animation thread runs forever
+std::thread::spawn(move || {
+    let mut frame_counter = 0usize;
+    loop {
+        if manager.is_connected() && manager.is_loading_animation_active() {
+            manager.continue_loading_background(frame_counter);
+            frame_counter = frame_counter.wrapping_add(1);
+        }
+        std::thread::sleep(Duration::from_millis(30)); // 33 FPS
+    }
+});
+
+// In streamdeck_manager.rs - Stops when FX loaded
+pub fn update_layout(&mut self, battle_board, user_fx) {
+    self.stop_loading_animation(); // ← Animation stops here!
+    // ... load FX buttons
+}
 ```
 
-This keeps the dark gradient wave animating with "BATTLES LOADING" visible until your FX buttons finish loading. Perfect for showing the app is still working!
+This keeps the dark gradient wave animating with **Logo + "BATTLES LOADING"** visible until your FX buttons finish loading. Perfect for showing the app is still working!
 
 ## 🎯 Visual Design Goals
 
@@ -160,9 +200,10 @@ This keeps the dark gradient wave animating with "BATTLES LOADING" visible until
 
 ```
 0.0s  → Connection established
+      → [🎨 LOGO] appears on first button
       → Dark gradient starts
       
-0.0s  → [B] appears (Pink)
+0.0s  → [B] appears (Pink) - Row 1, Col 1
 0.1s  → [BA] (Pink, White)
 0.2s  → [BAT] (Pink, White, Yellow)
 0.3s  → [BATT] (all logo colors)
@@ -170,7 +211,7 @@ This keeps the dark gradient wave animating with "BATTLES LOADING" visible until
 0.5s  → [BATTLE]
 0.6s  → [BATTLES] complete!
 
-0.6s  → [L] appears (Pink) in row 2
+0.6s  → [L] appears (Pink) - Row 2, Col 0
 0.7s  → [LO] (Pink, White)
 0.8s  → [LOA] (Pink, White, Yellow)
 0.9s  → [LOAD]
@@ -179,8 +220,12 @@ This keeps the dark gradient wave animating with "BATTLES LOADING" visible until
 1.2s  → [LOADING] complete!
 
 1.2s  → Both words visible
-1.5s  → Animation complete
-      → FX buttons load
+1.4s  → First cycle complete
+      → ♾️  LOOPS BACK TO START (dark gradient keeps flowing)
+      → Logo stays, text stays, gradient animates
+      → Continues forever...
+
+∞     → User logs in → FX buttons load → Animation STOPS
 ```
 
 ## 🖼️ Visual Comparison

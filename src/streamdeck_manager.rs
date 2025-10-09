@@ -30,6 +30,7 @@ pub struct StreamDeckManager {
     button_layout: Vec<Option<FxButton>>, // Maps Stream Deck button index to FX button
     device_kind: Option<Kind>,
     is_connected: bool,
+    loading_animation_active: bool,
 }
 
 impl StreamDeckManager {
@@ -40,6 +41,7 @@ impl StreamDeckManager {
             button_layout: Vec::new(),
             device_kind: None,
             is_connected: false,
+            loading_animation_active: false,
         })
     }
     
@@ -196,7 +198,7 @@ impl StreamDeckManager {
         )
     }
     
-    /// Create logo button image (first button)
+    /// Create logo button image using favicon.png
     fn create_logo_button(&self, frame: usize) -> Result<image::DynamicImage, String> {
         let size = self.get_button_size();
         let mut img = RgbaImage::new(size, size);
@@ -207,30 +209,26 @@ impl StreamDeckManager {
         let (r, g, b) = Self::hsv_to_rgb(hue, 0.3, 0.2);
         draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), Rgba([r, g, b, 255]));
         
-        // Draw simplified logo (3 colored squares representing the logo)
-        let square_size = (size as f32 * 0.25) as u32;
-        let spacing = (size as f32 * 0.05) as i32;
+        // Load and overlay favicon.png (transparent logo)
+        let favicon_bytes = include_bytes!("../favicon.png");
         
-        // Pink square (top)
-        let pink = Rgba([238, 43, 99, 255]);
-        draw_filled_rect_mut(&mut img, 
-            Rect::at((size as i32 - square_size as i32) / 2, spacing)
-                .of_size(square_size, square_size), 
-            pink);
-        
-        // White square (middle-right)
-        let white = Rgba([255, 255, 255, 255]);
-        draw_filled_rect_mut(&mut img, 
-            Rect::at((size as i32 / 2) + spacing, (size as i32 / 2) - (square_size as i32 / 2))
-                .of_size(square_size, square_size), 
-            white);
-        
-        // Yellow square (bottom-left)
-        let yellow = Rgba([233, 179, 32, 255]);
-        draw_filled_rect_mut(&mut img, 
-            Rect::at((size as i32 / 2) - square_size as i32 - spacing, size as i32 - square_size as i32 - spacing)
-                .of_size(square_size, square_size), 
-            yellow);
+        if let Ok(favicon) = image::load_from_memory(favicon_bytes) {
+            // Resize favicon to 70% of button size (centered with padding)
+            let logo_size = (size as f32 * 0.7) as u32;
+            let resized_logo = image::imageops::resize(
+                &favicon.to_rgba8(),
+                logo_size,
+                logo_size,
+                image::imageops::FilterType::Lanczos3
+            );
+            
+            // Center the logo on the button
+            let offset_x = ((size - logo_size) / 2) as i32;
+            let offset_y = ((size - logo_size) / 2) as i32;
+            
+            // Overlay with alpha blending
+            image::imageops::overlay(&mut img, &resized_logo, offset_x as i64, offset_y as i64);
+        }
         
         Ok(image::DynamicImage::ImageRgba8(img))
     }
@@ -309,8 +307,9 @@ impl StreamDeckManager {
                 let row = button_idx / cols;
                 let col = button_idx % cols;
                 
-                // FIRST BUTTON: Show logo
-                if button_idx == 0 {
+                // LOGO BUTTON: First key of second row (row 1, col 0)
+                let logo_button_idx = cols; // Row 1, Col 0 = 1 * cols + 0
+                if button_idx == logo_button_idx {
                     if let Ok(logo_img) = self.create_logo_button(frame) {
                         images.push(logo_img);
                         continue;
@@ -331,9 +330,9 @@ impl StreamDeckManager {
                 
                 draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
                 
-                // Draw "BATTLES" on row 1 (starting from col 1 since col 0 is logo)
+                // Draw "BATTLES" on row 1 (starting from col 1, after logo at col 0)
                 // Adjust column index for text (shift by 1 to account for logo)
-                let text_col = if col > 0 { col - 1 } else { col };
+                let text_col = if row == 1 && col > 0 { col - 1 } else { col };
                 let should_show_battles = row == 1 && col > 0 && text_col < text_battles.len() && text_col < battles_visible;
                 
                 // Draw "LOADING" on row 2 (with logo colors)
@@ -432,8 +431,9 @@ impl StreamDeckManager {
             let row = button_idx / cols;
             let col = button_idx % cols;
             
-            // FIRST BUTTON: Show animated logo
-            if button_idx == 0 {
+            // LOGO BUTTON: First key of second row (row 1, col 0)
+            let logo_button_idx = cols; // Row 1, Col 0 = 1 * cols + 0
+            if button_idx == logo_button_idx {
                 if let Ok(logo_img) = self.create_logo_button(frame) {
                     images.push(logo_img);
                     continue;
@@ -450,8 +450,8 @@ impl StreamDeckManager {
             
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), Rgba([r, g, b, 255]));
             
-            // Keep text visible (adjust for logo taking first button)
-            let text_col = if col > 0 { col - 1 } else { col };
+            // Keep text visible (adjust for logo taking first button of row 1)
+            let text_col = if row == 1 && col > 0 { col - 1 } else { col };
             let should_show_battles = row == 1 && col > 0 && text_col < text_battles.len();
             let should_show_loading = row == 2 && col < text_loading.len();
             
@@ -648,7 +648,7 @@ impl StreamDeckManager {
         });
     }
     
-    pub fn update_layout(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {
+    fn update_layout_internal(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {
         let button_count = self.button_count();
         if button_count == 0 {
             return Err("No device connected".to_string());
