@@ -1,11 +1,11 @@
 {
-  "version": "0.0.8",
-  "notes": "### 🚀 Improvements  • Bug fixes and performance improvements...",
-  "pub_date": "2025-10-09T20:55:31.759Z",
+  "version": "0.0.9",
+  "notes": "✨ New Features • Added absolute URL validation to prevent build with local URLs  🚀 Improvements • Implemented automatic backup system...",
+  "pub_date": "2025-10-09T21:08:25.114Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.8/battles.app_0.0.10_x64-setup.exe"
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.9/battles.app_0.0.10_x64-setup.exe"
     }
   }
 }
