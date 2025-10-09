@@ -379,7 +379,7 @@ impl StreamDeckManager {
                 ("END", [220, 20, 60]),     // Crimson
             ];
             
-            for (row, (name, color)) in control_buttons.iter().enumerate() {
+            for (row, (name, _color)) in control_buttons.iter().enumerate() {
                 let button_idx = row * cols + 7; // Column 7 (rightmost)
                 if button_idx < button_count {
                     // Create control button
