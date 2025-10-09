@@ -685,27 +685,29 @@ impl StreamDeckManager {
         Ok(())
     }
     
-    /// Read button presses (blocking read with proper timeout)
+    /// Read button presses (BLOCKING read - waits for real hardware events)
+    /// This should be called from a dedicated blocking thread, NOT in async context
     pub fn read_button_presses(&mut self) -> Vec<u8> {
         let mut pressed_buttons = Vec::new();
         
         if let Some(ref mut device) = self.device {
-            // Use blocking read with 100ms timeout to catch button presses
-            // This allows the device to report button state changes
-            match device.read_input(Some(std::time::Duration::from_millis(100))) {
+            // BLOCKING read with 1 second timeout
+            // This waits for ACTUAL button events from the hardware - no polling!
+            match device.read_input(Some(std::time::Duration::from_secs(1))) {
                 Ok(input) => {
                     match input {
                         elgato_streamdeck::StreamDeckInput::ButtonStateChange(states) => {
                             // Stream Deck returns current state of all buttons
-                            println!("[Stream Deck Manager] 🔘 Button state change detected!");
+                            // Only collect PRESSED buttons (released events are ignored)
                             for (idx, is_pressed) in states.iter().enumerate() {
                                 if *is_pressed {
-                                    println!("[Stream Deck Manager]    → Button {} is PRESSED", idx);
                                     pressed_buttons.push(idx as u8);
-                                } else if idx < 10 {
-                                    // Only log first 10 buttons to avoid spam
-                                    println!("[Stream Deck Manager]    → Button {} is released", idx);
                                 }
+                            }
+                            
+                            if !pressed_buttons.is_empty() {
+                                println!("[Stream Deck Manager] 🔘 Button event: {} pressed", 
+                                    pressed_buttons.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", "));
                             }
                         }
                         _ => {
@@ -714,7 +716,7 @@ impl StreamDeckManager {
                     }
                 }
                 Err(_) => {
-                    // Timeout or no input - this is normal
+                    // Timeout (1 second passed with no button press) - this is normal
                 }
             }
         }

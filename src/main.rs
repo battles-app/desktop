@@ -2019,28 +2019,100 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
             println!("[Stream Deck Watcher] ⚠️ No devices found, will wait for device connection...");
         }
         
-        // Use shorter interval for button detection (50ms) but check connection less frequently
-        let mut button_poll_interval = tokio::time::interval(std::time::Duration::from_millis(50));
-        let mut connection_check_counter = 0;
+        // Spawn a dedicated BLOCKING thread for real-time button event detection
+        // This is much more efficient than polling - it waits for actual hardware events
+        let app_for_button_thread = app.clone();
+        std::thread::spawn(move || {
+            println!("[Stream Deck Button Thread] 🎮 Starting real-time button event listener...");
+            
+            loop {
+                // Wait for button events (blocking read with 1 second timeout for connection checks)
+                let button_events = {
+                    let mut manager_lock = STREAMDECK_MANAGER.lock();
+                    if let Some(ref mut manager) = *manager_lock {
+                        if manager.is_connected() {
+                            manager.read_button_presses()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    }
+                };
+                
+                // Check if we got any events
+                let has_events = !button_events.is_empty();
+                
+                // Process any button presses
+                for button_idx in button_events {
+                    println!("[Stream Deck Button Thread] 🔘 Button {} pressed - processing...", button_idx);
+                    
+                    // Handle button press and get FX info
+                    let event_data = {
+                        let mut manager_lock = STREAMDECK_MANAGER.lock();
+                        if let Some(ref mut manager) = *manager_lock {
+                            manager.handle_button_press(button_idx)
+                        } else {
+                            None
+                        }
+                    };
+                    
+                    if let Some((fx_id, is_playing)) = event_data {
+                        println!("[Stream Deck Button Thread] 🎮 Button {} toggled FX '{}' to {}", 
+                            button_idx, fx_id, if is_playing { "PLAYING ▶" } else { "STOPPED ⏹" });
+                        
+                        // Emit event to frontend with FX ID and new state
+                        #[derive(Clone, serde::Serialize)]
+                        struct ButtonPressEvent {
+                            fx_id: String,
+                            is_playing: bool,
+                            button_idx: u8,
+                        }
+                        
+                        let event = ButtonPressEvent {
+                            fx_id: fx_id.clone(),
+                            is_playing,
+                            button_idx,
+                        };
+                        
+                        println!("[Stream Deck Button Thread] 📤 Emitting event to frontend: streamdeck://button_press");
+                        println!("[Stream Deck Button Thread]    → fx_id: {}, is_playing: {}, button_idx: {}", 
+                            event.fx_id, event.is_playing, event.button_idx);
+                        
+                        if let Err(e) = app_for_button_thread.emit("streamdeck://button_press", event) {
+                            println!("[Stream Deck Button Thread] ❌ Failed to emit event: {}", e);
+                        } else {
+                            println!("[Stream Deck Button Thread] ✅ Event emitted successfully");
+                        }
+                    } else {
+                        println!("[Stream Deck Button Thread] ⚠️ Button {} press returned no FX info (empty slot or control button)", button_idx);
+                    }
+                }
+                
+                // Small sleep to avoid tight loop if disconnected
+                if !has_events {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        });
+        
+        // Keep the async watcher for connection monitoring only (every 2 seconds)
+        let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let mut was_connected = false;
         
-        println!("[Stream Deck Watcher] 🎮 Starting button polling loop (50ms interval)...");
+        println!("[Stream Deck Watcher] 🔍 Starting connection monitor (2s interval)...");
         
         loop {
-            button_poll_interval.tick().await;
-            connection_check_counter += 1;
+            check_interval.tick().await;
             
-            // Check if device is connected (only every 40 ticks = ~2 seconds)
-            let is_connected = if connection_check_counter >= 40 {
-                connection_check_counter = 0;
+            // Check if device is connected
+            let is_connected = {
                 let manager_lock = STREAMDECK_MANAGER.lock();
                 manager_lock.as_ref().map(|m| m.is_connected()).unwrap_or(false)
-            } else {
-                was_connected // Use cached value for frequent button polls
             };
             
-            // If connection state changed, notify frontend (only check every ~2 seconds)
-            if connection_check_counter == 0 && is_connected != was_connected {
+            // If connection state changed, notify frontend
+            if is_connected != was_connected {
                 was_connected = is_connected;
                 
                 if is_connected {
@@ -2057,77 +2129,6 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                         if let Ok(info) = manager.connect() {
                             println!("[Stream Deck Watcher] ✅ Reconnected: {}", info);
                             let _ = app.emit("streamdeck://connected", ());
-                        }
-                    }
-                }
-            }
-            
-            // Read button presses if connected (poll more frequently)
-            if is_connected {
-                let mut manager_lock = STREAMDECK_MANAGER.lock();
-                if let Some(ref mut manager) = *manager_lock {
-                    let pressed_buttons = manager.read_button_presses();
-                    
-                    // Debug: log even when no presses (every 10 seconds)
-                    static mut LAST_DEBUG_LOG: std::time::Instant = unsafe { std::mem::zeroed() };
-                    let should_log_debug = unsafe {
-                        static mut INITIALIZED: bool = false;
-                        if !INITIALIZED {
-                            LAST_DEBUG_LOG = std::time::Instant::now();
-                            INITIALIZED = true;
-                            false
-                        } else {
-                            let elapsed = LAST_DEBUG_LOG.elapsed();
-                            if elapsed.as_secs() >= 10 {
-                                LAST_DEBUG_LOG = std::time::Instant::now();
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                    };
-                    
-                    if should_log_debug && pressed_buttons.is_empty() {
-                        println!("[Stream Deck Watcher] 🔍 Polling buttons... (no presses detected)");
-                    }
-                    
-                    if !pressed_buttons.is_empty() {
-                        println!("[Stream Deck Watcher] 🔍 Detected {} button press(es): {:?}", pressed_buttons.len(), pressed_buttons);
-                    }
-                    
-                    for button_idx in pressed_buttons {
-                        println!("[Stream Deck Watcher] 🔘 Button {} pressed - processing...", button_idx);
-                        
-                        // Handle button press and get FX info
-                        if let Some((fx_id, is_playing)) = manager.handle_button_press(button_idx) {
-                            println!("[Stream Deck Watcher] 🎮 Button {} toggled FX '{}' to {}", 
-                                button_idx, fx_id, if is_playing { "PLAYING ▶" } else { "STOPPED ⏹" });
-                            
-                            // Emit event to frontend with FX ID and new state
-                            #[derive(Clone, serde::Serialize)]
-                            struct ButtonPressEvent {
-                                fx_id: String,
-                                is_playing: bool,
-                                button_idx: u8,
-                            }
-                            
-                            let event = ButtonPressEvent {
-                                fx_id: fx_id.clone(),
-                                is_playing,
-                                button_idx,
-                            };
-                            
-                            println!("[Stream Deck Watcher] 📤 Emitting event to frontend: streamdeck://button_press");
-                            println!("[Stream Deck Watcher]    → fx_id: {}, is_playing: {}, button_idx: {}", 
-                                event.fx_id, event.is_playing, event.button_idx);
-                            
-                            if let Err(e) = app.emit("streamdeck://button_press", event) {
-                                println!("[Stream Deck Watcher] ❌ Failed to emit event: {}", e);
-                            } else {
-                                println!("[Stream Deck Watcher] ✅ Event emitted successfully");
-                            }
-                        } else {
-                            println!("[Stream Deck Watcher] ⚠️ Button {} press returned no FX info (empty slot or control button)", button_idx);
                         }
                     }
                 }
