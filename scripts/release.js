@@ -772,18 +772,25 @@ async function release() {
   const newVersion = incrementVersion(currentVersion, versionType);
   
   log.header('Release Information');
-  log.info(`Current version: ${currentVersion}`);
-  log.info(`New version: ${newVersion}`);
-  log.info(`Version type: ${versionType}`);
-  console.log('');
   
   // Verify version sync before starting
   const versionCheck = verifyVersionSync();
-  if (!versionCheck.synced) {
-    console.log(`${colors.yellow}⚠️  Versions are not synced between Cargo.toml and tauri.conf.json5${colors.reset}`);
-    log.info('They will be synchronized during this release');
-  }
+  
+  console.log(`${colors.cyan}📦 Current State:${colors.reset}`);
+  console.log(`   Cargo.toml:         ${versionCheck.cargoVersion}`);
+  console.log(`   tauri.conf.json5:   ${versionCheck.tauriVersion}`);
+  console.log(`   Synced:             ${versionCheck.synced ? '✅' : '❌'}`);
   console.log('');
+  console.log(`${colors.green}🚀 Release Plan:${colors.reset}`);
+  console.log(`   From:               ${currentVersion}`);
+  console.log(`   To:                 ${newVersion}`);
+  console.log(`   Type:               ${versionType}`);
+  console.log('');
+  
+  if (!versionCheck.synced) {
+    console.log(`${colors.yellow}⚠️  Versions will be synchronized to ${newVersion}${colors.reset}`);
+    console.log('');
+  }
   
   // Confirm
   if (!process.env.CI) {
@@ -828,6 +835,21 @@ async function release() {
     log.error('Failed to generate AI content (continuing anyway)');
   }
   
+  // Clean old builds to prevent version mismatches
+  log.header('Cleaning Old Builds');
+  try {
+    const targetDir = path.join(rootDir, 'target', 'release', 'bundle');
+    if (fs.existsSync(targetDir)) {
+      log.info('Removing old build artifacts...');
+      fs.rmSync(targetDir, { recursive: true, force: true });
+      log.success('Old builds cleaned');
+    } else {
+      log.info('No old builds to clean');
+    }
+  } catch (error) {
+    log.info('Could not clean old builds (continuing anyway)');
+  }
+  
   // Build
   if (!buildApp()) {
     process.exit(1);
@@ -842,6 +864,24 @@ async function release() {
   }
   log.success(`Found installer: ${executable.name}`);
   log.info(`Location: ${executable.path}`);
+  
+  // CRITICAL: Verify the executable version matches the release version
+  const executableVersion = executable.name.match(/battles\.app_([0-9.]+)_x64/);
+  if (executableVersion && executableVersion[1] !== newVersion) {
+    console.log('');
+    console.log(`${colors.red}╔═══════════════════════════════════════════════════════════════╗${colors.reset}`);
+    console.log(`${colors.red}║  ⛔ VERSION MISMATCH DETECTED                                ║${colors.reset}`);
+    console.log(`${colors.red}╚═══════════════════════════════════════════════════════════════╝${colors.reset}`);
+    console.log('');
+    console.log(`${colors.red}Executable file:     ${executable.name}${colors.reset}`);
+    console.log(`${colors.red}Executable version:  ${executableVersion[1]}${colors.reset}`);
+    console.log(`${colors.yellow}Expected version:    ${newVersion}${colors.reset}`);
+    console.log('');
+    log.error('FATAL: The built executable version does not match the release version!');
+    log.error('This indicates a build issue. Please run "bun run release" again.');
+    process.exit(1);
+  }
+  log.success(`✅ Version verified: ${newVersion} matches executable`);
   
   // Commit version changes
   log.header('Committing Changes');
