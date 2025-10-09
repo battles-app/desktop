@@ -50,3 +50,5 @@ build_output.txt
 
 # Tauri Updater Keys (NEVER COMMIT!)
 src-tauri/updater-keys.key
+
+gstreamer-runtime/

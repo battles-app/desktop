@@ -94,9 +94,7 @@
     "resources": [
       "assets/sounds",
       "src",
-      // GStreamer DLLs and plugins bundled by build.rs
-      "target/release/*.dll",
-      "target/release/gstreamer-1.0/*.dll"
+      "gstreamer-runtime"
     ],
     "externalBin": []
   },

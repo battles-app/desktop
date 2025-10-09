@@ -27,13 +27,11 @@ fn bundle_gstreamer_dlls() {
         return;
     }
     
-    // Get output directory
-    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
-    let target_dir = PathBuf::from(out_dir)
-        .ancestors()
-        .nth(3)
-        .expect("Failed to get target directory")
-        .to_path_buf();
+    // Get target directory - use the actual target/release directory
+    // NSIS bundler will automatically include DLLs from this location
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let target_dir = PathBuf::from(manifest_dir).join("target").join(profile);
     
     println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("cargo:warning=  📦 Bundling GStreamer Dependencies");
@@ -81,23 +79,39 @@ fn bundle_gstreamer_dlls() {
         "graphene-1.0-0.dll",
     ];
     
+    // Create gstreamer-runtime directory in project root for Tauri bundler
+    let runtime_dir = PathBuf::from(&manifest_dir).join("gstreamer-runtime");
+    let _ = fs::create_dir_all(&runtime_dir);
+    
     println!("cargo:warning=📚 Core Libraries:");
     let mut copied = 0;
     let mut missing = Vec::new();
     
     for dll in &required_dlls {
         let src = gst_bin.join(dll);
-        let dst = target_dir.join(dll);
+        
+        // Copy to both target dir (for dev/testing) and runtime dir (for bundling)
+        let dst_target = target_dir.join(dll);
+        let dst_runtime = runtime_dir.join(dll);
         
         if src.exists() {
-            match fs::copy(&src, &dst) {
-                Ok(_) => {
-                    copied += 1;
-                    println!("cargo:warning=  ✓ {}", dll);
-                }
-                Err(e) => {
-                    println!("cargo:warning=  ✗ {} (error: {})", dll, e);
-                }
+            let mut success = false;
+            
+            // Copy to target directory
+            if let Ok(_) = fs::copy(&src, &dst_target) {
+                success = true;
+            }
+            
+            // Copy to runtime directory for bundler
+            if let Ok(_) = fs::copy(&src, &dst_runtime) {
+                success = true;
+            }
+            
+            if success {
+                copied += 1;
+                println!("cargo:warning=  ✓ {}", dll);
+            } else {
+                println!("cargo:warning=  ✗ {} (copy failed)", dll);
             }
         } else {
             missing.push(dll);
@@ -107,8 +121,10 @@ fn bundle_gstreamer_dlls() {
     
     // Bundle essential GStreamer plugins
     if gst_plugins.exists() {
-        let plugins_dir = target_dir.join("gstreamer-1.0");
-        let _ = fs::create_dir_all(&plugins_dir);
+        let plugins_dir_target = target_dir.join("gstreamer-1.0");
+        let plugins_dir_runtime = runtime_dir.join("gstreamer-1.0");
+        let _ = fs::create_dir_all(&plugins_dir_target);
+        let _ = fs::create_dir_all(&plugins_dir_runtime);
         
         let essential_plugins = vec![
             "gstapp.dll",
@@ -134,17 +150,25 @@ fn bundle_gstreamer_dlls() {
         
         for plugin in &essential_plugins {
             let src = gst_plugins.join(plugin);
-            let dst = plugins_dir.join(plugin);
             
             if src.exists() {
-                match fs::copy(&src, &dst) {
-                    Ok(_) => {
-                        plugins_copied += 1;
-                        println!("cargo:warning=  ✓ {}", plugin);
-                    }
-                    Err(e) => {
-                        println!("cargo:warning=  ✗ {} (error: {})", plugin, e);
-                    }
+                let mut success = false;
+                
+                // Copy to target directory
+                if let Ok(_) = fs::copy(&src, plugins_dir_target.join(plugin)) {
+                    success = true;
+                }
+                
+                // Copy to runtime directory for bundler
+                if let Ok(_) = fs::copy(&src, plugins_dir_runtime.join(plugin)) {
+                    success = true;
+                }
+                
+                if success {
+                    plugins_copied += 1;
+                    println!("cargo:warning=  ✓ {}", plugin);
+                } else {
+                    println!("cargo:warning=  ✗ {} (copy failed)", plugin);
                 }
             } else {
                 println!("cargo:warning=  ⚠ {} (not found)", plugin);

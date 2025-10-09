@@ -2198,24 +2198,46 @@ fn main() {
             if let Some(exe_dir) = exe_path.parent() {
                 let exe_dir_str = exe_dir.to_string_lossy().to_string();
                 
-                // Set GST_PLUGIN_PATH to our bundled plugins
-                let plugin_path = exe_dir.join("gstreamer-1.0");
-                if plugin_path.exists() {
-                    env::set_var("GST_PLUGIN_PATH", plugin_path.to_string_lossy().to_string());
-                    println!("[GStreamer] Using bundled plugins: {:?}", plugin_path);
+                // Check for bundled GStreamer in resources directory
+                let resources_gst = exe_dir.join("gstreamer-runtime");
+                let resources_plugins = resources_gst.join("gstreamer-1.0");
+                
+                // Also check in exe directory directly (for dev builds)
+                let dev_plugins = exe_dir.join("gstreamer-1.0");
+                
+                if resources_gst.exists() {
+                    // Production build with bundled resources
+                    println!("[GStreamer] Using bundled runtime from resources");
+                    
+                    // Add bundled DLLs to PATH
+                    if let Ok(current_path) = env::var("PATH") {
+                        env::set_var("PATH", format!("{};{}", resources_gst.to_string_lossy(), current_path));
+                    }
+                    
+                    // Set plugin path
+                    if resources_plugins.exists() {
+                        env::set_var("GST_PLUGIN_PATH", resources_plugins.to_string_lossy().to_string());
+                        println!("[GStreamer] Using bundled plugins: {:?}", resources_plugins);
+                    }
+                } else if dev_plugins.exists() {
+                    // Development build
+                    println!("[GStreamer] Using development plugins");
+                    env::set_var("GST_PLUGIN_PATH", dev_plugins.to_string_lossy().to_string());
+                    
+                    if let Ok(current_path) = env::var("PATH") {
+                        env::set_var("PATH", format!("{};{}", exe_dir_str, current_path));
+                    }
                 } else {
-                    println!("[GStreamer] Bundled plugins not found, using system GStreamer");
+                    // Fallback to system GStreamer
+                    println!("[GStreamer] Using system GStreamer");
                 }
                 
-                // Set GST_PLUGIN_SYSTEM_PATH to prevent loading conflicting system plugins
-                env::set_var("GST_PLUGIN_SYSTEM_PATH", "");
-                
-                // Add exe directory to PATH for DLL loading
-                if let Ok(current_path) = env::var("PATH") {
-                    env::set_var("PATH", format!("{};{}", exe_dir_str, current_path));
+                // Set GST_PLUGIN_SYSTEM_PATH to prevent loading conflicting system plugins in production
+                if resources_gst.exists() {
+                    env::set_var("GST_PLUGIN_SYSTEM_PATH", "");
                 }
                 
-                println!("[GStreamer] DLL search path configured: {}", exe_dir_str);
+                println!("[GStreamer] Configuration complete");
             }
         }
     }
