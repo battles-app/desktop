@@ -4,10 +4,11 @@ use serde::{Serialize, Deserialize};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use image::RgbaImage;
-use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut};
+use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, draw_filled_circle_mut};
 use imageproc::rect::Rect;
 use ab_glyph::{FontRef, PxScale};
 use std::path::PathBuf;
+use imageproc::point::Point;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FxButton {
@@ -470,6 +471,65 @@ impl StreamDeckManager {
         Ok(())
     }
     
+    /// Detect media type from filename
+    fn detect_media_type(filename: &str) -> Option<&'static str> {
+        let filename_lower = filename.to_lowercase();
+        if filename_lower.contains(".mp4") || filename_lower.contains(".webm") || filename_lower.contains(".mov") || filename_lower.contains(".avi") {
+            Some("video")
+        } else if filename_lower.contains(".mp3") || filename_lower.contains(".wav") || filename_lower.contains(".ogg") || filename_lower.contains(".m4a") {
+            Some("audio")
+        } else {
+            None
+        }
+    }
+    
+    /// Draw a simple video icon (play triangle in a rectangle)
+    fn draw_video_icon(img: &mut RgbaImage, center_x: i32, center_y: i32, icon_size: i32) {
+        let white = image::Rgba([255, 255, 255, 200]);
+        
+        // Draw rectangle frame
+        let rect_width = icon_size;
+        let rect_height = (icon_size as f32 * 0.7) as i32;
+        let rect = Rect::at(center_x - rect_width / 2, center_y - rect_height / 2).of_size(rect_width as u32, rect_height as u32);
+        imageproc::drawing::draw_hollow_rect_mut(img, rect, white);
+        
+        // Draw play triangle inside
+        let triangle_size = icon_size / 3;
+        for dy in -triangle_size..triangle_size {
+            let width = (triangle_size as f32 * (1.0 - dy.abs() as f32 / triangle_size as f32)) as i32;
+            for dx in 0..width {
+                let x = (center_x + dx) as u32;
+                let y = (center_y + dy) as u32;
+                if x < img.width() && y < img.height() {
+                    img.put_pixel(x, y, white);
+                }
+            }
+        }
+    }
+    
+    /// Draw a simple audio icon (musical note)
+    fn draw_audio_icon(img: &mut RgbaImage, center_x: i32, center_y: i32, icon_size: i32) {
+        let white = image::Rgba([255, 255, 255, 200]);
+        
+        // Draw note stem
+        let stem_height = icon_size;
+        let stem_x = center_x + icon_size / 4;
+        for y in (center_y - stem_height / 2)..(center_y + stem_height / 4) {
+            if y >= 0 && y < img.height() as i32 {
+                for dx in -1..=1 {
+                    let x = stem_x + dx;
+                    if x >= 0 && x < img.width() as i32 {
+                        img.put_pixel(x as u32, y as u32, white);
+                    }
+                }
+            }
+        }
+        
+        // Draw note head (circle)
+        let note_radius = icon_size / 4;
+        draw_filled_circle_mut(img, (stem_x, center_y + stem_height / 4), note_radius as i32, white);
+    }
+    
     /// Create button image with text and styling
     fn create_button_image(&self, fx_button: &FxButton, is_playing: bool) -> Result<image::DynamicImage, String> {
         // Get button size
@@ -480,6 +540,13 @@ impl StreamDeckManager {
         let cached_image = if let Some(cached_path) = self.find_cached_image(&fx_button.name) {
             println!("[Stream Deck] ✅ Found cached image for {}: {:?}", fx_button.name, cached_path.file_name());
             image::open(&cached_path).ok()
+        } else {
+            None
+        };
+        
+        // Detect media type from URL if no image
+        let media_type = if cached_image.is_none() {
+            fx_button.image_url.as_ref().and_then(|url| Self::detect_media_type(url))
         } else {
             None
         };
@@ -505,13 +572,25 @@ impl StreamDeckManager {
                 }
             } else if is_playing {
                 image::Rgba([50, 205, 50, 255]) // Green when playing
-            } else if fx_button.is_global {
-                image::Rgba([138, 43, 226, 255]) // Purple for battle board
             } else {
-                image::Rgba([30, 144, 255, 255]) // Blue for user FX
+                image::Rgba([0, 0, 0, 255]) // Black background for all FX (battle board and user FX)
             };
             
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), bg_color);
+            
+            // Draw media icon if video/audio and no custom image
+            if let Some(media) = media_type {
+                let icon_size = (size as f32 * 0.4) as i32;
+                let center_x = (size / 2) as i32;
+                let center_y = (size as f32 * 0.4) as i32;
+                
+                match media {
+                    "video" => Self::draw_video_icon(&mut img, center_x, center_y, icon_size),
+                    "audio" => Self::draw_audio_icon(&mut img, center_x, center_y, icon_size),
+                    _ => {}
+                }
+            }
+            
             img
         };
         
@@ -525,18 +604,8 @@ impl StreamDeckManager {
                     let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
                     imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
                 }
-            } else {
-                // Subtle colored border to indicate type
-                let border_color = if fx_button.is_global {
-                    image::Rgba([138, 43, 226, 180]) // Purple tint for battle board
-                } else {
-                    image::Rgba([30, 144, 255, 180]) // Blue tint for user FX
-                };
-                for i in 0..3 {
-                    let rect = Rect::at(i, i).of_size(size - (i * 2) as u32, size - (i * 2) as u32);
-                    imageproc::drawing::draw_hollow_rect_mut(&mut img, rect, border_color);
-                }
             }
+            // No border when not playing - clean look on black background
         }
         
         // Render text with FX name
