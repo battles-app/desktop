@@ -15,6 +15,7 @@
     "setup-repo": "node scripts/create-repo.js",
     "generate-license": "node scripts/generate-license.js",
     "generate-readme": "node scripts/generate-readme.js",
+    "generate-metadata": "node scripts/update-repo-metadata.js",
     "check": "cargo check",
     "tauri": "tauri",
     "generate-icons": "node generate-icons.js"
