@@ -153,11 +153,22 @@ bun run release
 5. Try FX overlay canvas
 
 ### Step 3: Collect Logs
-**Where to find logs**:
-- Windows: Check the console output or terminal where app was launched
-- If launched from shortcut: Logs might not be visible (need to run from terminal)
+**Automatic Log File Location**:
+All diagnostic logs are automatically saved to a file in the installation directory:
+```
+C:\Program Files\Battles.app Desktop\battles-desktop.log
+```
 
-**To see logs on production build**:
+**To access the log file**:
+1. Navigate to installation directory in File Explorer:
+   ```
+   C:\Program Files\Battles.app Desktop
+   ```
+2. Open `battles-desktop.log` with any text editor (Notepad, VS Code, etc.)
+3. The log file includes timestamps for each entry
+4. Each new app session is separated by a header line
+
+**For real-time debugging** (optional):
 1. Open PowerShell/CMD
 2. Navigate to installation directory:
    ```
@@ -167,7 +178,7 @@ bun run release
    ```
    .\battles-desktop.exe
    ```
-4. This will show all console logs in the terminal
+4. This will show console output in real-time AND save to the log file
 
 ### Step 4: Analyze Logs
 Look for the patterns described above for each issue:

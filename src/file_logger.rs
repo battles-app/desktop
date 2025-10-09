@@ -23,7 +23,8 @@ pub fn init_logger() {
     {
         Ok(mut file) => {
             let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-            let header = format!("\n\n{'='*80}\n🚀 Battles.app Desktop - Session Started: {}\n{'='*80}\n", timestamp);
+            let separator = "=".repeat(80);
+            let header = format!("\n\n{}\n🚀 Battles.app Desktop - Session Started: {}\n{}\n", separator, timestamp, separator);
             let _ = file.write_all(header.as_bytes());
             let _ = file.flush();
             
