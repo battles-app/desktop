@@ -29,6 +29,9 @@ use streamdeck_manager::{StreamDeckManager, FxButton, STREAMDECK_MANAGER};
 mod streamdeck_diagnostics;
 use streamdeck_diagnostics::{run_diagnostics, get_driver_download_info, StreamDeckDiagnostics, DriverDownloadInfo};
 
+// File logger for production diagnostics
+mod file_logger;
+
 use shared_memory::{Shmem, ShmemConf};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -1071,43 +1074,43 @@ async fn initialize_composite_system() -> Result<String, String> {
         }
     } // Release lock before async operations
     
-    println!("[Composite] 🔧 Initializing GStreamer composite pipeline...");
+    log_info!("[Composite] 🔧 Initializing GStreamer composite pipeline...");
     
     // Initialize composite pipeline
     let composite = match GStreamerComposite::new() {
         Ok(comp) => {
-            println!("[Composite] ✅ GStreamer composite created successfully");
+            log_info!("[Composite] ✅ GStreamer composite created successfully");
             comp
         },
         Err(e) => {
-            println!("[Composite] ❌ ERROR: Failed to create composite: {}", e);
+            log_info!("[Composite] ❌ ERROR: Failed to create composite: {}", e);
             return Err(format!("Failed to initialize composite: {}", e));
         }
     };
     
     *GSTREAMER_COMPOSITE.write() = Some(composite);
-    println!("[Composite] 📦 Composite stored in global state");
+    log_info!("[Composite] 📦 Composite stored in global state");
     
     // Create broadcast channel for composite frames with larger buffer
     // 60 frames = 2 seconds of buffer at 30fps (prevents lag spikes)
     let (tx, _rx) = broadcast::channel::<Vec<u8>>(60);
-    println!("[Composite] 📡 Created broadcast channel (60 frame buffer)");
+    log_info!("[Composite] 📡 Created broadcast channel (60 frame buffer)");
     
     // Set frame sender in composite (for FX only)
     if let Some(comp) = GSTREAMER_COMPOSITE.read().as_ref() {
         comp.set_frame_sender(tx.clone());
-        println!("[Composite] 🔗 Frame sender connected to composite");
+        log_info!("[Composite] 🔗 Frame sender connected to composite");
     }
     
     // Set sender before starting WebSocket to prevent multiple initializations
     *COMPOSITE_FRAME_SENDER.write() = Some(tx);
     
-    println!("[Composite] 🌐 Starting WebSocket server on port {}...", COMPOSITE_WS_PORT);
+    log_info!("[Composite] 🌐 Starting WebSocket server on port {}...", COMPOSITE_WS_PORT);
     // Start WebSocket server for frame delivery
     start_composite_websocket_server().await;
 
-    println!("[Composite] ✅ Composite system initialized");
-    println!("[Composite] 💡 Using optimized async readback (~60ms latency)");
+    log_info!("[Composite] ✅ Composite system initialized");
+    log_info!("[Composite] 💡 Using optimized async readback (~60ms latency)");
     Ok("Composite initialized".to_string())
 }
 
@@ -1213,15 +1216,15 @@ async fn start_composite_websocket_server() {
 
 #[command]
 async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
-    println!("[Camera] 📹 Starting camera enumeration...");
+    log_info!("[Camera] 📹 Starting camera enumeration...");
     
     let cameras_info = match GStreamerCamera::list_cameras() {
         Ok(cams) => {
-            println!("[Camera] ✅ Successfully listed cameras: {} found", cams.len());
+            log_info!("[Camera] ✅ Successfully listed cameras: {} found", cams.len());
             cams
         },
         Err(e) => {
-            println!("[Camera] ❌ ERROR: Failed to list cameras: {}", e);
+            log_info!("[Camera] ❌ ERROR: Failed to list cameras: {}", e);
             return Err(e);
         }
     };
@@ -1230,7 +1233,7 @@ async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
         .into_iter()
         .enumerate()
         .map(|(idx, cam)| {
-            println!("[Camera]   {}. ID: {}, Name: {}, Description: {}", 
+            log_info!("[Camera]   {}. ID: {}, Name: {}, Description: {}", 
                 idx + 1, cam.id, cam.name, cam.description);
             CameraDeviceInfo {
                 id: cam.id,
@@ -1241,12 +1244,12 @@ async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
         })
         .collect();
     
-    println!("[Camera] 📊 Total cameras available: {}", cameras.len());
+    log_info!("[Camera] 📊 Total cameras available: {}", cameras.len());
     if cameras.is_empty() {
-        println!("[Camera] ⚠️  WARNING: No cameras found! Check:");
-        println!("[Camera]     • Camera is connected");
-        println!("[Camera]     • Camera drivers are installed");
-        println!("[Camera]     • No other application is using the camera");
+        log_info!("[Camera] ⚠️  WARNING: No cameras found! Check:");
+        log_info!("[Camera]     • Camera is connected");
+        log_info!("[Camera]     • Camera drivers are installed");
+        log_info!("[Camera]     • No other application is using the camera");
     }
     Ok(cameras)
 }
@@ -2217,6 +2220,13 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
 
 fn main() {
     // ============================================================================
+    // Initialize File Logger (Production Diagnostics)
+    // ============================================================================
+    file_logger::init_logger();
+    log_info!("🚀 Battles.app Desktop starting...");
+    log_info!("📋 Version: {}", env!("CARGO_PKG_VERSION"));
+    
+    // ============================================================================
     // Configure GStreamer for bundled DLLs (Windows production builds)
     // ============================================================================
     #[cfg(target_os = "windows")]
@@ -2232,22 +2242,22 @@ fn main() {
                 // Add exe directory to PATH for DLL loading
                 if let Ok(current_path) = env::var("PATH") {
                     env::set_var("PATH", format!("{};{}", exe_dir_str, current_path));
-                    println!("[GStreamer] Added exe directory to PATH: {}", exe_dir_str);
+                    log_info!("[GStreamer] Added exe directory to PATH: {}", exe_dir_str);
                 }
                 
                 // Check for bundled plugins
                 let plugins_dir = exe_dir.join("gstreamer-1.0");
                 if plugins_dir.exists() {
                     env::set_var("GST_PLUGIN_PATH", plugins_dir.to_string_lossy().to_string());
-                    println!("[GStreamer] Using bundled plugins: {:?}", plugins_dir);
+                    log_info!("[GStreamer] Using bundled plugins: {:?}", plugins_dir);
                     
                     // Prevent loading conflicting system plugins
                     env::set_var("GST_PLUGIN_SYSTEM_PATH", "");
                 } else {
-                    println!("[GStreamer] No bundled plugins found, using system GStreamer");
+                    log_info!("[GStreamer] No bundled plugins found, using system GStreamer");
                 }
                 
-                println!("[GStreamer] Configuration complete");
+                log_info!("[GStreamer] Configuration complete");
             }
         }
     }
