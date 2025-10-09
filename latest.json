@@ -1,11 +1,11 @@
 {
-  "version": "0.0.2",
-  "notes": "### 🚀 Improvements  • Bug fixes and performance improvements...",
-  "pub_date": "2025-10-09T19:14:22.573Z",
+  "version": "0.0.3",
+  "notes": "``` ## Release Notes  ✨ New Features - Now featuring AI-generated professional GitHub-style READMEs and release notes, making documentation sleek and informative. - Automated production URL configurat...",
+  "pub_date": "2025-10-09T19:25:49.264Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.2/battles.app_0.0.10_x64-setup.exe"
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.3/battles.app_0.0.10_x64-setup.exe"
     }
   }
 }
