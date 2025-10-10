@@ -42,6 +42,66 @@ impl GStreamerCamera {
             }
         }
         
+        // Log environment variables for debugging
+        log_info!("[GStreamer Camera] 🔍 Environment check:");
+        if let Ok(plugin_path) = std::env::var("GST_PLUGIN_PATH") {
+            log_info!("[GStreamer Camera]   GST_PLUGIN_PATH: {}", plugin_path);
+        } else {
+            log_info!("[GStreamer Camera]   GST_PLUGIN_PATH: Not set");
+        }
+        
+        if let Ok(plugin_system_path) = std::env::var("GST_PLUGIN_SYSTEM_PATH") {
+            log_info!("[GStreamer Camera]   GST_PLUGIN_SYSTEM_PATH: {}", plugin_system_path);
+        } else {
+            log_info!("[GStreamer Camera]   GST_PLUGIN_SYSTEM_PATH: Not set (using default)");
+        }
+        
+        // Check if critical plugins are available
+        log_info!("[GStreamer Camera] 🔌 Checking plugin registry...");
+        let registry = gst::Registry::get();
+        
+        let critical_features = vec![
+            ("directshow", "dshowvideosrc"),
+            ("directsoundsrc", "dshowaudiosrc"),
+            ("wasapi", "wasapisrc"),
+            ("ksvideosrc", "ksvideosrc"),
+        ];
+        
+        for (plugin_name, feature_name) in critical_features {
+            match registry.lookup_feature(feature_name) {
+                Some(feature) => {
+                    log_info!("[GStreamer Camera]   ✅ {} plugin available (feature: {})", plugin_name, feature_name);
+                }
+                None => {
+                    log_info!("[GStreamer Camera]   ❌ {} plugin NOT FOUND (feature: {})", plugin_name, feature_name);
+                }
+            }
+        }
+        
+        // List all video source plugins available
+        log_info!("[GStreamer Camera] 📋 Available video source plugins:");
+        let plugins = registry.plugins();
+        let mut video_sources = Vec::new();
+        for plugin in plugins {
+            let features = registry.get_feature_list_by_plugin(plugin.plugin_name().as_str());
+            for feature in features {
+                if let Some(factory) = feature.downcast_ref::<gst::ElementFactory>() {
+                    let klass = factory.metadata("klass").unwrap_or_default();
+                    if klass.contains("Source") && klass.contains("Video") {
+                        video_sources.push(factory.name().to_string());
+                    }
+                }
+            }
+        }
+        
+        if video_sources.is_empty() {
+            log_info!("[GStreamer Camera]   ⚠️  No video source plugins found!");
+        } else {
+            for source in &video_sources {
+                log_info!("[GStreamer Camera]   • {}", source);
+            }
+        }
+        
         let mut cameras = Vec::new();
         
         // On Windows, use GStreamer device monitor to enumerate real cameras
