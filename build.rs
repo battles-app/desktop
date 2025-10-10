@@ -33,12 +33,7 @@ fn bundle_gstreamer_dlls() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let target_dir = PathBuf::from(&manifest_dir).join("target").join(profile);
     
-    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("cargo:warning=  📦 Bundling GStreamer Dependencies");
-    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("cargo:warning=From: {:?}", gst_bin);
-    println!("cargo:warning=  To: {:?}", target_dir);
-    println!("cargo:warning=");
+    // Silent bundling for clean build output
     
     // Essential GStreamer DLLs - only copy what's absolutely needed
     let required_dlls = vec![
