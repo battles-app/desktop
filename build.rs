@@ -72,7 +72,6 @@ fn bundle_gstreamer_dlls() {
         "graphene-1.0-0.dll",
     ];
     
-    println!("cargo:warning=📚 Core Libraries:");
     let mut copied = 0;
     let mut missing = Vec::new();
     
@@ -82,18 +81,11 @@ fn bundle_gstreamer_dlls() {
         let dst = target_dir.join(dll);
         
         if src.exists() {
-            match fs::copy(&src, &dst) {
-                Ok(_) => {
-                    copied += 1;
-                    println!("cargo:warning=  ✓ {}", dll);
-                }
-                Err(e) => {
-                    println!("cargo:warning=  ✗ {} (error: {})", dll, e);
-                }
+            if fs::copy(&src, &dst).is_ok() {
+                copied += 1;
             }
         } else {
             missing.push(dll);
-            println!("cargo:warning=  ⚠ {} (not found)", dll);
         }
     }
     
@@ -133,48 +125,23 @@ fn bundle_gstreamer_dlls() {
             "gstwasapi.dll",            // Windows Audio Session API
         ];
         
-        println!("cargo:warning=");
-        println!("cargo:warning=🔌 GStreamer Plugins:");
-        let mut plugins_copied = 0;
-        
         for plugin in &essential_plugins {
             let src = gst_plugins.join(plugin);
             let dst = plugins_dir.join(plugin);
             
             if src.exists() {
-                match fs::copy(&src, &dst) {
-                    Ok(_) => {
-                        plugins_copied += 1;
-                        println!("cargo:warning=  ✓ {}", plugin);
-                    }
-                    Err(e) => {
-                        println!("cargo:warning=  ✗ {} (error: {})", plugin, e);
-                    }
-                }
-            } else {
-                println!("cargo:warning=  ⚠ {} (not found)", plugin);
+                let _ = fs::copy(&src, &dst);
             }
         }
-        
-        println!("cargo:warning=");
-        println!("cargo:warning=✅ Plugins: {} bundled", plugins_copied);
     }
     
-    println!("cargo:warning=");
-    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("cargo:warning=✅ Libraries: {} bundled", copied);
-    if !missing.is_empty() {
-        println!("cargo:warning=⚠️  Missing: {} (may cause runtime errors)", missing.len());
+    // Only show warning if critical DLLs are missing
+    if !missing.is_empty() && missing.len() > 5 {
+        eprintln!("Warning: {} GStreamer DLLs not found. App may not run.", missing.len());
     }
-    println!("cargo:warning=━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     
     // Tell cargo to link GStreamer
     println!("cargo:rustc-link-search=native={}", gst_bin.display());
-    
-    // Tell Tauri bundler about DLL locations for NSIS packaging
-    // NSIS will automatically include all DLLs from target/release directory
-    println!("cargo:warning=📦 DLLs will be bundled from: {:?}", target_dir);
-    println!("cargo:warning=   NSIS bundler will include all .dll files automatically");
 }
 
 
