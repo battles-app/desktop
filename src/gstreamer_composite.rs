@@ -796,21 +796,23 @@ impl GStreamerComposite {
             (width, height)  // Keep dimensions for 0° and 180°
         };
         
-        // Create simple pipeline - use camera if available, otherwise use test pattern
-        let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
-            // Use Media Foundation video source (more reliable than DirectShow on modern Windows)
-            // camera_device_id contains the device path from enumeration
-            println!("[Composite] 🎥 Attempting to use camera with device path: '{}'", camera_device_id);
+        // Create simple pipeline - use camera if available, otherwise use black canvas
+        let pipeline_str = if has_camera && (!camera_device_id.is_empty()) && camera_device_id != "no_camera" {
+            // Use camera
+            println!("[Composite] 🎥 Attempting to use camera: '{}'", camera_device_id);
             
-            // Check if this is a device path (starts with \\?) or a device name
-            let (source_element, device_property) = if camera_device_id.starts_with("\\\\?") {
-                // It's a device path - use mfvideosrc with device-path
-                ("mfvideosrc", format!("device-path=\"{}\"", camera_device_id))
-            } else if camera_device_id.starts_with("@device:") {
-                // It's a Media Foundation device path (like NVIDIA Broadcast)
-                ("mfvideosrc", format!("device-path=\"{}\"", camera_device_id))
+            // Parse device ID to determine source element and property
+            let (source_element, device_property) = if camera_device_id.starts_with("mf:") {
+                // Media Foundation index format: "mf:0", "mf:1", etc.
+                let index = camera_device_id.strip_prefix("mf:").unwrap_or("0");
+                ("mfvideosrc", format!("device-index={}", index))
+            } else if camera_device_id.starts_with("\\\\?") || camera_device_id.starts_with("@device:") {
+                // Legacy device path format (shouldn't happen anymore, but handle it)
+                // Try using device index 0 as fallback
+                println!("[Composite] ⚠️ Legacy device path detected, using mfvideosrc device-index=0");
+                ("mfvideosrc", format!("device-index=0"))
             } else {
-                // Fallback to DirectShow with device name
+                // DirectShow device name
                 ("dshowvideosrc", format!("device-name=\"{}\"", camera_device_id))
             };
             
@@ -846,9 +848,11 @@ impl GStreamerComposite {
                 )
             }
         } else {
-            // Use test pattern - also output RGBA
+            // No camera selected - use solid black canvas
+            // pattern=2 is "black" in videotestsrc
+            println!("[Composite] 🎨 No camera selected - creating black canvas");
             format!(
-                "videotestsrc pattern=ball is-live=true ! \
+                "videotestsrc pattern=2 is-live=true ! \
                  video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
                  appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
                 width, height, fps

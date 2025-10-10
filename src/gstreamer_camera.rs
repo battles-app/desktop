@@ -170,11 +170,18 @@ impl GStreamerCamera {
                         .and_then(|props| props.get::<u32>("device.index").ok())
                         .unwrap_or(device_index);
 
-                    // Store device path for mfvideosrc, fallback to name for dshowvideosrc
-                    let device_id = device_path.clone().unwrap_or_else(|| device_name.clone());
+                    // For mfvideosrc, store "mf:INDEX" format
+                    // For other APIs, use device name
+                    let device_id = if device_api.as_deref() == Some("mediafoundation") {
+                        // Use index-based ID for Media Foundation
+                        format!("mf:{}", device_index)
+                    } else {
+                        // Use device name for other APIs (DirectShow, etc.)
+                        device_name.clone()
+                    };
                     
                     cameras.push(CameraInfo {
-                        id: device_id, // Use device path for mfvideosrc
+                        id: device_id,
                         name: device_name,
                         description: format!("{} ({})", device_api.as_deref().unwrap_or("unknown"), device_class),
                     });
