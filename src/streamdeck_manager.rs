@@ -1097,9 +1097,9 @@ impl StreamDeckManager {
         let mut pressed_buttons = Vec::new();
         
         if let Some(ref mut device) = self.device {
-            // BLOCKING read with 10ms timeout for instant response
-            // This waits for ACTUAL button events from the hardware - no polling!
-            match device.read_input(Some(std::time::Duration::from_millis(10))) {
+            // Non-blocking read for instant response
+            // Returns immediately if no button press, allowing continuous polling
+            match device.read_input(Some(std::time::Duration::from_millis(1))) {
                 Ok(input) => {
                     match input {
                         elgato_streamdeck::StreamDeckInput::ButtonStateChange(states) => {

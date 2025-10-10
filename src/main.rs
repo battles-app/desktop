@@ -1979,64 +1979,80 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
             }
         }
         
-        let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut connection_check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut button_check_interval = tokio::time::interval(std::time::Duration::from_millis(5));
         let mut was_connected = false;
         
         loop {
-            check_interval.tick().await;
-            
-            // Check if device is connected
-            let is_connected = {
-                let manager_lock = STREAMDECK_MANAGER.lock();
-                manager_lock.as_ref().map(|m| m.is_connected()).unwrap_or(false)
-            };
-            
-            // If connection state changed, notify frontend
-            if is_connected != was_connected {
-                was_connected = is_connected;
-                
-                if is_connected {
-                    println!("[Stream Deck Watcher] Device connected");
-                    let _ = app.emit("streamdeck://connected", ());
-                } else {
-                    println!("[Stream Deck Watcher] Device disconnected");
-                    let _ = app.emit("streamdeck://disconnected", ());
+            tokio::select! {
+                _ = connection_check_interval.tick() => {
+                    // Check if device is connected
+                    let is_connected = {
+                        let manager_lock = STREAMDECK_MANAGER.lock();
+                        manager_lock.as_ref().map(|m| m.is_connected()).unwrap_or(false)
+                    };
                     
-                    // Try to reconnect
-                    let mut manager_lock = STREAMDECK_MANAGER.lock();
-                    if let Some(ref mut manager) = *manager_lock {
-                        println!("[Stream Deck Watcher] Attempting to reconnect...");
-                        if let Ok(info) = manager.connect() {
-                            println!("[Stream Deck Watcher] ✅ Reconnected: {}", info);
+                    // If connection state changed, notify frontend
+                    if is_connected != was_connected {
+                        was_connected = is_connected;
+                        
+                        if is_connected {
+                            println!("[Stream Deck Watcher] Device connected");
                             let _ = app.emit("streamdeck://connected", ());
+                        } else {
+                            println!("[Stream Deck Watcher] Device disconnected");
+                            let _ = app.emit("streamdeck://disconnected", ());
+                            
+                            // Try to reconnect
+                            let mut manager_lock = STREAMDECK_MANAGER.lock();
+                            if let Some(ref mut manager) = *manager_lock {
+                                println!("[Stream Deck Watcher] Attempting to reconnect...");
+                                if let Ok(info) = manager.connect() {
+                                    println!("[Stream Deck Watcher] ✅ Reconnected: {}", info);
+                                    let _ = app.emit("streamdeck://connected", ());
+                                }
+                            }
                         }
                     }
                 }
-            }
-            
-            // Read button presses if connected
-            if is_connected {
-                let mut manager_lock = STREAMDECK_MANAGER.lock();
-                if let Some(ref mut manager) = *manager_lock {
-                    let pressed_buttons = manager.read_button_presses();
+                _ = button_check_interval.tick() => {
+                    // Check if device is connected (quick check without lock)
+                    let is_connected = {
+                        if let Some(manager_lock) = STREAMDECK_MANAGER.try_lock() {
+                            manager_lock.as_ref().map(|m| m.is_connected()).unwrap_or(false)
+                        } else {
+                            // If we can't get the lock, assume connected and try button read anyway
+                            true
+                        }
+                    };
                     
-                    for button_idx in pressed_buttons {
-                        // Handle button press and get FX info
-                        if let Some((fx_id, is_playing)) = manager.handle_button_press(button_idx) {
+                    // Read button presses if connected
+                    if is_connected {
+                        // Use try_lock to avoid blocking if layout update is happening
+                        if let Some(mut manager_lock) = STREAMDECK_MANAGER.try_lock() {
+                            if let Some(ref mut manager) = *manager_lock {
+                                let pressed_buttons = manager.read_button_presses();
                             
-                            // Emit event to frontend with FX ID and new state
-                            #[derive(Clone, serde::Serialize)]
-                            struct ButtonPressEvent {
-                                fx_id: String,
-                                is_playing: bool,
-                                button_idx: u8,
+                            for button_idx in pressed_buttons {
+                                // Handle button press and get FX info
+                                if let Some((fx_id, is_playing)) = manager.handle_button_press(button_idx) {
+                                    
+                                    // Emit event to frontend with FX ID and new state
+                                    #[derive(Clone, serde::Serialize)]
+                                    struct ButtonPressEvent {
+                                        fx_id: String,
+                                        is_playing: bool,
+                                        button_idx: u8,
+                                    }
+                                    
+                                    let _ = app.emit("streamdeck://button_press", ButtonPressEvent {
+                                        fx_id,
+                                        is_playing,
+                                        button_idx,
+                                    });
+                                }
                             }
-                            
-                            let _ = app.emit("streamdeck://button_press", ButtonPressEvent {
-                                fx_id,
-                                is_playing,
-                                button_idx,
-                            });
+                            }
                         }
                     }
                 }
