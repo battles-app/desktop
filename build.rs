@@ -110,21 +110,38 @@ fn bundle_gstreamer_dlls() {
         let _ = fs::create_dir_all(&plugins_dir);
         
         let essential_plugins = vec![
+            // Core plugins
             "gstapp.dll",
             "gstcoreelements.dll",
             "gstvideoconvertscale.dll",
             "gstvideofilter.dll",
             "gstvideotestsrc.dll",
             "gstvideoparsersbad.dll",
+            
+            // Audio plugins
             "gstaudioconvert.dll",
             "gstaudioresample.dll",
             "gstaudiotestsrc.dll",
+            
+            // Auto-detection and playback
             "gstautodetect.dll",
             "gstplayback.dll",
             "gsttypefindfunctions.dll",
+            
+            // Graphics/Display
             "gstd3d11.dll",
             "gstopengl.dll",
             "gstd3dvideosink.dll",
+            
+            // CRITICAL: Windows camera support via DirectShow
+            "gstdirectshow.dll",        // DirectShow plugin - REQUIRED for Windows cameras
+            "gstdirectsoundsrc.dll",    // DirectShow audio
+            
+            // CRITICAL: WASAPI for Windows audio/video devices
+            "gstwasapi.dll",            // Windows Audio Session API
+            
+            // Device monitoring
+            "gstdevicemanager.dll",     // Device manager plugin (if it exists)
         ];
         
         println!("cargo:warning=");
