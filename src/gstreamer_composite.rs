@@ -796,28 +796,25 @@ impl GStreamerComposite {
         
         // Create simple pipeline - use camera if available, otherwise use test pattern
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
-            // Escape backslashes in Windows device path
-            let escaped_path = camera_device_id.replace("\\", "\\\\");
-            
-            // Use camera with device path (Windows format)
+            // Use camera with DirectShow (Windows)
             // Add videoflip for rotation support
             // Output RGBA for direct GPU texture upload (no JPEG encoding!)
             if flip_method == 0 {
                 // No rotation needed
                 format!(
-                    "mfvideosrc device-path=\"{}\" ! \
+                    "dshowvideosrc device-index={} ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! \
                      videoscale ! \
                      video/x-raw,format=RGBA,width={},height={} ! \
                      queue leaky=downstream max-size-buffers=2 ! \
                      appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                    escaped_path, width, height
+                    camera_device_id, width, height
                 )
             } else {
                 // Apply rotation with videoflip (use swapped dimensions if needed)
                 format!(
-                    "mfvideosrc device-path=\"{}\" ! \
+                    "dshowvideosrc device-index={} ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! \
                      videoscale ! \
@@ -827,7 +824,7 @@ impl GStreamerComposite {
                      video/x-raw,format=RGBA ! \
                      queue leaky=downstream max-size-buffers=2 ! \
                      appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                    escaped_path, pre_rotation_width, pre_rotation_height, flip_method
+                    camera_device_id, pre_rotation_width, pre_rotation_height, flip_method
                 )
             }
         } else {
