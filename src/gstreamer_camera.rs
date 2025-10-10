@@ -75,8 +75,8 @@ impl GStreamerCamera {
             // Add filter for video sources - use broader filter to catch all video sources
             // This includes: webcams, virtual cameras, NDI, capture cards, etc.
             let caps = gst::Caps::builder("video/x-raw").build();
-            if let Err(e) = monitor.add_filter(Some("Video/Source"), Some(&caps)) {
-                println!("[GStreamer] ⚠️ Failed to add filter: {:?}", e);
+            if monitor.add_filter(Some("Video/Source"), Some(&caps)).is_none() {
+                println!("[GStreamer] ⚠️ Failed to add filter (returned None)");
             }
             
             // Start monitoring to get active devices
