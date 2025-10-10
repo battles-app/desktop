@@ -31,6 +31,7 @@ pub struct StreamDeckManager {
     device_kind: Option<Kind>,
     is_connected: bool,
     loading_animation_active: bool,
+    image_cache: HashMap<String, PathBuf>, // Cache of FX name -> image path to avoid repeated filesystem searches
 }
 
 impl StreamDeckManager {
@@ -42,6 +43,7 @@ impl StreamDeckManager {
             device_kind: None,
             is_connected: false,
             loading_animation_active: false,
+            image_cache: HashMap::new(),
         })
     }
     
@@ -536,6 +538,16 @@ impl StreamDeckManager {
     /// Find cached image from frontend cache (NO downloading - images are pre-cached by frontend!)
     /// Cache files are named after the FX name, e.g., "x2.jpg", "galaxy-001.mp4", "10 sec countdown_1.mp4"
     fn find_cached_image(&self, fx_name: &str) -> Option<PathBuf> {
+        // Check in-memory cache first (fast)
+        if let Some(path) = self.image_cache.get(fx_name) {
+            return Some(path.clone());
+        }
+        // Fallback to filesystem search (slow)
+        self.find_cached_image_internal(fx_name)
+    }
+    
+    /// Internal implementation that actually searches the filesystem
+    fn find_cached_image_internal(&self, fx_name: &str) -> Option<PathBuf> {
         let cache_dir = std::env::temp_dir().join("battles_fx_cache");
         
         if !cache_dir.exists() {
@@ -660,7 +672,7 @@ impl StreamDeckManager {
                                     if let Err(e) = std::fs::write(&cache_path_clone, &bytes) {
                                         println!("[Stream Deck] ⚠️ Failed to cache image for {}: {}", name, e);
                                     } else {
-                                        println!("[Stream Deck] ✅ Cached image for {}: {:?}", name, cache_path_clone.file_name());
+                                        // Image cached successfully (silent)
                                         
                                         // Trigger re-render of this specific button
                                         let mut manager_lock = STREAMDECK_MANAGER.lock();
@@ -691,9 +703,13 @@ impl StreamDeckManager {
         
         println!("[Stream Deck] 📊 Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
         
-        // Start downloading images in background (non-blocking)
-        // They will trigger re-renders when complete
+        // Build image cache for fast lookups (avoid repeated filesystem searches)
+        self.image_cache.clear();
         for fx in battle_board.iter().chain(user_fx.iter()) {
+            if let Some(cached_path) = self.find_cached_image_internal(&fx.name) {
+                self.image_cache.insert(fx.name.clone(), cached_path);
+            }
+            // Download if not cached (non-blocking)
             self.download_image_to_cache(fx);
         }
         
