@@ -75,11 +75,46 @@ impl GStreamerCamera {
             // Add filter for video sources - use broader filter to catch all video sources
             // This includes: webcams, virtual cameras, NDI, capture cards, etc.
             let caps = gst::Caps::builder("video/x-raw").build();
-            monitor.add_filter(Some("Video/Source"), Some(&caps));
+            if let Err(e) = monitor.add_filter(Some("Video/Source"), Some(&caps)) {
+                println!("[GStreamer] ⚠️ Failed to add filter: {:?}", e);
+            }
             
             // Start monitoring to get active devices
-            if monitor.start().is_err() {
-                println!("[GStreamer] ❌ Failed to start device monitor");
+            if let Err(e) = monitor.start() {
+                println!("[GStreamer] ❌ Failed to start device monitor: {:?}", e);
+                println!("[GStreamer] ℹ️ Falling back to manual DirectShow enumeration...");
+                
+                // Fallback: Try to enumerate using DirectShow element directly
+                // This is a workaround when DeviceMonitor doesn't work
+                for i in 0..10 {
+                    // Try to probe each device index
+                    let test_pipeline_str = format!("mfvideosrc device-index={} ! fakesink", i);
+                    
+                    if let Ok(pipeline) = gst::parse::launch(&test_pipeline_str) {
+                        if let Ok(_) = pipeline.set_state(gst::State::Ready) {
+                            cameras.push(CameraInfo {
+                                id: format!("Camera {}", i),
+                                name: format!("Camera {} (Media Foundation)", i),
+                                description: format!("Video Source (index: {})", i),
+                            });
+                            println!("[GStreamer]   ✅ Found camera at index {}", i);
+                            let _ = pipeline.set_state(gst::State::Null);
+                        } else {
+                            // No more cameras
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                
+                if !cameras.is_empty() {
+                    println!("[GStreamer] 📹 Manual enumeration found {} cameras", cameras.len());
+                    monitor.stop();
+                    return Ok(cameras);
+                }
+                
+                println!("[GStreamer] ❌ Manual enumeration also failed");
                 return Ok(cameras);
             }
             

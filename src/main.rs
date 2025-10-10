@@ -2067,9 +2067,48 @@ fn main() {
                     // GStreamer plugins subdirectory
                     let gst_plugin_dir = resource_dir.join("gstreamer-1.0");
                     
-                    // Set GST_PLUGIN_PATH for GStreamer to find plugins
-                    std::env::set_var("GST_PLUGIN_PATH", gst_plugin_dir.to_string_lossy().to_string());
-                    println!("[GStreamer] 🔌 Plugin path: {}", gst_plugin_dir.display());
+                    // Try to detect system GStreamer installation
+                    let system_gst_paths = vec![
+                        "E:\\gstreamer\\1.0\\msvc_x86_64\\lib\\gstreamer-1.0",
+                        "C:\\gstreamer\\1.0\\msvc_x86_64\\lib\\gstreamer-1.0",
+                        "C:\\gstreamer\\1.0\\x86_64\\lib\\gstreamer-1.0",
+                        "C:\\Program Files\\GStreamer\\1.0\\msvc_x86_64\\lib\\gstreamer-1.0",
+                    ];
+                    
+                    let mut plugin_paths = vec![gst_plugin_dir.to_string_lossy().to_string()];
+                    
+                    // Add system GStreamer plugins as fallback
+                    for sys_path in system_gst_paths {
+                        if std::path::Path::new(sys_path).exists() {
+                            println!("[GStreamer] 🔍 Found system GStreamer at: {}", sys_path);
+                            plugin_paths.push(sys_path.to_string());
+                            
+                            // Also add system bin directory to PATH for DLL dependencies
+                            let sys_bin = sys_path.replace("lib\\gstreamer-1.0", "bin");
+                            if std::path::Path::new(&sys_bin).exists() {
+                                if let Ok(mut path) = std::env::var("PATH") {
+                                    path = format!("{};{}", sys_bin, path);
+                                    std::env::set_var("PATH", path);
+                                    println!("[GStreamer] ✅ Added system bin to PATH: {}", sys_bin);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    
+                    // Set GST_PLUGIN_PATH with bundled plugins first, then system plugins
+                    let plugin_path_str = plugin_paths.join(";");
+                    std::env::set_var("GST_PLUGIN_PATH", &plugin_path_str);
+                    println!("[GStreamer] 🔌 Plugin search paths:");
+                    for path in &plugin_paths {
+                        println!("[GStreamer]    - {}", path);
+                    }
+                    
+                    // Set GST_PLUGIN_SYSTEM_PATH to include system plugins
+                    if plugin_paths.len() > 1 {
+                        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", plugin_paths[1].clone());
+                        println!("[GStreamer] 🌐 System plugin path: {}", plugin_paths[1]);
+                    }
                     
                     // Add resource directories to PATH so Windows can find DLLs
                     if let Ok(mut path) = std::env::var("PATH") {
