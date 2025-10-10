@@ -2248,11 +2248,20 @@ fn main() {
                 // Check for bundled plugins
                 let plugins_dir = exe_dir.join("gstreamer-1.0");
                 if plugins_dir.exists() {
-                    env::set_var("GST_PLUGIN_PATH", plugins_dir.to_string_lossy().to_string());
-                    log_info!("[GStreamer] Using bundled plugins: {:?}", plugins_dir);
-                    
-                    // Prevent loading conflicting system plugins
-                    env::set_var("GST_PLUGIN_SYSTEM_PATH", "");
+                    // Add bundled plugins to search path (prepend so they take priority)
+                    // But DON'T disable system plugins - they may have working DeviceMonitor
+                    if let Ok(existing_path) = env::var("GST_PLUGIN_PATH") {
+                        // Prepend our plugins to existing path
+                        env::set_var("GST_PLUGIN_PATH", format!("{};{}", plugins_dir.to_string_lossy(), existing_path));
+                        log_info!("[GStreamer] Prepended bundled plugins to existing path: {:?}", plugins_dir);
+                    } else {
+                        // Set our plugins as the path
+                        env::set_var("GST_PLUGIN_PATH", plugins_dir.to_string_lossy().to_string());
+                        log_info!("[GStreamer] Using bundled plugins: {:?}", plugins_dir);
+                    }
+                    // IMPORTANT: Don't set GST_PLUGIN_SYSTEM_PATH to empty!
+                    // Let system plugins be available as fallback
+                    log_info!("[GStreamer] System plugins remain available as fallback");
                 } else {
                     log_info!("[GStreamer] No bundled plugins found, using system GStreamer");
                 }
