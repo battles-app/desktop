@@ -1,11 +1,11 @@
 {
-  "version": "0.0.19",
-  "notes": "• Fixed GStreamer DLLs bundling for enhanced app performance • Removed source code from installer for a cleaner installation process...",
-  "pub_date": "2025-10-09T22:58:31.261Z",
+  "version": "0.0.21",
+  "notes": "### 🚀 Improvements  • Bug fixes and performance improvements...",
+  "pub_date": "2025-10-10T06:36:19.208Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT2txNWpBTGdHZldGTmJsUjBpaUxUaEcwdXE2YXFWVURDT2s2Wk5ndnFyYVZ4K0tEekF6M2pPQm1ORU1HRk14QjdKbHpsSnNPZmU2RU9tU1VSQkZMNmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwMDUwNzA4CWZpbGU6QmF0dGxlcy5hcHAgRGVza3RvcF8wLjAuMTlfeDY0LXNldHVwLmV4ZQpoR215Ly9WN0NGQUx6ZlMvdGNsSDREV1JheXZSQmVZYXVUV1Ewd3dhUlFuS1U2UWpPZ1VxYUlsd200QWxYckxvSVVRbkVXblBReHpCcG9sR1BTZkZCUT09Cg==",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.19/Battles.app Desktop_0.0.19_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT2s3MG4va0dQTFhsNUhEbXRTOWg5THNmVzVIYVVTWjY1dE0rZ3phL251WEM5SkgrWjl1MEJpVi9IQnk2RTRjd3BvYjFtOFNXMlV1MGJwbEg2b1VEeXcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwMDc4MTc2CWZpbGU6QmF0dGxlcy5hcHAgRGVza3RvcF8wLjAuMjFfeDY0LXNldHVwLmV4ZQpFRlBWdnc0b2VHVUUwOEtaUnZsb3ByOFFHNWlZLzBqd1I5Qjl0VjhBZTV5YjcveUlnUzRqQjVCNGt0dXRxVHlvU0Uxc2hpSjNQVFZtejl2ZW1XUm9EZz09Cg==",
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.21/Battles.app Desktop_0.0.21_x64-setup.exe"
     }
   }
 }
