@@ -714,7 +714,7 @@ impl StreamDeckManager {
         self.button_layout = vec![None; button_count];
         
         // Get device dimensions for layout calculation
-        let (cols, _rows) = match self.device_kind {
+        let (cols, rows) = match self.device_kind {
             Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) | Some(Kind::Mk2Scissor) => (5, 3),
             Some(Kind::Mini) | Some(Kind::MiniMk2) => (3, 2),
             Some(Kind::Xl) | Some(Kind::XlV2) => (8, 4),
