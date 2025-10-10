@@ -799,12 +799,13 @@ impl GStreamerComposite {
         // Create simple pipeline - use camera if available, otherwise use test pattern
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
             // Use camera with DirectShow (Windows)
+            // Use device-name property which accepts the camera's display name
             // Add videoflip for rotation support
             // Output RGBA for direct GPU texture upload (no JPEG encoding!)
             if flip_method == 0 {
                 // No rotation needed
                 format!(
-                    "dshowvideosrc device-index={} ! \
+                    "dshowvideosrc device-name=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! \
                      videoscale ! \
@@ -816,7 +817,7 @@ impl GStreamerComposite {
             } else {
                 // Apply rotation with videoflip (use swapped dimensions if needed)
                 format!(
-                    "dshowvideosrc device-index={} ! \
+                    "dshowvideosrc device-name=\"{}\" ! \
                      queue leaky=downstream max-size-buffers=3 ! \
                      videoconvert ! \
                      videoscale ! \
