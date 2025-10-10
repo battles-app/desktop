@@ -560,7 +560,6 @@ impl StreamDeckManager {
                         if let Some(ext) = path.extension() {
                             let ext_str = ext.to_string_lossy().to_lowercase();
                             if ext_str == "jpg" || ext_str == "jpeg" || ext_str == "png" || ext_str == "webp" || ext_str == "gif" || ext_str == "avif" {
-                                println!("[Stream Deck] 📸 Found cached image: {} (ext: {})", filename_str, ext_str);
                                 return Some(path);
                             }
                         }
@@ -582,7 +581,6 @@ impl StreamDeckManager {
         for pattern in possible_patterns {
             let path = cache_dir.join(&pattern);
             if path.exists() {
-                println!("[Stream Deck] 📸 Found cached image (direct): {} ({})", fx_name, pattern);
                 return Some(path);
             }
         }
@@ -596,8 +594,6 @@ impl StreamDeckManager {
             println!("[Stream Deck] ⚠️  No image URL for FX: {}", fx_button.name);
             return;
         }
-        
-        println!("[Stream Deck] 📥 Starting download for FX: {} ({})", fx_button.name, fx_button.image_url.as_ref().unwrap());
         
         let cache_dir = std::env::temp_dir().join("battles_fx_cache");
         let _ = std::fs::create_dir_all(&cache_dir);
@@ -633,7 +629,6 @@ impl StreamDeckManager {
         
         // Skip if already cached (check AFTER cleanup)
         if cache_path.exists() {
-            println!("[Stream Deck] ℹ️ Image already cached: {}", cache_filename);
             return;
         }
         
@@ -695,14 +690,6 @@ impl StreamDeckManager {
         }
         
         println!("[Stream Deck] 📊 Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
-        println!("[Stream Deck] 🔍 Battle Board FX:");
-        for (idx, fx) in battle_board.iter().enumerate() {
-            println!("[Stream Deck]   {}. ID: {}, Name: {}, Image: {:?}", idx + 1, fx.id, fx.name, fx.image_url);
-        }
-        println!("[Stream Deck] 🔍 User FX:");
-        for (idx, fx) in user_fx.iter().enumerate() {
-            println!("[Stream Deck]   {}. ID: {}, Name: {}, Image: {:?}", idx + 1, fx.id, fx.name, fx.image_url);
-        }
         
         // Start downloading images in background (non-blocking)
         // They will trigger re-renders when complete
@@ -922,7 +909,6 @@ impl StreamDeckManager {
         // Try to load cached image from frontend cache (NO downloading!)
         // Cache files are named after the FX name, e.g., "x2.jpg", "galaxy.mp4"
         let cached_image = if let Some(cached_path) = self.find_cached_image(&fx_button.name) {
-            println!("[Stream Deck] ✅ Found cached image for {}: {:?}", fx_button.name, cached_path.file_name());
             image::open(&cached_path).ok()
         } else {
             None
