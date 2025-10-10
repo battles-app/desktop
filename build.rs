@@ -67,7 +67,6 @@ fn bundle_gstreamer_dlls() {
         "intl-8.dll",
         "ffi-7.dll",
         "z-1.dll",
-        "winpthread-1.dll",
         "pcre2-8-0.dll",
         
         // Video processing
@@ -75,7 +74,6 @@ fn bundle_gstreamer_dlls() {
         
         // Graphics
         "pixman-1-0.dll",
-        "png16-16.dll",
         "graphene-1.0-0.dll",
     ];
     
@@ -131,7 +129,6 @@ fn bundle_gstreamer_dlls() {
             // Graphics/Display
             "gstd3d11.dll",
             "gstopengl.dll",
-            "gstd3dvideosink.dll",
             
             // CRITICAL: Windows camera support via DirectShow
             "gstdirectshow.dll",        // DirectShow plugin - REQUIRED for Windows cameras
@@ -139,9 +136,6 @@ fn bundle_gstreamer_dlls() {
             
             // CRITICAL: WASAPI for Windows audio/video devices
             "gstwasapi.dll",            // Windows Audio Session API
-            
-            // Device monitoring
-            "gstdevicemanager.dll",     // Device manager plugin (if it exists)
         ];
         
         println!("cargo:warning=");
