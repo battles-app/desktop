@@ -8,11 +8,13 @@ use std::sync::Arc;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+#[allow(dead_code)]
 struct Vertex {
     position: [f32; 2],
     tex_coords: [f32; 2],
 }
 
+#[allow(dead_code)]
 const VERTICES: &[Vertex] = &[
     Vertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0] },
     Vertex { position: [ 1.0, -1.0], tex_coords: [1.0, 1.0] },
@@ -36,6 +38,7 @@ pub struct WgpuSurfaceRenderer {
     surface: Surface<'static>,
     device: Device,
     queue: Queue,
+    #[allow(dead_code)]
     config: SurfaceConfiguration,
     render_pipeline: RenderPipeline,
     vertex_buffer: Buffer,
@@ -45,11 +48,13 @@ pub struct WgpuSurfaceRenderer {
     current_texture: Option<Texture>,
     current_texture_view: Option<TextureView>,
     uniforms_buffer: Buffer,
+    #[allow(dead_code)]
     current_uniforms: Uniforms,
     frame_count: u64,
 }
 
 impl WgpuSurfaceRenderer {
+    #[allow(dead_code)]
     pub async fn new(
         window: Arc<tauri::Window>,
         width: u32,
@@ -303,6 +308,7 @@ impl WgpuSurfaceRenderer {
         })
     }
 
+    #[allow(dead_code)]
     pub fn set_chroma_key_params(&mut self, key_color: [f32; 3], tolerance: f32, similarity: f32, use_chroma_key: bool) {
         self.current_uniforms = Uniforms {
             key_color,
@@ -425,6 +431,7 @@ impl WgpuSurfaceRenderer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn resize(&mut self, new_width: u32, new_height: u32) {
         if new_width > 0 && new_height > 0 {
             self.config.width = new_width;

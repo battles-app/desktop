@@ -102,6 +102,7 @@ struct Uniforms {
 
 // Readback buffer state machine
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 enum ReadbackState {
     Free,           // Ready for new copy
     InFlight,       // Copy submitted, GPU writing (map not started)
@@ -713,6 +714,7 @@ impl GStreamerComposite {
     }
 
     /// Initialize WGPU surface renderer with transparent WebView overlay
+    #[allow(dead_code)]
     pub async fn set_window_async(&mut self, window: Arc<tauri::Window>, width: u32, height: u32) -> Result<(), String> {
         println!("[Composite] 🖼️  Initializing WGPU surface renderer...");
         println!("[Composite] 💡 Using transparent WebView overlay architecture");
@@ -1181,6 +1183,7 @@ impl GStreamerComposite {
         *self.is_running.read()
     }
 
+    #[allow(dead_code)]
     pub fn get_pipeline_state(&self) -> Option<gst::State> {
         if let Some(pipeline) = &self.pipeline {
             let state_result = pipeline.state(Some(gst::ClockTime::from_seconds(1)));
@@ -1190,6 +1193,7 @@ impl GStreamerComposite {
         }
     }
 
+    #[allow(dead_code)]
     pub fn emergency_cleanup(&self) -> Result<(), String> {
         // Emergency cleanup for stuck pipelines
         if let Some(pipeline) = &self.pipeline {

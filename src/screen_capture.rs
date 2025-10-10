@@ -133,6 +133,7 @@ impl ScreenCaptureMonitor {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         *self.is_running.read().unwrap()
     }

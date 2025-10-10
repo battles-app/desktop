@@ -170,6 +170,7 @@ impl StreamDeckManager {
     }
     
     /// Convert HSV to RGB (for smooth gradient animations)
+    #[allow(dead_code)]
     fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
         let c = v * s;
         let h_prime = h / 60.0;
@@ -198,13 +199,14 @@ impl StreamDeckManager {
     }
     
     /// Create logo button image using favicon.png
+    #[allow(dead_code)]
     fn create_logo_button(&self, frame: usize) -> Result<image::DynamicImage, String> {
         let size = self.get_button_size();
         let mut img = RgbaImage::new(size, size);
         
         // Dark gradient background (matches animation)
         let wave_offset = frame as f32 * 8.0;
-        let hue = (wave_offset % 360.0);
+        let hue = wave_offset % 360.0;
         let (r, g, b) = Self::hsv_to_rgb(hue, 0.3, 0.2);
         draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), Rgba([r, g, b, 255]));
         
@@ -233,6 +235,7 @@ impl StreamDeckManager {
     }
     
     /// Check if loading animation should continue
+    #[allow(dead_code)]
     pub fn is_loading_animation_active(&self) -> bool {
         self.loading_animation_active
     }
@@ -245,6 +248,7 @@ impl StreamDeckManager {
     
     /// Play a loading animation with dark gradient wave and brand-colored text
     /// Shows "BATTLES" first, then "LOADING", with continuous background until loaded
+    #[allow(dead_code)]
     pub fn play_loading_animation(&mut self) -> Result<(), String> {
         if self.device.is_none() {
             return Err("No device connected".to_string());
@@ -254,7 +258,7 @@ impl StreamDeckManager {
         let button_count = self.button_count();
         
         // Get grid dimensions
-        let (cols, rows) = match self.device_kind {
+        let (cols, _rows) = match self.device_kind {
             Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) | Some(Kind::Mk2Scissor) => (5, 3),
             Some(Kind::Mini) | Some(Kind::MiniMk2) => (3, 2),
             Some(Kind::Xl) | Some(Kind::XlV2) => (8, 4),
@@ -324,7 +328,7 @@ impl StreamDeckManager {
                 // Animated dark gradient wave (slower, more subtle)
                 let wave_offset = frame as f32 * 8.0;
                 let position_factor = (col as f32 + row as f32) * 25.0;
-                let hue = ((position_factor + wave_offset) % 360.0);
+                let hue = (position_factor + wave_offset) % 360.0;
                 
                 // Dark gradient: low saturation, low value for dark background
                 let (r, g, b) = Self::hsv_to_rgb(hue, 0.3, 0.2);
@@ -397,6 +401,7 @@ impl StreamDeckManager {
     
     /// Keep the gradient background animating (call from watcher until FX loaded)
     /// This handles BOTH initial reveal and infinite loop
+    #[allow(dead_code)]
     pub fn continue_loading_background(&mut self, frame: usize) -> Result<(), String> {
         if self.device.is_none() || !self.loading_animation_active {
             return Err("No device or animation stopped".to_string());
@@ -431,7 +436,7 @@ impl StreamDeckManager {
         let size = self.get_button_size();
         let button_count = self.button_count();
         
-        let (cols, rows) = match self.device_kind {
+        let (cols, _rows) = match self.device_kind {
             Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) | Some(Kind::Mk2Scissor) => (5, 3),
             Some(Kind::Mini) | Some(Kind::MiniMk2) => (3, 2),
             Some(Kind::Xl) | Some(Kind::XlV2) => (8, 4),
@@ -709,7 +714,7 @@ impl StreamDeckManager {
         self.button_layout = vec![None; button_count];
         
         // Get device dimensions for layout calculation
-        let (cols, rows) = match self.device_kind {
+        let (cols, _rows) = match self.device_kind {
             Some(Kind::Original) | Some(Kind::OriginalV2) | Some(Kind::Mk2) | Some(Kind::Mk2Scissor) => (5, 3),
             Some(Kind::Mini) | Some(Kind::MiniMk2) => (3, 2),
             Some(Kind::Xl) | Some(Kind::XlV2) => (8, 4),
