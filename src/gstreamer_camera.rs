@@ -56,47 +56,54 @@ impl GStreamerCamera {
             log_info!("[GStreamer Camera]   GST_PLUGIN_SYSTEM_PATH: Not set (using default)");
         }
         
-        // Check if critical plugins are available
-        log_info!("[GStreamer Camera] 🔌 Checking plugin registry...");
+        // Check if critical Windows video source plugins are available
+        log_info!("[GStreamer Camera] 🔌 Checking for Windows video source plugins...");
         let registry = gst::Registry::get();
         
-        let critical_features = vec![
-            ("directshow", "dshowvideosrc"),
-            ("directsoundsrc", "dshowaudiosrc"),
-            ("wasapi", "wasapisrc"),
-            ("ksvideosrc", "ksvideosrc"),
-        ];
-        
-        for (plugin_name, feature_name) in critical_features {
-            match registry.lookup_feature(feature_name) {
-                Some(feature) => {
-                    log_info!("[GStreamer Camera]   ✅ {} plugin available (feature: {})", plugin_name, feature_name);
-                }
-                None => {
-                    log_info!("[GStreamer Camera]   ❌ {} plugin NOT FOUND (feature: {})", plugin_name, feature_name);
-                }
+        // Try to create DirectShow video source element to verify it's available
+        let dshow_available = match gst::ElementFactory::make("dshowvideosrc").build() {
+            Ok(_) => {
+                log_info!("[GStreamer Camera]   ✅ DirectShow (dshowvideosrc) - Available");
+                true
             }
-        }
-        
-        // List all video source plugins available
-        log_info!("[GStreamer Camera] 📋 Available video source element factories:");
-        let factories = registry.factories(gst::ElementFactoryType::SRC);
-        let mut video_sources = Vec::new();
-        
-        for factory in factories {
-            let klass = factory.metadata("klass").unwrap_or_default();
-            if klass.contains("Source") && klass.contains("Video") {
-                video_sources.push(factory.name().to_string());
+            Err(e) => {
+                log_info!("[GStreamer Camera]   ❌ DirectShow (dshowvideosrc) - NOT AVAILABLE");
+                log_info!("[GStreamer Camera]      Error: {}", e);
+                false
             }
-        }
+        };
         
-        if video_sources.is_empty() {
-            log_info!("[GStreamer Camera]   ⚠️  No video source factories found!");
-        } else {
-            log_info!("[GStreamer Camera]   Found {} video source(s):", video_sources.len());
-            for source in &video_sources {
-                log_info!("[GStreamer Camera]     • {}", source);
+        // Try ksvideosrc as alternative
+        let ks_available = match gst::ElementFactory::make("ksvideosrc").build() {
+            Ok(_) => {
+                log_info!("[GStreamer Camera]   ✅ Kernel Streaming (ksvideosrc) - Available");
+                true
             }
+            Err(_) => {
+                log_info!("[GStreamer Camera]   ⚠️  Kernel Streaming (ksvideosrc) - Not available");
+                false
+            }
+        };
+        
+        // Try videotestsrc as fallback
+        let test_available = match gst::ElementFactory::make("videotestsrc").build() {
+            Ok(_) => {
+                log_info!("[GStreamer Camera]   ✅ Test Source (videotestsrc) - Available");
+                true
+            }
+            Err(_) => {
+                log_info!("[GStreamer Camera]   ❌ Test Source (videotestsrc) - NOT AVAILABLE (Critical!)");
+                false
+            }
+        };
+        
+        if !dshow_available && !ks_available {
+            log_info!("[GStreamer Camera] ⚠️  WARNING: No Windows video source plugins available!");
+            log_info!("[GStreamer Camera] This means camera detection will fail.");
+            log_info!("[GStreamer Camera] Possible causes:");
+            log_info!("[GStreamer Camera]   • gstdirectshow.dll not loaded from bundled plugins");
+            log_info!("[GStreamer Camera]   • GST_PLUGIN_PATH not pointing to bundled plugins");
+            log_info!("[GStreamer Camera]   • Plugin dependencies missing");
         }
         
         let mut cameras = Vec::new();
