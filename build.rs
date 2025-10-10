@@ -113,8 +113,8 @@ fn bundle_gstreamer_dlls() {
             "gstplayback.dll",
             "gsttypefindfunctions.dll",
             
-            // Graphics/Display
-            "gstd3d11.dll",
+            // Graphics/Display (includes screen capture elements)
+            "gstd3d11.dll",                 // Direct3D 11 (includes d3d11screencapturesrc)
             "gstopengl.dll",
             
             // CRITICAL: Windows camera support via DirectShow

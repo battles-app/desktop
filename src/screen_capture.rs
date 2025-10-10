@@ -29,6 +29,39 @@ impl ScreenCaptureMonitor {
     pub fn start(&mut self, monitor_x: i32, monitor_y: i32, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
         println!("[Screen Capture {}] Starting capture at ({}, {}) {}x{}", 
             self.monitor_index, monitor_x, monitor_y, monitor_width, monitor_height);
+        
+        // Initialize GStreamer if not already initialized
+        if gst::init().is_err() {
+            println!("[Screen Capture {}] GStreamer already initialized", self.monitor_index);
+        }
+        
+        // Check if d3d11screencapturesrc is available
+        if gst::ElementFactory::find("d3d11screencapturesrc").is_none() {
+            println!("[Screen Capture {}] ❌ d3d11screencapturesrc not found!", self.monitor_index);
+            println!("[Screen Capture {}] Available D3D11 elements:", self.monitor_index);
+            
+            // Try to find what D3D11 elements are available
+            let registry = gst::Registry::get();
+            if let Some(d3d11_plugin) = registry.find_plugin("d3d11") {
+                println!("[Screen Capture {}] ✅ d3d11 plugin found", self.monitor_index);
+            } else {
+                println!("[Screen Capture {}] ❌ d3d11 plugin NOT found", self.monitor_index);
+            }
+            
+            // Try alternative: dx9screencapsrc
+            if gst::ElementFactory::find("dx9screencapsrc").is_some() {
+                println!("[Screen Capture {}] ⚠️ Using fallback: dx9screencapsrc", self.monitor_index);
+                return self.start_with_dx9(monitor_width, monitor_height);
+            }
+            
+            // Try alternative: gdiscreencapsrc (GDI)
+            if gst::ElementFactory::find("gdiscreencapsrc").is_some() {
+                println!("[Screen Capture {}] ⚠️ Using fallback: gdiscreencapsrc", self.monitor_index);
+                return self.start_with_gdi(monitor_width, monitor_height);
+            }
+            
+            return Err("No screen capture plugin available (tried d3d11screencapturesrc, dx9screencapsrc, gdiscreencapsrc)".to_string());
+        }
 
         // Calculate preview dimensions (max 320x180 for low bandwidth)
         let preview_width = 320u32;
@@ -136,6 +169,89 @@ impl ScreenCaptureMonitor {
     #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         *self.is_running.read().unwrap()
+    }
+    
+    // Fallback: DirectX 9 screen capture
+    fn start_with_dx9(&mut self, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
+        let preview_width = 320u32;
+        let preview_height = ((preview_width as f64 / monitor_width as f64) * monitor_height as f64) as u32;
+        
+        let pipeline_str = format!(
+            "dx9screencapsrc monitor={} ! \
+             videoconvert ! \
+             video/x-raw,format=RGBA ! \
+             videoscale ! \
+             video/x-raw,width={},height={} ! \
+             appsink name=sink",
+            self.monitor_index,
+            preview_width,
+            preview_height
+        );
+        
+        println!("[Screen Capture {}] DX9 Pipeline: {}", self.monitor_index, pipeline_str);
+        self.start_common_pipeline(&pipeline_str)
+    }
+    
+    // Fallback: GDI screen capture (slowest but most compatible)
+    fn start_with_gdi(&mut self, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
+        let preview_width = 320u32;
+        let preview_height = ((preview_width as f64 / monitor_width as f64) * monitor_height as f64) as u32;
+        
+        let pipeline_str = format!(
+            "gdiscreencapsrc monitor={} ! \
+             videoconvert ! \
+             video/x-raw,format=RGBA ! \
+             videoscale ! \
+             video/x-raw,width={},height={} ! \
+             appsink name=sink",
+            self.monitor_index,
+            preview_width,
+            preview_height
+        );
+        
+        println!("[Screen Capture {}] GDI Pipeline: {}", self.monitor_index, pipeline_str);
+        self.start_common_pipeline(&pipeline_str)
+    }
+    
+    // Common pipeline setup for fallback methods
+    fn start_common_pipeline(&mut self, pipeline_str: &str) -> Result<(), String> {
+        let pipeline = gst::parse::launch(pipeline_str)
+            .map_err(|e| format!("Failed to create pipeline: {}", e))?
+            .dynamic_cast::<gst::Pipeline>()
+            .map_err(|_| "Failed to cast to Pipeline".to_string())?;
+        
+        let appsink = pipeline
+            .by_name("sink")
+            .ok_or("Failed to get appsink")?
+            .dynamic_cast::<gst_app::AppSink>()
+            .map_err(|_| "Failed to cast to AppSink")?;
+        
+        let frame_sender = Arc::clone(&self.frame_sender);
+        appsink.set_callbacks(
+            gst_app::AppSinkCallbacks::builder()
+                .new_sample(move |appsink| {
+                    let sample = appsink.pull_sample().map_err(|_| gst::FlowError::Error)?;
+                    let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                    let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+                    
+                    if let Some(sender) = frame_sender.read().unwrap().as_ref() {
+                        let _ = sender.send(map.as_slice().to_vec());
+                    }
+                    
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
+        
+        pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|e| format!("Failed to start pipeline: {:?}", e))?;
+        
+        self.pipeline = Some(pipeline);
+        *self.is_running.write().unwrap() = true;
+        
+        println!("[Screen Capture {}] ✅ Started successfully (fallback)", self.monitor_index);
+        Ok(())
     }
 }
 
