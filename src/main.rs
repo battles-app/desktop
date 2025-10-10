@@ -220,8 +220,6 @@ fn capture_monitor_screenshot_fallback(x: i32, y: i32, width: i32, height: i32) 
 // Read monitors using Tauri's built-in API and cached screenshots
 fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
     let monitors = app.available_monitors().unwrap_or_default();
-    println!("=== MONITOR DETECTION ===");
-    println!("Found {} monitors", monitors.len());
 
     // Update cache size if monitors changed
     {
@@ -269,7 +267,6 @@ fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
     for (i, monitor) in monitor_infos.iter().enumerate() {
         if monitor.position.0 == 0 && monitor.position.1 == 0 {
             primary_index = i;
-            println!("Found primary monitor at index {} (position 0,0)", i);
             break;
         }
     }
@@ -280,8 +277,6 @@ fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
         monitor.is_primary = i == primary_index;
     }
 
-    println!("Primary monitor set to index {}", primary_index);
-    println!("=== END MONITOR DETECTION ===");
     result
 }
 
@@ -297,7 +292,6 @@ async fn get_monitors(app: tauri::AppHandle) -> Vec<MonitorInfo> {
 async fn set_modal_open(is_open: bool) {
     if let Ok(mut modal_state) = MODAL_IS_OPEN.lock() {
         *modal_state = is_open;
-        println!("Monitor selection modal state set to: {}", is_open);
     }
 }
 
@@ -463,7 +457,6 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
 // Start real-time monitor capture (called when modal opens)
 #[command]
 async fn start_realtime_capture(app: tauri::AppHandle) -> Result<(), String> {
-    println!("Starting real-time monitor capture...");
 
     // Clear existing cache to start fresh
     {
@@ -505,7 +498,6 @@ async fn start_realtime_capture(app: tauri::AppHandle) -> Result<(), String> {
             if let Ok(mut cache) = crate::MONITOR_SCREENSHOTS.lock() {
                 if i < cache.len() {
                     cache[i] = screenshot;
-                    println!("Real-time capture ready for monitor {}: {}x{} (full monitor)", i, capture_width, capture_height);
                 }
             }
 
@@ -584,7 +576,6 @@ async fn start_realtime_capture(app: tauri::AppHandle) -> Result<(), String> {
         }
     });
 
-    println!("Real-time monitor capture initialized");
     Ok(())
 }
 
@@ -617,9 +608,6 @@ async fn check_tv_monitor_window(app: tauri::AppHandle) -> Result<serde_json::Va
 async fn close_tv_monitor_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("tv-monitor") {
         window.close().map_err(|e| format!("Failed to close window: {}", e))?;
-        println!("TV monitor window closed and destroyed");
-    } else {
-        println!("TV monitor window not found to close");
     }
     Ok(())
 }
@@ -633,13 +621,8 @@ async fn create_monitor_window(
     monitor_position: (i32, i32),  // Pass position from frontend to match preview
     monitor_size: (u32, u32)       // Pass size from frontend to match preview
 ) -> Result<(), String> {
-    println!("Creating monitor window for monitor index: {}", monitor_index);
-    println!("Frontend monitor data: position=({}, {}), size={}x{}", 
-        monitor_position.0, monitor_position.1, monitor_size.0, monitor_size.1);
-
     // Get Tauri's native monitor info to find the matching monitor
     let native_monitors = app.available_monitors().unwrap_or_default();
-    println!("Found {} native monitors", native_monitors.len());
 
     // Find the monitor that matches the position and size from frontend
     let native_monitor = native_monitors.iter()
@@ -660,9 +643,6 @@ async fn create_monitor_window(
     let monitor_size_actual = native_monitor.size();
     let scale_factor = native_monitor.scale_factor();
 
-    println!("✅ Matched monitor: position=({}, {}), size={}x{}, scale={}",
-             monitor_pos.x, monitor_pos.y, monitor_size_actual.width, monitor_size_actual.height, scale_factor);
-
     // Convert physical pixels to logical pixels for Tauri v2
     // Tauri's inner_size and position expect logical pixels
     let logical_width = monitor_size_actual.width as f64 / scale_factor;
@@ -670,47 +650,25 @@ async fn create_monitor_window(
     let logical_x = monitor_pos.x as f64 / scale_factor;
     let logical_y = monitor_pos.y as f64 / scale_factor;
 
-    println!("Logical coordinates: position=({}, {}), size={}x{}",
-             logical_x, logical_y, logical_width, logical_height);
-
     // Close any existing TV monitor window first (Tauri v2 API)
     if let Some(existing_window) = app.get_webview_window("tv-monitor") {
-        println!("⚠️  Found existing TV monitor window, destroying it first...");
-        
         // Try to close the window first (more graceful than destroy)
-        match existing_window.close() {
-            Ok(_) => println!("✅ Window close() called successfully"),
-            Err(e) => println!("⚠️  Window close() failed: {}, trying destroy()...", e),
-        }
+        let _ = existing_window.close();
         
         // Wait longer to ensure window is fully closed/destroyed
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         
         // Check if window still exists, if so, force destroy
         if let Some(still_exists) = app.get_webview_window("tv-monitor") {
-            println!("⚠️  Window still exists after close(), forcing destroy()...");
-            match still_exists.destroy() {
-                Ok(_) => println!("✅ Window destroy() completed"),
-                Err(e) => {
-                    let err_msg = format!("❌ CRITICAL: Cannot destroy window: {}. Cannot proceed.", e);
-                    println!("{}", err_msg);
-                    return Err(err_msg);
-                }
-            }
+            still_exists.destroy().map_err(|e| format!("Cannot destroy window: {}", e))?;
             // Extra wait after forced destroy
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
         
         // Final verification - window MUST be gone before proceeding
         if app.get_webview_window("tv-monitor").is_some() {
-            let err_msg = "❌ CRITICAL: Window still exists after multiple destroy attempts. Cannot proceed.".to_string();
-            println!("{}", err_msg);
-            return Err(err_msg);
+            return Err("Window still exists after multiple destroy attempts".to_string());
         }
-        
-        println!("✅ Window fully destroyed and verified gone, proceeding with creation...");
-    } else {
-        println!("✅ No existing tv-monitor window found, safe to create new one");
     }
 
     // Create a borderless fullscreen window on the selected monitor

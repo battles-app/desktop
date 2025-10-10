@@ -27,36 +27,18 @@ impl ScreenCaptureMonitor {
     }
 
     pub fn start(&mut self, monitor_x: i32, monitor_y: i32, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
-        println!("[Screen Capture {}] Starting capture at ({}, {}) {}x{}", 
-            self.monitor_index, monitor_x, monitor_y, monitor_width, monitor_height);
-        
         // Initialize GStreamer if not already initialized
-        if gst::init().is_err() {
-            println!("[Screen Capture {}] GStreamer already initialized", self.monitor_index);
-        }
+        let _ = gst::init();
         
         // Check if d3d11screencapturesrc is available
         if gst::ElementFactory::find("d3d11screencapturesrc").is_none() {
-            println!("[Screen Capture {}] ❌ d3d11screencapturesrc not found!", self.monitor_index);
-            println!("[Screen Capture {}] Available D3D11 elements:", self.monitor_index);
-            
-            // Try to find what D3D11 elements are available
-            let registry = gst::Registry::get();
-            if let Some(d3d11_plugin) = registry.find_plugin("d3d11") {
-                println!("[Screen Capture {}] ✅ d3d11 plugin found", self.monitor_index);
-            } else {
-                println!("[Screen Capture {}] ❌ d3d11 plugin NOT found", self.monitor_index);
-            }
-            
             // Try alternative: dx9screencapsrc
             if gst::ElementFactory::find("dx9screencapsrc").is_some() {
-                println!("[Screen Capture {}] ⚠️ Using fallback: dx9screencapsrc", self.monitor_index);
                 return self.start_with_dx9(monitor_width, monitor_height);
             }
             
             // Try alternative: gdiscreencapsrc (GDI)
             if gst::ElementFactory::find("gdiscreencapsrc").is_some() {
-                println!("[Screen Capture {}] ⚠️ Using fallback: gdiscreencapsrc", self.monitor_index);
                 return self.start_with_gdi(monitor_width, monitor_height);
             }
             
@@ -82,8 +64,6 @@ impl ScreenCaptureMonitor {
             preview_width,
             preview_height
         );
-
-        println!("[Screen Capture {}] Pipeline: {}", self.monitor_index, pipeline_str);
 
         let pipeline = gst::parse::launch(&pipeline_str)
             .map_err(|e| format!("Failed to create pipeline: {}", e))?
@@ -139,12 +119,10 @@ impl ScreenCaptureMonitor {
         self.pipeline = Some(pipeline);
         *self.is_running.write().unwrap() = true;
 
-        println!("[Screen Capture {}] ✅ Started successfully", self.monitor_index);
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        println!("[Screen Capture {}] Stopping...", self.monitor_index);
         *self.is_running.write().unwrap() = false;
 
         if let Some(pipeline) = &self.pipeline {
@@ -156,7 +134,6 @@ impl ScreenCaptureMonitor {
         self.pipeline = None;
         *self.frame_sender.write().unwrap() = None;
 
-        println!("[Screen Capture {}] ✅ Stopped", self.monitor_index);
         Ok(())
     }
 
@@ -182,7 +159,6 @@ impl ScreenCaptureMonitor {
             preview_height
         );
         
-        println!("[Screen Capture {}] DX9 Pipeline: {}", self.monitor_index, pipeline_str);
         self.start_common_pipeline(&pipeline_str)
     }
     
@@ -203,7 +179,6 @@ impl ScreenCaptureMonitor {
             preview_height
         );
         
-        println!("[Screen Capture {}] GDI Pipeline: {}", self.monitor_index, pipeline_str);
         self.start_common_pipeline(&pipeline_str)
     }
     
@@ -244,7 +219,6 @@ impl ScreenCaptureMonitor {
         self.pipeline = Some(pipeline);
         *self.is_running.write().unwrap() = true;
         
-        println!("[Screen Capture {}] ✅ Started successfully (fallback)", self.monitor_index);
         Ok(())
     }
 }
