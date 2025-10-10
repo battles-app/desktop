@@ -26,7 +26,7 @@ impl ScreenCaptureMonitor {
         *self.frame_sender.write().unwrap() = Some(sender);
     }
 
-    pub fn start(&mut self, monitor_x: i32, monitor_y: i32, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
+    pub fn start(&mut self, _monitor_x: i32, _monitor_y: i32, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
         // Initialize GStreamer if not already initialized
         let _ = gst::init();
         
@@ -85,8 +85,8 @@ impl ScreenCaptureMonitor {
         // Set up callbacks for frame delivery
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
-        let monitor_index = self.monitor_index;
-        let mut frame_count = 0u64;
+        let _monitor_index = self.monitor_index;
+        let mut _frame_count = 0u64;
 
         appsink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
@@ -99,7 +99,7 @@ impl ScreenCaptureMonitor {
                     let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                     let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
 
-                    frame_count += 1;
+                    _frame_count += 1;
 
                     // Broadcast frame to WebSocket
                     if let Some(sender) = &*frame_sender.read().unwrap() {

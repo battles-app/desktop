@@ -407,7 +407,7 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
                 
                 // Subscribe to frames
                 let mut rx = tx.subscribe();
-                let mut frame_count = 0u64;
+                let mut _frame_count = 0u64;
                 // Lower FPS for monitor previews (they're just thumbnails)
                 let target_fps = 15.0;
                 let frame_interval = std::time::Duration::from_secs_f64(1.0 / target_fps);
@@ -423,7 +423,7 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
                                     let elapsed = now.duration_since(last_send_time);
                                     
                                     if elapsed >= frame_interval {
-                                        frame_count += 1;
+                                        _frame_count += 1;
                                         last_send_time = now;
                                         
                                         // Send frame
@@ -616,7 +616,7 @@ async fn close_tv_monitor_window(app: tauri::AppHandle) -> Result<(), String> {
 async fn create_monitor_window(
     app: tauri::AppHandle,
     url: String,
-    monitor_index: usize,
+    _monitor_index: usize,
     monitor_position: (i32, i32),  // Pass position from frontend to match preview
     monitor_size: (u32, u32)       // Pass size from frontend to match preview
 ) -> Result<(), String> {

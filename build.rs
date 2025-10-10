@@ -72,7 +72,7 @@ fn bundle_gstreamer_dlls() {
         "graphene-1.0-0.dll",
     ];
     
-    let mut copied = 0;
+    let mut _copied = 0;
     let mut missing = Vec::new();
     
     // Copy DLLs directly to target directory (NSIS will bundle them automatically)
@@ -82,7 +82,7 @@ fn bundle_gstreamer_dlls() {
         
         if src.exists() {
             if fs::copy(&src, &dst).is_ok() {
-                copied += 1;
+                _copied += 1;
             }
         } else {
             missing.push(dll);
