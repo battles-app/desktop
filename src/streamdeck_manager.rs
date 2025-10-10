@@ -235,7 +235,6 @@ impl StreamDeckManager {
     }
     
     /// Check if loading animation should continue
-    #[allow(dead_code)]
     pub fn is_loading_animation_active(&self) -> bool {
         self.loading_animation_active
     }
@@ -400,7 +399,6 @@ impl StreamDeckManager {
     
     /// Keep the gradient background animating (call from watcher until FX loaded)
     /// This handles BOTH initial reveal and infinite loop
-    #[allow(dead_code)]
     pub fn continue_loading_background(&mut self, frame: usize) -> Result<(), String> {
         if self.device.is_none() || !self.loading_animation_active {
             return Err("No device or animation stopped".to_string());

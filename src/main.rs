@@ -1937,10 +1937,35 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
         
         let mut connection_check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let mut button_check_interval = tokio::time::interval(std::time::Duration::from_millis(5));
+        let mut animation_check_interval = tokio::time::interval(std::time::Duration::from_millis(6)); // ~166 FPS
         let mut was_connected = false;
+        let mut animation_frame: usize = 0;
         
         loop {
             tokio::select! {
+                _ = animation_check_interval.tick() => {
+                    // Check if animation should be playing
+                    let should_animate = {
+                        if let Some(manager_lock) = STREAMDECK_MANAGER.try_lock() {
+                            manager_lock.as_ref().map(|m| m.is_loading_animation_active()).unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    };
+                    
+                    // Play next animation frame if active
+                    if should_animate {
+                        if let Some(mut manager_lock) = STREAMDECK_MANAGER.try_lock() {
+                            if let Some(ref mut manager) = *manager_lock {
+                                let _ = manager.continue_loading_background(animation_frame);
+                                animation_frame = animation_frame.wrapping_add(1);
+                            }
+                        }
+                    } else {
+                        // Reset frame counter when animation stops
+                        animation_frame = 0;
+                    }
+                }
                 _ = connection_check_interval.tick() => {
                     // Check if device is connected
                     let is_connected = {
