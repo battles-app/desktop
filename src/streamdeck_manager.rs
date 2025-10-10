@@ -1097,9 +1097,9 @@ impl StreamDeckManager {
         let mut pressed_buttons = Vec::new();
         
         if let Some(ref mut device) = self.device {
-            // BLOCKING read with 1 second timeout
+            // BLOCKING read with 10ms timeout for instant response
             // This waits for ACTUAL button events from the hardware - no polling!
-            match device.read_input(Some(std::time::Duration::from_secs(1))) {
+            match device.read_input(Some(std::time::Duration::from_millis(10))) {
                 Ok(input) => {
                     match input {
                         elgato_streamdeck::StreamDeckInput::ButtonStateChange(states) => {
@@ -1111,10 +1111,7 @@ impl StreamDeckManager {
                                 }
                             }
                             
-                            if !pressed_buttons.is_empty() {
-                                println!("[Stream Deck Manager] 🔘 Button event: {} pressed", 
-                                    pressed_buttons.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", "));
-                            }
+                            // Button events detected (silent for performance)
                         }
                         _ => {
                             // Ignore other input types (encoders, touchscreen, etc.)
@@ -1200,37 +1197,19 @@ impl StreamDeckManager {
     
     /// Update button state (called when FX stops playing)
     pub fn set_button_state(&mut self, fx_id: &str, is_playing: bool) -> Result<(), String> {
-        println!("[Stream Deck Manager] 🎨 set_button_state called");
-        println!("[Stream Deck Manager]    → fx_id: {}", fx_id);
-        println!("[Stream Deck Manager]    → is_playing: {}", is_playing);
-        println!("[Stream Deck Manager]    → button_layout.len: {}", self.button_layout.len());
-        
         // Find button with this FX ID and update state
         let mut button_to_update: Option<(u8, FxButton)> = None;
         
-        println!("[Stream Deck Manager] 🔍 Searching for FX ID in button layout...");
         for (idx, button_opt) in self.button_layout.iter().enumerate() {
             if let Some(fx_button) = button_opt {
                 if fx_button.id == fx_id {
-                    println!("[Stream Deck Manager] ✅ Found FX at button index {}: {}", idx, fx_button.name);
                     button_to_update = Some((idx as u8, fx_button.clone()));
                     break;
                 }
             }
         }
         
-        if button_to_update.is_none() {
-            println!("[Stream Deck Manager] ⚠️ FX ID '{}' not found in layout", fx_id);
-            println!("[Stream Deck Manager]    → Available FX IDs:");
-            for (idx, button_opt) in self.button_layout.iter().enumerate() {
-                if let Some(fx_button) = button_opt {
-                    println!("[Stream Deck Manager]       [{}] {}", idx, fx_button.id);
-                }
-            }
-        }
-        
         if let Some((idx, fx_button)) = button_to_update {
-            println!("[Stream Deck Manager] 🔄 Updating button state...");
             // Update state
             self.button_states
                 .entry(idx)
@@ -1240,34 +1219,20 @@ impl StreamDeckManager {
                     button: Some(fx_button.clone()),
                 });
             
-            println!("[Stream Deck Manager] ✅ State updated in memory");
-            
             // Update visual
             if self.device.is_some() {
-                println!("[Stream Deck Manager] 🎨 Creating button image...");
                 if let Ok(image) = self.create_button_image(&fx_button, is_playing) {
-                    println!("[Stream Deck Manager] ✅ Image created, setting on device...");
                     if let Some(ref mut device) = self.device {
                         device.set_button_image(idx, image)
                             .map_err(|e| format!("Failed to set button image: {}", e))?;
-                        println!("[Stream Deck Manager] ✅ Button image set, flushing...");
                         device.flush().map_err(|e| format!("Failed to flush: {}", e))?;
-                        println!("[Stream Deck Manager] ✅ Flushed! Button {} now shows: {}", 
-                            idx, if is_playing { "GREEN BORDER" } else { "NO BORDER" });
                     }
-                } else {
-                    println!("[Stream Deck Manager] ❌ Failed to create button image");
                 }
-            } else {
-                println!("[Stream Deck Manager] ⚠️ Device not available");
             }
             
-            println!("[Stream Deck Manager] ✅ set_button_state completed successfully");
             Ok(())
         } else {
-            let err_msg = format!("FX ID '{}' not found in button layout", fx_id);
-            println!("[Stream Deck Manager] ❌ {}", err_msg);
-            Err(err_msg)
+            Err(format!("FX ID '{}' not found in button layout", fx_id))
         }
     }
 }

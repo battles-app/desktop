@@ -2021,11 +2021,8 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                     let pressed_buttons = manager.read_button_presses();
                     
                     for button_idx in pressed_buttons {
-                        println!("[Stream Deck Watcher] 🔘 Button {} pressed", button_idx);
-                        
                         // Handle button press and get FX info
                         if let Some((fx_id, is_playing)) = manager.handle_button_press(button_idx) {
-                            println!("[Stream Deck Watcher] 🎮 Toggled {} to {}", fx_id, if is_playing { "PLAYING" } else { "STOPPED" });
                             
                             // Emit event to frontend with FX ID and new state
                             #[derive(Clone, serde::Serialize)]
