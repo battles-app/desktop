@@ -100,16 +100,108 @@ impl GStreamerCamera {
         if !dshow_available && !ks_available {
             log_info!("[GStreamer Camera] ⚠️  WARNING: No Windows video source plugins available!");
             log_info!("[GStreamer Camera] This means camera detection will fail.");
-            log_info!("[GStreamer Camera] Possible causes:");
-            log_info!("[GStreamer Camera]   • gstdirectshow.dll not loaded from bundled plugins");
-            log_info!("[GStreamer Camera]   • GST_PLUGIN_PATH not pointing to bundled plugins");
-            log_info!("[GStreamer Camera]   • Plugin dependencies missing");
+            return Ok(vec![]);
         }
         
         let mut cameras = Vec::new();
         
-        // On Windows, use GStreamer device monitor to enumerate real cameras
+        // On Windows, DirectShow is available but DeviceMonitor is broken/incompatible
+        // Use direct device probing instead
         #[cfg(target_os = "windows")]
+        {
+            if dshow_available {
+                log_info!("[GStreamer Camera] 🔍 Using DirectShow device probing (DeviceMonitor is broken)...");
+                log_info!("[GStreamer Camera] Probing device indices 0-9...");
+                
+                // Probe device indices 0-9 to find available cameras
+                for device_index in 0..10 {
+                    // Try to create a pipeline with this device index
+                    let pipeline_desc = format!(
+                        "dshowvideosrc device-index={} ! fakesink",
+                        device_index
+                    );
+                    
+                    match gst::parse::launch(&pipeline_desc) {
+                        Ok(pipeline) => {
+                            // Try to set pipeline to PAUSED state to verify device exists
+                            if let Ok(pipeline) = pipeline.downcast::<gst::Pipeline>() {
+                                match pipeline.set_state(gst::State::Paused) {
+                                    Ok(_) => {
+                                        // Get device name from dshowvideosrc element
+                                        if let Some(src) = pipeline.by_name("dshowvideosrc0") {
+                                            let device_name = src.property::<String>("device-name");
+                                            
+                                            log_info!("[GStreamer Camera]   ✅ Device {}: {}", device_index, device_name);
+                                            
+                                            cameras.push(CameraInfo {
+                                                id: device_index.to_string(),
+                                                name: device_name.clone(),
+                                                description: format!("DirectShow Camera (index: {})", device_index),
+                                            });
+                                        } else {
+                                            log_info!("[GStreamer Camera]   ✅ Device {}: Camera {}", device_index, device_index);
+                                            
+                                            cameras.push(CameraInfo {
+                                                id: device_index.to_string(),
+                                                name: format!("Camera {}", device_index),
+                                                description: format!("DirectShow Camera (index: {})", device_index),
+                                            });
+                                        }
+                                        
+                                        // Clean up
+                                        let _ = pipeline.set_state(gst::State::Null);
+                                    }
+                                    Err(_) => {
+                                        // Device index doesn't exist or camera is in use
+                                        log_info!("[GStreamer Camera]   ⏭️  Device {}: Not available (in use or doesn't exist)", device_index);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log_info!("[GStreamer Camera]   ⏭️  Device {}: Failed to probe - {}", device_index, e);
+                        }
+                    }
+                }
+                
+                log_info!("[GStreamer Camera] 📊 DirectShow probing complete: {} camera(s) found", cameras.len());
+                
+                if cameras.is_empty() {
+                    log_info!("[GStreamer Camera] ⚠️  No cameras detected via DirectShow probing");
+                    log_info!("[GStreamer Camera] Possible reasons:");
+                    log_info!("[GStreamer Camera]   • All cameras are in use by other applications");
+                    log_info!("[GStreamer Camera]   • Camera drivers not installed properly");
+                    log_info!("[GStreamer Camera]   • Cameras require specific permissions");
+                }
+            } else if ks_available {
+                log_info!("[GStreamer Camera] 🔍 Trying Kernel Streaming fallback...");
+                // Try KS probing as fallback
+                for device_index in 0..10 {
+                    let pipeline_desc = format!(
+                        "ksvideosrc device-index={} ! fakesink",
+                        device_index
+                    );
+                    
+                    if let Ok(pipeline) = gst::parse::launch(&pipeline_desc) {
+                        if let Ok(pipeline) = pipeline.downcast::<gst::Pipeline>() {
+                            if pipeline.set_state(gst::State::Paused).is_ok() {
+                                cameras.push(CameraInfo {
+                                    id: device_index.to_string(),
+                                    name: format!("Camera {}", device_index),
+                                    description: format!("Kernel Streaming Camera (index: {})", device_index),
+                                });
+                                let _ = pipeline.set_state(gst::State::Null);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return Ok(cameras);
+        }
+        
+        // OLD CODE (DeviceMonitor - BROKEN ON WINDOWS) - Keeping for non-Windows platforms
+        #[cfg(not(target_os = "windows"))]
         {
             use gstreamer::DeviceMonitor;
             
@@ -127,11 +219,6 @@ impl GStreamerCamera {
                 Ok(_) => log_info!("[GStreamer Camera] ✅ Device monitor started successfully"),
                 Err(e) => {
                     log_info!("[GStreamer Camera] ❌ ERROR: Failed to start device monitor: {:?}", e);
-                    log_info!("[GStreamer Camera] Possible causes:");
-                    log_info!("[GStreamer Camera]   • Missing GStreamer plugins (gst-plugins-base, gst-plugins-good)");
-                    log_info!("[GStreamer Camera]   • Missing DirectShow plugin (dshowvideosrc)");
-                    log_info!("[GStreamer Camera]   • GStreamer DLLs not properly loaded");
-                    log_info!("[GStreamer Camera]   • GST_PLUGIN_PATH not correctly set");
                     return Ok(cameras);
                 }
             }
