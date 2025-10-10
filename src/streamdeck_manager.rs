@@ -70,6 +70,10 @@ impl StreamDeckManager {
         
         self.device_kind = Some(*kind);
         
+        // Log cache directory location for debugging
+        let cache_dir = Self::get_cache_dir();
+        println!("[Stream Deck] 💾 Image cache: {}", cache_dir.display());
+        
         // Get device info
         let serial_number = device.serial_number()
             .unwrap_or_else(|_| "Unknown".to_string());
@@ -477,7 +481,7 @@ impl StreamDeckManager {
             // Continuous dark gradient animation
             let wave_offset = frame as f32 * 8.0;
             let position_factor = (col as f32 + row as f32) * 25.0;
-            let hue = ((position_factor + wave_offset) % 360.0);
+            let hue = (position_factor + wave_offset) % 360.0;
             let (r, g, b) = Self::hsv_to_rgb(hue, 0.3, 0.2);
             
             draw_filled_rect_mut(&mut img, Rect::at(0, 0).of_size(size, size), Rgba([r, g, b, 255]));
@@ -546,9 +550,21 @@ impl StreamDeckManager {
         self.find_cached_image_internal(fx_name)
     }
     
+    /// Get the cache directory (persistent across app restarts)
+    fn get_cache_dir() -> PathBuf {
+        // Use executable directory for cache (persists in installed app)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                return exe_dir.join("streamdeck_cache");
+            }
+        }
+        // Fallback to temp dir (dev mode)
+        std::env::temp_dir().join("battles_fx_cache")
+    }
+    
     /// Internal implementation that actually searches the filesystem
     fn find_cached_image_internal(&self, fx_name: &str) -> Option<PathBuf> {
-        let cache_dir = std::env::temp_dir().join("battles_fx_cache");
+        let cache_dir = Self::get_cache_dir();
         
         if !cache_dir.exists() {
             return None;
@@ -607,8 +623,11 @@ impl StreamDeckManager {
             return;
         }
         
-        let cache_dir = std::env::temp_dir().join("battles_fx_cache");
-        let _ = std::fs::create_dir_all(&cache_dir);
+        let cache_dir = Self::get_cache_dir();
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            println!("[Stream Deck] ⚠️  Failed to create cache directory: {}", e);
+            return;
+        }
         
         // Cache filename: Try to preserve extension from URL or default to .jpg
         let extension = if let Some(url) = &fx_button.image_url {
