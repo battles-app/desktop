@@ -1782,12 +1782,8 @@ struct StreamDeckInfo {
 
 #[command]
 async fn streamdeck_init() -> Result<(), String> {
-    println!("[Stream Deck] Initializing Stream Deck system");
-    
     let manager = StreamDeckManager::new()?;
     *STREAMDECK_MANAGER.lock() = Some(manager);
-    
-    println!("[Stream Deck] ✅ Initialized");
     Ok(())
 }
 
@@ -1813,13 +1809,10 @@ async fn streamdeck_scan() -> Result<Vec<String>, String> {
 
 #[command]
 async fn streamdeck_connect() -> Result<String, String> {
-    println!("[Stream Deck] Connecting to device...");
-    
     let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         let result = manager.connect()?;
-        println!("[Stream Deck] ✅ {}", result);
         Ok(result)
     } else {
         Err("Stream Deck not initialized".to_string())
@@ -1868,23 +1861,10 @@ async fn streamdeck_update_layout(
     battle_board: Vec<FxButton>,
     user_fx: Vec<FxButton>
 ) -> Result<(), String> {
-    println!("[Stream Deck] Received layout update request");
-    println!("[Stream Deck]   Battle Board: {} items", battle_board.len());
-    println!("[Stream Deck]   User FX: {} items", user_fx.len());
-    
-    // Debug first few items
-    if !battle_board.is_empty() {
-        println!("[Stream Deck]   First battle board item: {:?}", &battle_board[0]);
-    }
-    if !user_fx.is_empty() {
-        println!("[Stream Deck]   First user FX item: {:?}", &user_fx[0]);
-    }
-    
     let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
         manager.update_layout(battle_board, user_fx)?;
-        println!("[Stream Deck] ✅ Layout updated successfully");
         Ok(())
     } else {
         Err("Stream Deck not initialized".to_string())
@@ -1997,7 +1977,6 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                         was_connected = is_connected;
                         
                         if is_connected {
-                            println!("[Stream Deck Watcher] Device connected");
                             let _ = app.emit("streamdeck://connected", ());
                         } else {
                             println!("[Stream Deck Watcher] Device disconnected");

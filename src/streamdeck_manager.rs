@@ -70,10 +70,6 @@ impl StreamDeckManager {
         
         self.device_kind = Some(*kind);
         
-        // Log cache directory location for debugging
-        let cache_dir = Self::get_cache_dir();
-        println!("[Stream Deck] 💾 Image cache: {}", cache_dir.display());
-        
         // Get device info
         let serial_number = device.serial_number()
             .unwrap_or_else(|_| "Unknown".to_string());
@@ -94,8 +90,6 @@ impl StreamDeckManager {
         // DON'T play animation here - it blocks everything!
         // Background thread will handle ALL animation (including initial reveal)
         // This allows frontend to load data in PARALLEL with animation
-        println!("[Stream Deck] 🎬 Animation enabled - background thread will handle it");
-        println!("[Stream Deck] ⚡ Frontend can now load data in parallel!");
 
         Ok(info)
     }
@@ -249,7 +243,6 @@ impl StreamDeckManager {
     /// Stop loading animation (called when FX buttons are loaded)
     pub fn stop_loading_animation(&mut self) {
         self.loading_animation_active = false;
-        println!("[Stream Deck] 🛑 Stopping loading animation");
     }
     
     /// Play a loading animation with dark gradient wave and brand-colored text
@@ -720,7 +713,6 @@ impl StreamDeckManager {
             return Err("No device connected".to_string());
         }
         
-        println!("[Stream Deck] 📊 Updating layout with {} battle board + {} user FX items", battle_board.len(), user_fx.len());
         
         // Build image cache for fast lookups (avoid repeated filesystem searches)
         self.image_cache.clear();
