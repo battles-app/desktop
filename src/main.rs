@@ -2041,6 +2041,24 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
 }
 
 fn main() {
+    // Configure GStreamer plugin paths for bundled plugins
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            // Set GST_PLUGIN_PATH to bundled plugins directory
+            let plugin_path = exe_dir.join("gstreamer-1.0");
+            std::env::set_var("GST_PLUGIN_PATH", plugin_path.to_string_lossy().to_string());
+            
+            // Add exe directory to PATH for GStreamer DLLs
+            if let Ok(path) = std::env::var("PATH") {
+                let new_path = format!("{};{}", exe_dir.display(), path);
+                std::env::set_var("PATH", new_path);
+            }
+            
+            println!("[GStreamer] Plugin path: {}", plugin_path.display());
+            println!("[GStreamer] Exe directory: {}", exe_dir.display());
+        }
+    }
+    
     // Configure cache plugin for FX files
     let cache_config = tauri_plugin_cache::CacheConfig {
         cache_dir: Some("battles_fx_cache".into()),

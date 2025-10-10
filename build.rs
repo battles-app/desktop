@@ -94,36 +94,40 @@ fn bundle_gstreamer_dlls() {
         let plugins_dir = target_dir.join("gstreamer-1.0");
         let _ = fs::create_dir_all(&plugins_dir);
         
-        let essential_plugins = vec![
-            // Core plugins
-            "gstapp.dll",
-            "gstcoreelements.dll",
-            "gstvideoconvertscale.dll",
-            "gstvideofilter.dll",
-            "gstvideotestsrc.dll",
-            "gstvideoparsersbad.dll",
-            
-            // Audio plugins
-            "gstaudioconvert.dll",
-            "gstaudioresample.dll",
-            "gstaudiotestsrc.dll",
-            
-            // Auto-detection and playback
-            "gstautodetect.dll",
-            "gstplayback.dll",
-            "gsttypefindfunctions.dll",
-            
-            // Graphics/Display (includes screen capture elements)
-            "gstd3d11.dll",                 // Direct3D 11 (includes d3d11screencapturesrc)
-            "gstopengl.dll",
-            
-            // CRITICAL: Windows camera support via DirectShow
-            "gstdirectshow.dll",        // DirectShow plugin - REQUIRED for Windows cameras
-            "gstdirectsoundsrc.dll",    // DirectShow audio
-            
-            // CRITICAL: WASAPI for Windows audio/video devices
-            "gstwasapi.dll",            // Windows Audio Session API
-        ];
+           let essential_plugins = vec![
+               // Core plugins
+               "gstapp.dll",
+               "gstcoreelements.dll",
+               "gstvideoconvertscale.dll",
+               "gstvideofilter.dll",
+               "gstvideotestsrc.dll",
+               "gstvideoparsersbad.dll",
+               
+               // Audio plugins
+               "gstaudioconvert.dll",
+               "gstaudioresample.dll",
+               "gstaudiotestsrc.dll",
+               
+               // Auto-detection and playback
+               "gstautodetect.dll",
+               "gstplayback.dll",
+               "gsttypefindfunctions.dll",
+               
+               // Graphics/Display (includes screen capture elements)
+               "gstd3d11.dll",                 // Direct3D 11 (includes d3d11screencapturesrc)
+               "gstopengl.dll",
+               
+               // CRITICAL: Windows camera support via DirectShow
+               "gstdirectshow.dll",        // DirectShow plugin - REQUIRED for Windows cameras
+               "gstdirectsoundsrc.dll",    // DirectShow audio
+               
+               // CRITICAL: WASAPI for Windows audio/video devices
+               "gstwasapi.dll",            // Windows Audio Session API
+               
+               // CRITICAL: Screen capture plugins - includes all screen capture sources
+               "gstd3d11screencapturesrc.dll",  // D3D11 screen capture (if exists as separate plugin)
+               "gstwin32.dll",                   // Win32 screen capture elements (gdiscreencapsrc)
+           ];
         
         for plugin in &essential_plugins {
             let src = gst_plugins.join(plugin);
