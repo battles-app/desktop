@@ -79,26 +79,23 @@ impl GStreamerCamera {
         }
         
         // List all video source plugins available
-        log_info!("[GStreamer Camera] 📋 Available video source plugins:");
-        let plugins = registry.plugins();
+        log_info!("[GStreamer Camera] 📋 Available video source element factories:");
+        let factories = registry.factories(gst::ElementFactoryType::SRC);
         let mut video_sources = Vec::new();
-        for plugin in plugins {
-            let features = registry.get_feature_list_by_plugin(plugin.plugin_name().as_str());
-            for feature in features {
-                if let Some(factory) = feature.downcast_ref::<gst::ElementFactory>() {
-                    let klass = factory.metadata("klass").unwrap_or_default();
-                    if klass.contains("Source") && klass.contains("Video") {
-                        video_sources.push(factory.name().to_string());
-                    }
-                }
+        
+        for factory in factories {
+            let klass = factory.metadata("klass").unwrap_or_default();
+            if klass.contains("Source") && klass.contains("Video") {
+                video_sources.push(factory.name().to_string());
             }
         }
         
         if video_sources.is_empty() {
-            log_info!("[GStreamer Camera]   ⚠️  No video source plugins found!");
+            log_info!("[GStreamer Camera]   ⚠️  No video source factories found!");
         } else {
+            log_info!("[GStreamer Camera]   Found {} video source(s):", video_sources.len());
             for source in &video_sources {
-                log_info!("[GStreamer Camera]   • {}", source);
+                log_info!("[GStreamer Camera]     • {}", source);
             }
         }
         
