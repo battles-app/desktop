@@ -1393,15 +1393,10 @@ async fn play_composite_fx(
     
     // Check if already cached
     if !local_path.exists() {
-        println!("[Composite] 📥 Downloading FX from server...");
+        println!("[Composite] 📥 Downloading FX from Nuxt proxy...");
         
-        // Use different base URL based on build mode
-        #[cfg(debug_assertions)]
-        let base_url = "https://local.battles.app:3000";
-        #[cfg(not(debug_assertions))]
-        let base_url = "https://battles.app";
-        
-        let full_url = format!("{}{}", base_url, file_url);
+        // Download from Nuxt proxy (handles authentication)
+        let full_url = format!("https://local.battles.app:3000{}", file_url);
         
         // Download asynchronously in background
         let local_path_clone = local_path.clone();
@@ -1898,30 +1893,13 @@ async fn streamdeck_update_layout(
 
 #[command]
 async fn streamdeck_set_button_state(fx_id: String, is_playing: bool) -> Result<(), String> {
-    println!("[Stream Deck Command] 📥 streamdeck_set_button_state called");
-    println!("[Stream Deck Command]    → fx_id: {}", fx_id);
-    println!("[Stream Deck Command]    → is_playing: {}", is_playing);
-    
     let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
-        println!("[Stream Deck Command] ✅ Manager found, calling set_button_state...");
-        match manager.set_button_state(&fx_id, is_playing) {
-            Ok(_) => {
-                println!("[Stream Deck Command] ✅ Button state updated successfully: {} -> {}", 
-                    fx_id, if is_playing { "PLAYING (GREEN)" } else { "STOPPED (NO BORDER)" });
-                Ok(())
-            }
-            Err(e) => {
-                println!("[Stream Deck Command] ❌ Failed to update button state: {}", e);
-                Err(e)
-            }
-        }
-    } else {
-        let err_msg = "Stream Deck manager not initialized".to_string();
-        println!("[Stream Deck Command] ❌ {}", err_msg);
-        Err(err_msg)
+        manager.set_button_state(&fx_id, is_playing)?;
     }
+    
+    Ok(())
 }
 
 #[command]
@@ -1979,25 +1957,6 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
         }
         println!("[Stream Deck Watcher] === END DIAGNOSTICS ===");
         
-        // INITIALIZE MANAGER (create it if not exists)
-        println!("[Stream Deck Watcher] 🔧 Initializing Stream Deck manager...");
-        {
-            let mut manager_lock = STREAMDECK_MANAGER.lock();
-            if manager_lock.is_none() {
-                match StreamDeckManager::new() {
-                    Ok(manager) => {
-                        println!("[Stream Deck Watcher] ✅ Manager created successfully");
-                        *manager_lock = Some(manager);
-                    }
-                    Err(e) => {
-                        println!("[Stream Deck Watcher] ❌ Failed to create manager: {}", e);
-                    }
-                }
-            } else {
-                println!("[Stream Deck Watcher] ℹ️ Manager already exists");
-            }
-        }
-        
         // Try to connect immediately if device was found
         let devices_found = initial_diagnostics.devices_found;
         
@@ -2005,9 +1964,9 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
         let _ = app.emit("streamdeck://diagnostics", initial_diagnostics);
         
         if devices_found > 0 {
-            println!("[Stream Deck Watcher] 🔌 Attempting initial connection...");
             let mut manager_lock = STREAMDECK_MANAGER.lock();
             if let Some(ref mut manager) = *manager_lock {
+                println!("[Stream Deck Watcher] Attempting initial connection...");
                 match manager.connect() {
                     Ok(info) => {
                         println!("[Stream Deck Watcher] ✅ Initial connection successful: {}", info);
@@ -2017,137 +1976,11 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                         println!("[Stream Deck Watcher] ❌ Initial connection failed: {}", e);
                     }
                 }
-            } else {
-                println!("[Stream Deck Watcher] ❌ Manager not initialized after creation attempt!");
             }
-        } else {
-            println!("[Stream Deck Watcher] ⚠️ No devices found, will wait for device connection...");
         }
         
-        // Spawn animation thread to keep loading animation looping
-        std::thread::spawn(move || {
-            println!("[Stream Deck Animation Thread] 🎬 Starting loading animation loop...");
-            let mut frame_counter = 0usize;
-            
-            loop {
-                let should_animate = {
-                    let manager_lock = STREAMDECK_MANAGER.lock();
-                    manager_lock.as_ref()
-                        .map(|m| m.is_connected() && m.is_loading_animation_active())
-                        .unwrap_or(false)
-                };
-                
-                if should_animate {
-                    let start_time = std::time::Instant::now();
-                    
-                    let mut manager_lock = STREAMDECK_MANAGER.lock();
-                    if let Some(ref mut manager) = *manager_lock {
-                        let _ = manager.continue_loading_background(frame_counter);
-                        frame_counter = frame_counter.wrapping_add(1);
-                    }
-                    drop(manager_lock); // Release lock immediately
-                    
-                    let elapsed = start_time.elapsed();
-                    
-                    // Log if rendering is slow (first 10 frames only)
-                    if frame_counter < 10 {
-                        println!("[Animation] Frame {} rendered in {:?}", frame_counter, elapsed);
-                    }
-                    
-                    // Sleep for remaining time to hit 166 FPS (~6ms target)
-                    let target_frame_time = std::time::Duration::from_millis(6);
-                    if elapsed < target_frame_time {
-                        std::thread::sleep(target_frame_time - elapsed);
-                    }
-                } else {
-                    // Not animating, sleep longer
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }
-        });
-        
-        // Spawn a dedicated BLOCKING thread for real-time button event detection
-        // This is much more efficient than polling - it waits for actual hardware events
-        let app_for_button_thread = app.clone();
-        std::thread::spawn(move || {
-            println!("[Stream Deck Button Thread] 🎮 Starting real-time button event listener...");
-            
-            loop {
-                // Wait for button events (blocking read with 1 second timeout for connection checks)
-                let button_events = {
-                    let mut manager_lock = STREAMDECK_MANAGER.lock();
-                    if let Some(ref mut manager) = *manager_lock {
-                        if manager.is_connected() {
-                            manager.read_button_presses()
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    }
-                };
-                
-                // Check if we got any events
-                let has_events = !button_events.is_empty();
-                
-                // Process any button presses
-                for button_idx in button_events {
-                    println!("[Stream Deck Button Thread] 🔘 Button {} pressed - processing...", button_idx);
-                    
-                    // Handle button press and get FX info
-                    let event_data = {
-                        let mut manager_lock = STREAMDECK_MANAGER.lock();
-                        if let Some(ref mut manager) = *manager_lock {
-                            manager.handle_button_press(button_idx)
-                        } else {
-                            None
-                        }
-                    };
-                    
-                    if let Some((fx_id, is_playing)) = event_data {
-                        println!("[Stream Deck Button Thread] 🎮 Button {} toggled FX '{}' to {}", 
-                            button_idx, fx_id, if is_playing { "PLAYING ▶" } else { "STOPPED ⏹" });
-                        
-                        // Emit event to frontend with FX ID and new state
-                        #[derive(Clone, serde::Serialize)]
-                        struct ButtonPressEvent {
-                            fx_id: String,
-                            is_playing: bool,
-                            button_idx: u8,
-                        }
-                        
-                        let event = ButtonPressEvent {
-                            fx_id: fx_id.clone(),
-                            is_playing,
-                            button_idx,
-                        };
-                        
-                        println!("[Stream Deck Button Thread] 📤 Emitting event to frontend: streamdeck://button_press");
-                        println!("[Stream Deck Button Thread]    → fx_id: {}, is_playing: {}, button_idx: {}", 
-                            event.fx_id, event.is_playing, event.button_idx);
-                        
-                        if let Err(e) = app_for_button_thread.emit("streamdeck://button_press", event) {
-                            println!("[Stream Deck Button Thread] ❌ Failed to emit event: {}", e);
-                        } else {
-                            println!("[Stream Deck Button Thread] ✅ Event emitted successfully");
-                        }
-                    } else {
-                        println!("[Stream Deck Button Thread] ⚠️ Button {} press returned no FX info (empty slot or control button)", button_idx);
-                    }
-                }
-                
-                // Small sleep to avoid tight loop if disconnected
-                if !has_events {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-            }
-        });
-        
-        // Keep the async watcher for connection monitoring only (every 2 seconds)
         let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let mut was_connected = false;
-        
-        println!("[Stream Deck Watcher] 🔍 Starting connection monitor (2s interval)...");
         
         loop {
             check_interval.tick().await;
@@ -2176,6 +2009,37 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                         if let Ok(info) = manager.connect() {
                             println!("[Stream Deck Watcher] ✅ Reconnected: {}", info);
                             let _ = app.emit("streamdeck://connected", ());
+                        }
+                    }
+                }
+            }
+            
+            // Read button presses if connected
+            if is_connected {
+                let mut manager_lock = STREAMDECK_MANAGER.lock();
+                if let Some(ref mut manager) = *manager_lock {
+                    let pressed_buttons = manager.read_button_presses();
+                    
+                    for button_idx in pressed_buttons {
+                        println!("[Stream Deck Watcher] 🔘 Button {} pressed", button_idx);
+                        
+                        // Handle button press and get FX info
+                        if let Some((fx_id, is_playing)) = manager.handle_button_press(button_idx) {
+                            println!("[Stream Deck Watcher] 🎮 Toggled {} to {}", fx_id, if is_playing { "PLAYING" } else { "STOPPED" });
+                            
+                            // Emit event to frontend with FX ID and new state
+                            #[derive(Clone, serde::Serialize)]
+                            struct ButtonPressEvent {
+                                fx_id: String,
+                                is_playing: bool,
+                                button_idx: u8,
+                            }
+                            
+                            let _ = app.emit("streamdeck://button_press", ButtonPressEvent {
+                                fx_id,
+                                is_playing,
+                                button_idx,
+                            });
                         }
                     }
                 }
