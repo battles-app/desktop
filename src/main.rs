@@ -1324,6 +1324,126 @@ async fn stop_composite_fx() -> Result<(), String> {
     Ok(())
 }
 
+#[command]
+async fn download_and_cache_video_loop(
+    file_url: String,
+    filename: String,
+    file_type: String // "video" or "thumbnail"
+) -> Result<String, String> {
+    println!("[VideoLoop] 📥 Caching {} ({})...", filename, file_type);
+    
+    // Clean filename for caching
+    let clean_filename = filename
+        .replace("%20", "_")
+        .replace("/", "_")
+        .replace("\\", "_");
+    
+    // Create separate directories for videos and thumbnails
+    let cache_subdir = if file_type == "thumbnail" {
+        "battles_loop_thumbnails"
+    } else {
+        "battles_loop_videos"
+    };
+    
+    let cache_dir = std::env::temp_dir().join(cache_subdir);
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("Failed to create cache directory: {}", e))?;
+    
+    let local_path = cache_dir.join(&clean_filename);
+    
+    // Check if already cached
+    if local_path.exists() {
+        println!("[VideoLoop] ⚡ Using existing cache for {}", clean_filename);
+        return Ok(local_path.to_string_lossy().to_string());
+    }
+    
+    // Download from Directus (full URL)
+    println!("[VideoLoop] 📥 Downloading from: {}", file_url);
+    
+    let local_path_clone = local_path.clone();
+    let file_url_clone = file_url.clone();
+    
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        
+        let client = reqwest::blocking::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(60)) // Longer timeout for videos
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        
+        let response = client
+            .get(&file_url_clone)
+            .send()
+            .map_err(|e| format!("Failed to download: {}", e))?;
+        
+        if !response.status().is_success() {
+            return Err(format!("HTTP error: {}", response.status()));
+        }
+        
+        let bytes = response.bytes()
+            .map_err(|e| format!("Failed to read response: {}", e))?;
+        
+        println!("[VideoLoop] 💾 Writing {} bytes to cache...", bytes.len());
+        let mut file = std::fs::File::create(&local_path_clone)
+            .map_err(|e| format!("Failed to create file: {}", e))?;
+        file.write_all(&bytes)
+            .map_err(|e| format!("Failed to write file: {}", e))?;
+        
+        Ok::<(), String>(())
+    }).await.map_err(|e| format!("Download task failed: {}", e))??;
+    
+    println!("[VideoLoop] ✅ Cached {} successfully", clean_filename);
+    Ok(local_path.to_string_lossy().to_string())
+}
+
+#[command]
+async fn get_cached_video_loop_path(
+    filename: String,
+    file_type: String
+) -> Result<Option<String>, String> {
+    let clean_filename = filename
+        .replace("%20", "_")
+        .replace("/", "_")
+        .replace("\\", "_");
+    
+    let cache_subdir = if file_type == "thumbnail" {
+        "battles_loop_thumbnails"
+    } else {
+        "battles_loop_videos"
+    };
+    
+    let cache_dir = std::env::temp_dir().join(cache_subdir);
+    let local_path = cache_dir.join(&clean_filename);
+    
+    if local_path.exists() {
+        Ok(Some(local_path.to_string_lossy().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[command]
+async fn clear_video_loop_cache() -> Result<(), String> {
+    println!("[VideoLoop] 🧹 Clearing video loop cache...");
+    
+    let video_cache = std::env::temp_dir().join("battles_loop_videos");
+    let thumb_cache = std::env::temp_dir().join("battles_loop_thumbnails");
+    
+    if video_cache.exists() {
+        std::fs::remove_dir_all(&video_cache)
+            .map_err(|e| format!("Failed to clear video cache: {}", e))?;
+    }
+    
+    if thumb_cache.exists() {
+        std::fs::remove_dir_all(&thumb_cache)
+            .map_err(|e| format!("Failed to clear thumbnail cache: {}", e))?;
+    }
+    
+    println!("[VideoLoop] ✅ Cache cleared");
+    Ok(())
+}
+
 // OLD NOKHWA CODE - KEEPING FOR REFERENCE (DELETE LATER)
 /*
     std::thread::spawn(move || {
@@ -1963,6 +2083,9 @@ fn main() {
             stop_composite_output,
             play_composite_fx,
             stop_composite_fx,
+            download_and_cache_video_loop,
+            get_cached_video_loop_path,
+            clear_video_loop_cache,
             initialize_virtual_camera,
             start_virtual_camera,
             stop_virtual_camera,
