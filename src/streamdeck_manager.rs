@@ -1186,7 +1186,6 @@ impl StreamDeckManager {
                         device.set_button_image(idx, image)
                             .map_err(|e| format!("Failed to set button image: {}", e))?;
                         device.flush().map_err(|e| format!("Failed to flush: {}", e))?;
-                        println!("[Stream Deck] 🔄 Refreshed button {} ({}) with cached image", idx, fx_button.name);
                     }
                 }
             }
