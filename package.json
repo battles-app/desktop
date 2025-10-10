@@ -26,6 +26,7 @@
     "generate-icons": "node generate-icons.js"
   },
   "dependencies": {
+    "@directus/sdk": "^20.1.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-process": "^2.3.0",
     "@tauri-apps/plugin-updater": "^2.9.0",
