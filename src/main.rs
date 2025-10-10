@@ -527,7 +527,6 @@ async fn start_realtime_capture(app: tauri::AppHandle) -> Result<(), String> {
             };
 
             if !should_continue {
-                println!("Real-time background updates stopped - modal closed");
                 break;
             }
 
@@ -671,20 +670,11 @@ async fn create_monitor_window(
         }
     }
 
-    // Create a borderless fullscreen window on the selected monitor
-    println!("Creating borderless fullscreen window");
-    println!("Monitor window URL: {}", url);
-    println!("Window configuration: {}x{} at ({}, {}), always_on_top=true, decorations=false",
-             logical_width, logical_height, logical_x, logical_y);
-
     // Parse URL safely
     let parsed_url = url.parse()
         .map_err(|e| format!("Failed to parse URL '{}': {}", url, e))?;
     
-    println!("Successfully parsed URL");
-
     // Use WebviewWindowBuilder which supports URL in Tauri v2
-    println!("🔨 Building WebviewWindow with label 'tv-monitor'...");
     let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(parsed_url))
         .title("TV Monitor - Battles.app")
         .inner_size(logical_width, logical_height)
@@ -696,117 +686,61 @@ async fn create_monitor_window(
         .fullscreen(false)   // Use borderless window (not true fullscreen)
         .skip_taskbar(false) // Show in taskbar for easy access
         .build()
-        .map_err(|e| {
-            let error_msg = format!("❌ Failed to build monitor window: {}", e);
-            println!("{}", error_msg);
-            error_msg
-        })?;
-    
-    println!("✅ WebviewWindow build() completed successfully");
+        .map_err(|e| format!("Failed to build monitor window: {}", e))?;
     
     // CRITICAL: Wait for window to be registered in Tauri's window manager
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     
     // Verify the window was actually created and registered
-    match app.get_webview_window("tv-monitor") {
-        Some(_) => println!("✅ Window VERIFIED in app.get_webview_window()"),
-        None => {
-            let err = "❌ CRITICAL: Window was built but NOT found in app.get_webview_window()! This is a Tauri registration issue.";
-            println!("{}", err);
-            return Err(err.to_string());
-        }
+    if app.get_webview_window("tv-monitor").is_none() {
+        return Err("Window was built but not found in app.get_webview_window()".to_string());
     }
-    
-    println!("✅ Window object created and verified");
 
     // Listen for window close events to notify the main window
     let app_handle = app.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
-            println!("TV monitor window was closed by user");
             // Emit event to notify main window that TV monitor was closed
             let _ = app_handle.emit("tv-monitor-closed", ());
         }
     });
 
     // Window was created with visible(true), now just ensure it's on top and focused
-    println!("🎯 Configuring window visibility and focus...");
-    
     // Verify initial visibility
-    match window.is_visible() {
-        Ok(true) => println!("✅ Window is already visible (as expected)"),
-        Ok(false) => {
-            println!("⚠️  Window reports as NOT visible even though created with visible(true)!");
-            println!("    Calling show() explicitly...");
-            window.show().map_err(|e| format!("Failed to show window: {}", e))?;
-        }
-        Err(e) => println!("⚠️  Could not check visibility: {}", e)
+    if let Ok(false) = window.is_visible() {
+        window.show().map_err(|e| format!("Failed to show window: {}", e))?;
     }
     
     // Unminimize if somehow minimized
     if let Ok(is_minimized) = window.is_minimized() {
         if is_minimized {
-            println!("⚠️  Window is minimized, unminimizing...");
             window.unminimize().map_err(|e| format!("Failed to unminimize: {}", e))?;
         }
     }
     
     // Set focus to bring window to front
-    println!("🎯 Setting window focus...");
-    window.set_focus()
-        .map_err(|e| {
-            let error_msg = format!("Failed to focus window: {}", e);
-            println!("❌ {}", error_msg);
-            error_msg
-        })?;
-    println!("✅ Window focused");
+    window.set_focus().map_err(|e| format!("Failed to focus window: {}", e))?;
     
     // Final visibility check
-    match window.is_visible() {
-        Ok(true) => println!("✅ Final check: Window IS visible"),
-        Ok(false) => {
-            println!("❌ CRITICAL: Window still reports as NOT visible!");
-            println!("   This means the window exists but Tauri thinks it's hidden.");
-            println!("   Attempting one more show() call...");
-            window.show().map_err(|e| format!("Failed to show window (final): {}", e))?;
-        }
-        Err(e) => println!("⚠️  Could not check final visibility: {}", e)
+    if let Ok(false) = window.is_visible() {
+        window.show().map_err(|e| format!("Failed to show window (final): {}", e))?;
     }
 
-    println!("✅ Monitor window created and shown successfully!");
-    println!("   Monitor: {}", monitor_index);
-    println!("   Position: ({}, {})", logical_x, logical_y);
-    println!("   Size: {}x{}", logical_width, logical_height);
-    println!("   URL: {}", url);
-    println!("   Always on top: true");
-    println!("   Decorations: false (borderless)");
-    println!("   ℹ️  If you don't see the window, check monitor {} (it should be fullscreen there)", monitor_index);
     Ok(())
 }
 
 // Create regular window (1080x640, resizable, movable, center-right position)
 #[command]
 async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    println!("Creating regular window: 1080x640 at center-right position with direct URL");
-
     // Close any existing TV monitor window first (Tauri v2 API)
     if let Some(existing_window) = app.get_webview_window("tv-monitor") {
-        println!("⚠️  Found existing TV monitor window, destroying before creating regular window...");
-        
-        match existing_window.close() {
-            Ok(_) => println!("✅ Window close() called"),
-            Err(e) => println!("⚠️  Window close() failed: {}", e),
-        }
-        
+        let _ = existing_window.close();
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         
         if let Some(still_exists) = app.get_webview_window("tv-monitor") {
-            println!("⚠️  Window still exists, forcing destroy()...");
             let _ = still_exists.destroy();
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
-        
-        println!("✅ Old window cleanup complete");
     }
 
     // Get the primary monitor for positioning (first monitor is typically primary)
@@ -820,9 +754,6 @@ async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(),
     let monitor_pos = monitor.position();
     let monitor_size = monitor.size();
     let scale_factor = monitor.scale_factor();
-
-    println!("Primary monitor: position=({}, {}), size={}x{}, scale={}",
-             monitor_pos.x, monitor_pos.y, monitor_size.width, monitor_size.height, scale_factor);
 
     // Window dimensions in logical pixels
     let window_width = 1080.0;
@@ -839,10 +770,6 @@ async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(),
     let x = logical_monitor_x + logical_monitor_width - window_width;
     // Center vertically
     let y = logical_monitor_y + (logical_monitor_height - window_height) / 2.0;
-
-    println!("Logical monitor: {}x{} at ({}, {}), positioning window at ({}, {})",
-             logical_monitor_width, logical_monitor_height, logical_monitor_x, logical_monitor_y, x, y);
-    println!("Regular window URL: {}", url);
 
     // Create regular window with title bar, resizable, movable
     // Pass authenticated URL directly - no loading page needed
