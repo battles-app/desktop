@@ -798,36 +798,51 @@ impl GStreamerComposite {
         
         // Create simple pipeline - use camera if available, otherwise use test pattern
         let pipeline_str = if has_camera && (!camera_device_id.is_empty()) {
-            // Use camera with DirectShow (Windows)
-            // Use device-name property which accepts the camera's display name
+            // Use Media Foundation video source (more reliable than DirectShow on modern Windows)
+            // camera_device_id contains the device path from enumeration
+            println!("[Composite] 🎥 Attempting to use camera with device path: '{}'", camera_device_id);
+            
+            // Check if this is a device path (starts with \\?) or a device name
+            let (source_element, device_property) = if camera_device_id.starts_with("\\\\?") {
+                // It's a device path - use mfvideosrc with device-path
+                ("mfvideosrc", format!("device-path=\"{}\"", camera_device_id))
+            } else if camera_device_id.starts_with("@device:") {
+                // It's a Media Foundation device path (like NVIDIA Broadcast)
+                ("mfvideosrc", format!("device-path=\"{}\"", camera_device_id))
+            } else {
+                // Fallback to DirectShow with device name
+                ("dshowvideosrc", format!("device-name=\"{}\"", camera_device_id))
+            };
+            
+            println!("[Composite] 📹 Using {} with {}", source_element, device_property);
+            
+            // Let camera negotiate its native format, then convert to RGBA
             // Add videoflip for rotation support
             // Output RGBA for direct GPU texture upload (no JPEG encoding!)
             if flip_method == 0 {
-                // No rotation needed
+                // No rotation needed - simplified pipeline for better compatibility
                 format!(
-                    "dshowvideosrc device-name=\"{}\" ! \
-                     queue leaky=downstream max-size-buffers=3 ! \
+                    "{} {} ! \
                      videoconvert ! \
                      videoscale ! \
                      video/x-raw,format=RGBA,width={},height={} ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
                      appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                    camera_device_id, width, height
+                    source_element, device_property, width, height
                 )
             } else {
                 // Apply rotation with videoflip (use swapped dimensions if needed)
                 format!(
-                    "dshowvideosrc device-name=\"{}\" ! \
-                     queue leaky=downstream max-size-buffers=3 ! \
+                    "{} {} ! \
                      videoconvert ! \
                      videoscale ! \
                      video/x-raw,width={},height={} ! \
                      videoflip method={} ! \
                      videoconvert ! \
                      video/x-raw,format=RGBA ! \
-                     queue leaky=downstream max-size-buffers=2 ! \
+                     queue leaky=downstream max-size-buffers=3 ! \
                      appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                    camera_device_id, pre_rotation_width, pre_rotation_height, flip_method
+                    source_element, device_property, pre_rotation_width, pre_rotation_height, flip_method
                 )
             }
         } else {
@@ -843,17 +858,45 @@ impl GStreamerComposite {
         println!("[Composite] Creating pipeline: {}", pipeline_str);
 
         // Create pipeline
-        let pipeline = gst::parse::launch(&pipeline_str)
-            .map_err(|e| format!("Failed to create pipeline: {}", e))?
-            .dynamic_cast::<Pipeline>()
-            .map_err(|_| "Failed to cast to Pipeline".to_string())?;
+        let pipeline = match gst::parse::launch(&pipeline_str) {
+            Ok(p) => p,
+            Err(e) => {
+                println!("[Composite] ❌ Failed to parse pipeline string: {}", e);
+                return Err(format!("Failed to parse pipeline: {}", e));
+            }
+        };
+        
+        let pipeline = match pipeline.dynamic_cast::<Pipeline>() {
+            Ok(p) => p,
+            Err(_) => {
+                println!("[Composite] ❌ Failed to cast to Pipeline");
+                return Err("Failed to cast to Pipeline".to_string());
+            }
+        };
+        
+        println!("[Composite] ✅ Pipeline created successfully");
 
         // Set up frame callback BEFORE starting pipeline
-        let appsink = pipeline
-            .by_name("output")
-            .ok_or("Failed to get output appsink")?
-            .dynamic_cast::<AppSink>()
-            .map_err(|_| "Failed to cast to AppSink")?;
+        let appsink = match pipeline.by_name("output") {
+            Some(element) => element,
+            None => {
+                println!("[Composite] ❌ Failed to find appsink element 'output' in pipeline");
+                // Clean up pipeline before returning
+                let _ = pipeline.set_state(gst::State::Null);
+                return Err("Failed to get output appsink - element not found in pipeline".to_string());
+            }
+        };
+        
+        let appsink = match appsink.dynamic_cast::<AppSink>() {
+            Ok(sink) => sink,
+            Err(_) => {
+                println!("[Composite] ❌ Failed to cast output element to AppSink");
+                let _ = pipeline.set_state(gst::State::Null);
+                return Err("Failed to cast to AppSink".to_string());
+            }
+        };
+        
+        println!("[Composite] ✅ AppSink element found and configured");
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();

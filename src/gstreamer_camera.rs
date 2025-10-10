@@ -122,35 +122,45 @@ impl GStreamerCamera {
             println!("[GStreamer] Found {} potential video sources", devices.len());
             
             let mut device_index = 0;
+            let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+            
             // Enumerate ALL video sources (including virtual cameras, NDI, etc.)
             for device in devices.iter() {
                 let display_name = device.display_name();
                 let device_class = device.device_class();
                 
-                println!("[GStreamer] 🔍 Examining device: {} (class: {})", display_name, device_class);
-                
                 // Check if device has valid caps (indicates it's actually working)
                 if let Some(device_caps) = device.caps() {
                     if device_caps.is_empty() {
-                        println!("[GStreamer]   ⚠️ Skipping {} (empty capabilities)", display_name);
-                        continue;
+                        continue; // Skip devices with empty capabilities silently
                     }
                     
-                    println!("[GStreamer]   ✅ Has valid capabilities");
+                    // Get device path for deduplication
+                    let device_path = device.properties()
+                        .and_then(|props| props.get::<String>("device.path").ok());
                     
-                    // Log device properties for debugging
-                    if let Some(props) = device.properties() {
-                        println!("[GStreamer]   📋 Properties:");
-                        if let Ok(path) = props.get::<String>("device.path") {
-                            println!("[GStreamer]      device.path: {}", path);
+                    let device_api = device.properties()
+                        .and_then(|props| props.get::<String>("device.api").ok());
+                    
+                    // Deduplicate devices by path
+                    // Prefer Media Foundation devices over DirectShow
+                    if let Some(ref path) = device_path {
+                        if seen_paths.contains(path) {
+                            // Skip duplicate device
+                            continue;
                         }
-                        if let Ok(api) = props.get::<String>("device.api") {
-                            println!("[GStreamer]      device.api: {}", api);
-                        }
-                        if let Ok(idx) = props.get::<u32>("device.index") {
-                            println!("[GStreamer]      device.index: {}", idx);
+                        seen_paths.insert(path.clone());
+                    } else if device_api.as_deref() != Some("mediafoundation") {
+                        // If no path and not Media Foundation, it might be a duplicate from DirectShow
+                        // Check if we already have a device with the same name
+                        if cameras.iter().any(|c| c.name == display_name.to_string()) {
+                            continue; // Skip duplicate
                         }
                     }
+                    
+                    println!("[GStreamer] 🔍 Found: {} ({})", 
+                             display_name, 
+                             device_api.as_deref().unwrap_or("unknown"));
                     
                     // Use the display name as the ID (works for DirectShow, NDI, etc.)
                     let device_name = display_name.to_string();
@@ -160,19 +170,15 @@ impl GStreamerCamera {
                         .and_then(|props| props.get::<u32>("device.index").ok())
                         .unwrap_or(device_index);
 
-                    // Include ALL devices with valid capabilities
-                    // This includes: physical cameras, virtual cameras, NDI sources, capture cards
-                    println!("[GStreamer]   ✅ Adding: {} (index: {}, enum-index: {})",
-                             device_name, device_idx, device_index);
-
+                    // Store device path for mfvideosrc, fallback to name for dshowvideosrc
+                    let device_id = device_path.clone().unwrap_or_else(|| device_name.clone());
+                    
                     cameras.push(CameraInfo {
-                        id: device_name.clone(), // Use device name for identification
+                        id: device_id, // Use device path for mfvideosrc
                         name: device_name,
-                        description: format!("{} (index: {})", device_class, device_idx),
+                        description: format!("{} ({})", device_api.as_deref().unwrap_or("unknown"), device_class),
                     });
                     device_index += 1;
-                } else {
-                    println!("[GStreamer]   ⚠️ Skipping {} (no capabilities)", display_name);
                 }
             }
             
@@ -186,47 +192,15 @@ impl GStreamerCamera {
             if let Some(_ndi_feature) = registry.find_feature("ndisrc", gst::ElementFactory::static_type()) {
                 println!("[GStreamer]   NDI plugin is available, trying to enumerate NDI sources...");
                 
-                // Try to create an ndisrc element to test if NDI is working
-                match gst::ElementFactory::make("ndisrc").name("test_ndi").build() {
-                    Ok(ndi_element) => {
-                        println!("[GStreamer]   ✅ NDI element created successfully");
-                        
-                        // Try to get the "device-list" property if available
-                        // Note: This is a simplified check - actual NDI enumeration might require
-                        // running a discovery process or checking network
-                        // The property() method returns the value directly, not a Result
-                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            ndi_element.property::<String>("device-list")
-                        })) {
-                            Ok(device_list) if !device_list.is_empty() => {
-                                println!("[GStreamer]   📡 NDI device list: {}", device_list);
-                                
-                                // Add a generic NDI source option
-                                cameras.push(CameraInfo {
-                                    id: "NDI Source".to_string(),
-                                    name: "NDI Source".to_string(),
-                                    description: "NewTek NDI Network Device".to_string(),
-                                });
-                            }
-                            Ok(_) => {
-                                println!("[GStreamer]   ℹ️ No NDI sources found on network");
-                            }
-                            Err(_) => {
-                                // If property doesn't exist or panics, add a generic NDI option anyway
-                                println!("[GStreamer]   ℹ️ NDI element exists but device list unavailable");
-                                println!("[GStreamer]   Adding generic NDI source option...");
-                                cameras.push(CameraInfo {
-                                    id: "NDI Source".to_string(),
-                                    name: "NDI Source (Manual Configuration)".to_string(),
-                                    description: "NewTek NDI Network Device".to_string(),
-                                });
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("[GStreamer]   ⚠️ Failed to create NDI element: {}", e);
-                    }
-                }
+                // Add a generic NDI source option if plugin is available
+                // Note: NDI source enumeration requires network discovery which is complex
+                // For now, we just add a generic option that users can configure
+                println!("[GStreamer]   ℹ️ Adding generic NDI source option...");
+                cameras.push(CameraInfo {
+                    id: "ndi://".to_string(), // Use ndi:// prefix to identify NDI sources
+                    name: "NDI Source (Network Device)".to_string(),
+                    description: "NewTek NDI Network Video Source".to_string(),
+                });
             } else {
                 println!("[GStreamer]   ℹ️ NDI plugin not available (install gst-plugins-bad or NDI plugin)");
             }
