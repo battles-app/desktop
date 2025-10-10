@@ -88,7 +88,7 @@
     "createUpdaterArtifacts": true,
     "resources": [
       "gstreamer-runtime/*.dll",
-      "gstreamer-runtime/gstreamer-1.0/**"
+      "gstreamer-runtime/gstreamer-1.0/**/*"
     ],
     "externalBin": []
   },
