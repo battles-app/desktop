@@ -2017,24 +2017,6 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
 }
 
 fn main() {
-    // Configure GStreamer plugin paths for bundled plugins
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            // Set GST_PLUGIN_PATH to bundled plugins directory
-            let plugin_path = exe_dir.join("gstreamer-1.0");
-            std::env::set_var("GST_PLUGIN_PATH", plugin_path.to_string_lossy().to_string());
-            
-            // Add exe directory to PATH for GStreamer DLLs
-            if let Ok(path) = std::env::var("PATH") {
-                let new_path = format!("{};{}", exe_dir.display(), path);
-                std::env::set_var("PATH", new_path);
-            }
-            
-            println!("[GStreamer] Plugin path: {}", plugin_path.display());
-            println!("[GStreamer] Exe directory: {}", exe_dir.display());
-        }
-    }
-    
     // Configure cache plugin for FX files
     let cache_config = tauri_plugin_cache::CacheConfig {
         cache_dir: Some("battles_fx_cache".into()),
@@ -2049,6 +2031,51 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_cache::init_with_config(cache_config))
         .setup(|app| {
+            // Configure GStreamer paths using Tauri v2 resource_dir API
+            #[cfg(windows)]
+            {
+                use tauri::Manager;
+                
+                if let Ok(resource_dir) = app.path().resource_dir() {
+                    println!("[GStreamer] 📁 Resource directory: {}", resource_dir.display());
+                    
+                    // GStreamer plugins subdirectory
+                    let gst_plugin_dir = resource_dir.join("gstreamer-1.0");
+                    
+                    // Set GST_PLUGIN_PATH for GStreamer to find plugins
+                    std::env::set_var("GST_PLUGIN_PATH", gst_plugin_dir.to_string_lossy().to_string());
+                    println!("[GStreamer] 🔌 Plugin path: {}", gst_plugin_dir.display());
+                    
+                    // Add resource directories to PATH so Windows can find DLLs
+                    if let Ok(mut path) = std::env::var("PATH") {
+                        // Add main resource dir (contains top-level DLLs)
+                        path = format!("{};{}", resource_dir.display(), path);
+                        
+                        // Add gstreamer-1.0 subdir (contains GStreamer plugin DLLs)
+                        path = format!("{};{}", gst_plugin_dir.display(), path);
+                        
+                        std::env::set_var("PATH", path);
+                        println!("[GStreamer] ✅ Added resource dirs to PATH for DLL discovery");
+                    }
+                } else {
+                    // Fallback to exe directory for development
+                    if let Ok(exe_path) = std::env::current_exe() {
+                        if let Some(exe_dir) = exe_path.parent() {
+                            let plugin_path = exe_dir.join("gstreamer-1.0");
+                            std::env::set_var("GST_PLUGIN_PATH", plugin_path.to_string_lossy().to_string());
+                            
+                            if let Ok(path) = std::env::var("PATH") {
+                                let new_path = format!("{};{}", exe_dir.display(), path);
+                                std::env::set_var("PATH", new_path);
+                            }
+                            
+                            println!("[GStreamer] 🔧 DEV MODE: Using exe directory");
+                            println!("[GStreamer] Plugin path: {}", plugin_path.display());
+                        }
+                    }
+                }
+            }
+            
             let app_handle = app.handle().clone();
             start_monitor_broadcast(app_handle.clone());
             

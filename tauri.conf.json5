@@ -86,10 +86,10 @@
       }
     },
     "createUpdaterArtifacts": true,
-    "resources": {
-      "target/release/*.dll": "",
-      "target/release/gstreamer-1.0/*.dll": "gstreamer-1.0/"
-    },
+    "resources": [
+      "gstreamer-runtime/*.dll",
+      "gstreamer-runtime/gstreamer-1.0/**"
+    ],
     "externalBin": []
   },
   "identifier": "app.battles.desktop",
