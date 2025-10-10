@@ -32,6 +32,11 @@ if (fs.existsSync(updaterKeyPath)) {
   console.log('✅ Loaded updater signing key');
 }
 
+// Confirm password is loaded for automated signing
+if (process.env.TAURI_KEY_PASSWORD) {
+  console.log('✅ Signing key password loaded (automated release)');
+}
+
 // Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -347,6 +352,7 @@ function buildApp() {
         NODE_ENV: 'production',
         TAURI_ENV_PRODUCTION: 'true',
         TAURI_PRIVATE_KEY: process.env.TAURI_SIGNING_PRIVATE_KEY,
+        TAURI_KEY_PASSWORD: process.env.TAURI_KEY_PASSWORD || '',
         // Ensure GStreamer is available for DLL bundling
         GSTREAMER_1_0_ROOT_MSVC_X86_64: process.env.GSTREAMER_1_0_ROOT_MSVC_X86_64 || 'E:\\gstreamer\\1.0\\msvc_x86_64'
       }
@@ -802,25 +808,8 @@ async function release() {
     console.log('');
   }
   
-  // Confirm
-  if (!process.env.CI) {
-    const readline = await import('readline');
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
-    });
-    
-    await new Promise((resolve) => {
-      rl.question(`${colors.yellow}Continue with release v${newVersion}? (y/N): ${colors.reset}`, (answer) => {
-        rl.close();
-        if (answer.toLowerCase() !== 'y') {
-          log.info('Release cancelled');
-          process.exit(0);
-        }
-        resolve();
-      });
-    });
-  }
+  // Auto-confirm (no manual intervention needed)
+  log.info(`🚀 Proceeding with automated release v${newVersion}`);
   
   // Update versions
   log.header('Updating Versions');
