@@ -240,9 +240,6 @@ fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
             let scale_factor = m.scale_factor();
             let name = m.name().cloned();
 
-            println!("Monitor {}: name={:?}, size={}x{}, position=({}, {}), scale={}",
-                     i, name, size.width, size.height, position.x, position.y, scale_factor);
-
             // Get screenshot from cache (captured in background)
             let screenshot = {
                 if let Ok(cache) = MONITOR_SCREENSHOTS.lock() {
@@ -307,16 +304,12 @@ async fn set_modal_open(is_open: bool) {
 // Start GStreamer screen capture for monitor previews (NEW - replaces screenshots)
 #[command]
 async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
-    println!("[Monitor Preview] Starting GStreamer screen captures...");
-    
     // Stop any existing captures first
     stop_monitor_previews().await?;
     
     // Get available monitors
     let monitors = app.available_monitors().map_err(|e| format!("Failed to get monitors: {}", e))?;
     let monitor_count = monitors.len();
-    
-    println!("[Monitor Preview] Found {} monitors", monitor_count);
     
     // Initialize storage
     {
@@ -336,8 +329,7 @@ async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
         let position = monitor.position();
         let size = monitor.size();
         
-        println!("[Monitor Preview {}] Starting capture: {}x{} at ({}, {})", 
-            index, size.width, size.height, position.x, position.y);
+        // Starting capture for monitor {index}
         
         // Create screen capture
         let mut capture = ScreenCaptureMonitor::new(index)
@@ -365,14 +357,12 @@ async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
         start_monitor_preview_websocket(index, port).await;
     }
     
-    println!("[Monitor Preview] ✅ All {} monitors started", monitor_count);
     Ok(())
 }
 
 // Stop all monitor preview captures
 #[command]
 async fn stop_monitor_previews() -> Result<(), String> {
-    println!("[Monitor Preview] Stopping all captures...");
     
     let mut captures = SCREEN_CAPTURES.write();
     let mut senders = SCREEN_CAPTURE_SENDERS.write();
@@ -387,7 +377,6 @@ async fn stop_monitor_previews() -> Result<(), String> {
     captures.clear();
     senders.clear();
     
-    println!("[Monitor Preview] ✅ All captures stopped");
     Ok(())
 }
 
@@ -398,12 +387,10 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
-                println!("[Monitor Preview {}] ❌ Failed to bind to {}: {}", monitor_index, addr, e);
+                eprintln!("[Monitor Preview {}] Failed to bind to {}: {}", monitor_index, addr, e);
                 return;
             }
         };
-        
-        println!("[Monitor Preview {}] ✅ WebSocket server listening on {}", monitor_index, addr);
         
         while let Ok((stream, _)) = listener.accept().await {
             // Get sender for this monitor
@@ -411,23 +398,15 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
                 let senders = SCREEN_CAPTURE_SENDERS.read();
                 match &senders.get(monitor_index) {
                     Some(Some(sender)) => sender.clone(),
-                    _ => {
-                        println!("[Monitor Preview {}] ❌ No sender available", monitor_index);
-                        continue;
-                    }
+                    _ => continue,
                 }
             };
             
             tokio::spawn(async move {
                 let ws_stream = match accept_async(stream).await {
                     Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Monitor Preview {}] Error during handshake: {}", monitor_index, e);
-                        return;
-                    }
+                    Err(_) => return,
                 };
-                
-                println!("[Monitor Preview {}] ✅ Client connected", monitor_index);
                 
                 use tokio_tungstenite::tungstenite::protocol::Message;
                 let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -455,35 +434,27 @@ async fn start_monitor_preview_websocket(monitor_index: usize, port: u16) {
                                         
                                         // Send frame
                                         if ws_sender.send(Message::Binary(frame_data)).await.is_err() {
-                                            println!("[Monitor Preview {}] ❌ Client disconnected after {} frames", monitor_index, frame_count);
                                             break;
                                         }
                                     }
                                     // Else: Drop frame silently (preview doesn't need full framerate)
                                 },
-                                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                Err(broadcast::error::RecvError::Lagged(_skipped)) => {
                                     // Should rarely happen with 60-frame buffer + rate limiting
-                                    if skipped > 10 {
-                                        println!("[Monitor Preview {}] ⚠️ Severe lag: skipped {} frames", monitor_index, skipped);
-                                    }
                                     continue;
                                 },
                                 Err(broadcast::error::RecvError::Closed) => {
-                                    println!("[Monitor Preview {}] ℹ️ Broadcast channel closed", monitor_index);
                                     break;
                                 }
                             }
                         }
                         ws_msg = ws_receiver.next() => {
                             if ws_msg.is_none() {
-                                println!("[Monitor Preview {}] 🔌 Client disconnected gracefully", monitor_index);
                                 break;
                             }
                         }
                     }
                 }
-                
-                println!("[Monitor Preview {}] 🔌 Client disconnected (sent {} frames)", monitor_index, frame_count);
             });
         }
     });

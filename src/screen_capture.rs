@@ -121,12 +121,6 @@ impl ScreenCaptureMonitor {
 
                     frame_count += 1;
 
-                    // Log every 60 frames (2 seconds at 30fps)
-                    if frame_count % 60 == 0 {
-                        println!("[Screen Capture {}] Frame {} ({} bytes)", 
-                            monitor_index, frame_count, map.len());
-                    }
-
                     // Broadcast frame to WebSocket
                     if let Some(sender) = &*frame_sender.read().unwrap() {
                         let _ = sender.send(map.as_slice().to_vec());
