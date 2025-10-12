@@ -16,6 +16,7 @@
         "decorations": true,
         "focus": true,
         "fullscreen": false,
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
         "width": 1110,
         "height": 1030,
         "hiddenTitle": false,
@@ -29,16 +30,10 @@
         "theme": "Dark",
         "title": "Battles.app",
         "titleBarStyle": "Overlay",
-        "transparent": true,
+        "transparent": false,
         "url": "https://battles.app/",
         "visible": true,
-        "windowEffects": {
-          "effects": [
-            "hudWindow",
-            "mica"
-          ],
-          "state": "active"
-        },
+        "devtools": false,
         "x": 0,
         "y": 0
       }
@@ -80,18 +75,9 @@
       "allowDowngrades": true,
       "digestAlgorithm": "sha256",
       "timestampUrl": "https://timestamp.comodoca.com",
-      "nsis": {
-        "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine",
-        "languages": ["English"],
-        "displayLanguageSelector": false
-      },
+      "nsis": null,
       "wix": {
         "language": "en-US"
-      },
-      "webviewInstallMode": {
-        "type": "downloadBootstrapper",
-        "silent": true
       }
     },
     "createUpdaterArtifacts": true,
@@ -134,5 +120,5 @@
       ]
     }
   },
-  "version": "0.0.27"
+  "version": "0.0.30"
 }
