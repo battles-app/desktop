@@ -95,15 +95,15 @@
       }
     },
     "createUpdaterArtifacts": true,
-    "resources": [
-      "gstreamer-runtime/*.dll",
-      "gstreamer-runtime/gstreamer-1.0/**/*",
-      "vcruntime140.dll",
-      "vcruntime140_1.dll",
-      "msvcp140.dll",
-      "concrt140.dll",
-      "vccorlib140.dll"
-    ],
+    "resources": {
+      "gstreamer-runtime/*.dll": "gstreamer-runtime/",
+      "gstreamer-runtime/gstreamer-1.0/**/*": "gstreamer-runtime/gstreamer-1.0/",
+      "vcruntime140.dll": "",
+      "vcruntime140_1.dll": "",
+      "msvcp140.dll": "",
+      "concrt140.dll": "",
+      "vccorlib140.dll": ""
+    },
     "externalBin": []
   },
   "identifier": "app.battles.desktop",
@@ -134,5 +134,5 @@
       ]
     }
   },
-  "version": "0.0.25"
+  "version": "0.0.27"
 }
