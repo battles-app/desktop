@@ -80,15 +80,27 @@
       "allowDowngrades": true,
       "digestAlgorithm": "sha256",
       "timestampUrl": "https://timestamp.comodoca.com",
-      "nsis": null,
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      },
       "wix": {
         "language": "en-US"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
       }
     },
     "createUpdaterArtifacts": true,
     "resources": [
       "gstreamer-runtime/*.dll",
-      "gstreamer-runtime/gstreamer-1.0/**/*"
+      "gstreamer-runtime/gstreamer-1.0/**/*",
+      "vcruntime140.dll",
+      "vcruntime140_1.dll",
+      "msvcp140.dll"
     ],
     "externalBin": []
   },
@@ -120,5 +132,5 @@
       ]
     }
   },
-  "version": "0.0.22"
+  "version": "0.0.24"
 }
