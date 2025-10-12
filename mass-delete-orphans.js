@@ -3,8 +3,8 @@
 import { createDirectus, rest, staticToken, readFiles, deleteFiles } from '@directus/sdk';
 
 // Directus configuration from MCP
-const DIRECTUS_URL = 'https://tiktok.b4battle.com';
-const ADMIN_TOKEN = 'EovADLTikaBesWVpHxZb1vy5m6GTXatL';
+const DIRECTUS_URL = 'https://server.battles.app';
+const ADMIN_TOKEN = 'AhY_g2PTZe5lyMRSzpJ_hzOy_nOBPAQB';
 
 async function getOrphanedFileIds(client) {
   console.log('📊 Fetching all files from Directus database...\n');

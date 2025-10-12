@@ -121,6 +121,9 @@ fn bundle_gstreamer_dlls() {
                "gstdirectshow.dll",        // DirectShow plugin - REQUIRED for Windows cameras
                "gstdirectsoundsrc.dll",    // DirectShow audio
                
+               // CRITICAL: Media Foundation for modern Windows cameras
+               "gstmediafoundation.dll",   // Media Foundation plugin - mfvideosrc (REQUIRED)
+               
                // CRITICAL: WASAPI for Windows audio/video devices
                "gstwasapi.dll",            // Windows Audio Session API
                
