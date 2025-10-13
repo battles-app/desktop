@@ -88,12 +88,25 @@
       "vcruntime140_1.dll": "",
       "msvcp140.dll": "",
       "concrt140.dll": "",
-      "vccorlib140.dll": ""
+      "vccorlib140.dll": "",
+      "gstreamer-runtime/gstapp-1.0-0.dll": "",
+      "gstreamer-runtime/gobject-2.0-0.dll": "",
+      "gstreamer-runtime/gstreamer-1.0-0.dll": "",
+      "gstreamer-runtime/glib-2.0-0.dll": "",
+      "gstreamer-runtime/gio-2.0-0.dll": "",
+      "gstreamer-runtime/gmodule-2.0-0.dll": "",
+      "gstreamer-runtime/gstbase-1.0-0.dll": "",
+      "gstreamer-runtime/gstvideo-1.0-0.dll": "",
+      "gstreamer-runtime/gsttag-1.0-0.dll": "",
+      "gstreamer-runtime/gstaudio-1.0-0.dll": "",
+      "gstreamer-runtime/intl-8.dll": "",
+      "gstreamer-runtime/pcre2-8-0.dll": "",
+      "gstreamer-runtime/z-1.dll": ""
     },
     "externalBin": []
   },
   "identifier": "app.battles.desktop",
-  "productName": "Battles.app Desktop",
+  "productName": "BattlesDesktop",
   "plugins": {
       "deep-link": {
       "mobile": [
@@ -120,5 +133,5 @@
       ]
     }
   },
-  "version": "0.0.30"
+  "version": "0.0.31"
 }
