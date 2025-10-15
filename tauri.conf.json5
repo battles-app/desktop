@@ -17,25 +17,30 @@
         "focus": true,
         "fullscreen": false,
         "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
-        "width": 1110,
-        "height": 1030,
+        "width": 712,
+        "height": 1286,
         "hiddenTitle": false,
         "incognito": false,
         "maxHeight": 2400,
         "maxWidth": 2560,
-        "minHeight": 720,
-        "minWidth": 800,
+        "minHeight": 400,
+        "minWidth": 312,
         "resizable": true,
         "shadow": true,
         "theme": "Dark",
         "title": "BattlesDesktop",
         "titleBarStyle": "Overlay",
-        "transparent": false,
+        "transparent": true,
         "url": "https://battles.app/",
         "visible": true,
-        "devtools": true,
-        "x": 0,
-        "y": 0
+        "center": true,
+        "windowEffects": {
+          "effects": [
+            "hudWindow",
+            "mica"
+          ],
+          "state": "active"
+        }
       }
     ],
     "withGlobalTauri": true
@@ -152,5 +157,5 @@
       ]
     }
   },
-  "version": "0.0.38"
+  "version": "0.0.39"
 }
