@@ -1,6 +1,6 @@
 [package]
 name = "battles-desktop"
-version = "0.0.39"
+version = "0.0.40"
 description = "Professional TikTok Live streaming tools with Elgato Stream Deck integration"
 authors = ["BATTLES.app™"]
 license = "BSL-1.1"
@@ -34,6 +34,7 @@ image = "0.25"
 elgato-streamdeck = "0.11.1"
 imageproc = "0.25"
 ab_glyph = "0.2"
+dirs = "5.0"
 
 # GStreamer - Professional video pipeline with static features (no pkg-config needed)
 gstreamer = { version = "0.24", features = ["v1_20"] }
