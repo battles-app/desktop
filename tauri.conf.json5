@@ -95,11 +95,6 @@
     },
     "createUpdaterArtifacts": true,
     "resources": [
-      "vcruntime140.dll",
-      "vcruntime140_1.dll",
-      "msvcp140.dll",
-      "concrt140.dll",
-      "vccorlib140.dll",
       "gstreamer-runtime"
     ],
     "externalBin": []
@@ -132,5 +127,5 @@
       ]
     }
   },
-  "version": "0.0.43"
+  "version": "0.0.44"
 }
