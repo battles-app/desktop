@@ -28,12 +28,12 @@
         "resizable": true,
         "shadow": true,
         "theme": "Dark",
-        "title": "Battles.app",
+        "title": "BattlesDesktop",
         "titleBarStyle": "Overlay",
         "transparent": false,
         "url": "https://battles.app/",
         "visible": true,
-        "devtools": false,
+        "devtools": true,
         "x": 0,
         "y": 0
       }
@@ -75,7 +75,15 @@
       "allowDowngrades": true,
       "digestAlgorithm": "sha256",
       "timestampUrl": "https://timestamp.comodoca.com",
-      "nsis": null,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      },
       "wix": {
         "language": "en-US"
       }
@@ -101,7 +109,18 @@
       "gstreamer-runtime/gstaudio-1.0-0.dll": "",
       "gstreamer-runtime/intl-8.dll": "",
       "gstreamer-runtime/pcre2-8-0.dll": "",
-      "gstreamer-runtime/z-1.dll": ""
+      "gstreamer-runtime/z-1.dll": "",
+      "gstreamer-runtime/ffi-7.dll": "",
+      "gstreamer-runtime/orc-0.4-0.dll": "",
+      "gstreamer-runtime/pixman-1-0.dll": "",
+      "gstreamer-runtime/graphene-1.0-0.dll": "",
+      "gstreamer-runtime/gstallocators-1.0-0.dll": "",
+      "gstreamer-runtime/gstcontroller-1.0-0.dll": "",
+      "gstreamer-runtime/gstgl-1.0-0.dll": "",
+      "gstreamer-runtime/gstnet-1.0-0.dll": "",
+      "gstreamer-runtime/gstpbutils-1.0-0.dll": "",
+      "gstreamer-runtime/gstrtp-1.0-0.dll": "",
+      "gstreamer-runtime/gstrtsp-1.0-0.dll": ""
     },
     "externalBin": []
   },
@@ -133,5 +152,5 @@
       ]
     }
   },
-  "version": "0.0.31"
+  "version": "0.0.38"
 }
