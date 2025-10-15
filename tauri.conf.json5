@@ -94,39 +94,14 @@
       }
     },
     "createUpdaterArtifacts": true,
-    "resources": {
-      "gstreamer-runtime/*.dll": "gstreamer-runtime/",
-      "gstreamer-runtime/gstreamer-1.0/**/*": "gstreamer-runtime/gstreamer-1.0/",
-      "vcruntime140.dll": "",
-      "vcruntime140_1.dll": "",
-      "msvcp140.dll": "",
-      "concrt140.dll": "",
-      "vccorlib140.dll": "",
-      "gstreamer-runtime/gstapp-1.0-0.dll": "",
-      "gstreamer-runtime/gobject-2.0-0.dll": "",
-      "gstreamer-runtime/gstreamer-1.0-0.dll": "",
-      "gstreamer-runtime/glib-2.0-0.dll": "",
-      "gstreamer-runtime/gio-2.0-0.dll": "",
-      "gstreamer-runtime/gmodule-2.0-0.dll": "",
-      "gstreamer-runtime/gstbase-1.0-0.dll": "",
-      "gstreamer-runtime/gstvideo-1.0-0.dll": "",
-      "gstreamer-runtime/gsttag-1.0-0.dll": "",
-      "gstreamer-runtime/gstaudio-1.0-0.dll": "",
-      "gstreamer-runtime/intl-8.dll": "",
-      "gstreamer-runtime/pcre2-8-0.dll": "",
-      "gstreamer-runtime/z-1.dll": "",
-      "gstreamer-runtime/ffi-7.dll": "",
-      "gstreamer-runtime/orc-0.4-0.dll": "",
-      "gstreamer-runtime/pixman-1-0.dll": "",
-      "gstreamer-runtime/graphene-1.0-0.dll": "",
-      "gstreamer-runtime/gstallocators-1.0-0.dll": "",
-      "gstreamer-runtime/gstcontroller-1.0-0.dll": "",
-      "gstreamer-runtime/gstgl-1.0-0.dll": "",
-      "gstreamer-runtime/gstnet-1.0-0.dll": "",
-      "gstreamer-runtime/gstpbutils-1.0-0.dll": "",
-      "gstreamer-runtime/gstrtp-1.0-0.dll": "",
-      "gstreamer-runtime/gstrtsp-1.0-0.dll": ""
-    },
+    "resources": [
+      "vcruntime140.dll",
+      "vcruntime140_1.dll",
+      "msvcp140.dll",
+      "concrt140.dll",
+      "vccorlib140.dll",
+      "gstreamer-runtime"
+    ],
     "externalBin": []
   },
   "identifier": "app.battles.desktop",
@@ -157,5 +132,5 @@
       ]
     }
   },
-  "version": "0.0.42"
+  "version": "0.0.43"
 }
