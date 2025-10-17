@@ -3,7 +3,7 @@
     windows_subsystem = "windows"
 )]
 
-use tauri::{command, Manager, Emitter};
+use tauri::{command, Manager, Emitter, menu::{MenuBuilder, MenuItem, PredefinedMenuItem, Submenu}};
 use base64::Engine;
 use std::sync::{Arc, Mutex};
 
@@ -2208,6 +2208,32 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_cache::init_with_config(cache_config))
         .setup(|app| {
+            // Build menu with Edit shortcuts to enable Copy/Paste/Delete
+            let menu = MenuBuilder::new(app)
+                .items(&[
+                    &Submenu::with_items(
+                        app,
+                        "Edit",
+                        true,
+                        &[
+                            &PredefinedMenuItem::undo(app, None)?,
+                            &PredefinedMenuItem::redo(app, None)?,
+                            &PredefinedMenuItem::separator(app)?,
+                            &PredefinedMenuItem::cut(app, None)?,
+                            &PredefinedMenuItem::copy(app, None)?,
+                            &PredefinedMenuItem::paste(app, None)?,
+                            &PredefinedMenuItem::select_all(app, None)?,
+                        ],
+                    )?,
+                ])
+                .build()?;
+            
+            // Set menu for the app
+            app.set_menu(menu)?;
+            
+            crate::file_logger::log("[Menu] ✅ Edit menu initialized with keyboard shortcuts");
+            
+
             // Configure GStreamer paths using Tauri v2 resource_dir API
             #[cfg(windows)]
             {
