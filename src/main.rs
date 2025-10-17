@@ -2208,30 +2208,34 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_cache::init_with_config(cache_config))
         .setup(|app| {
+            crate::file_logger::log("[Setup] ⚙️ Starting application setup");
+            
+            // TEMPORARILY DISABLED: Menu creation (testing heap corruption fix)
             // Build menu with Edit shortcuts to enable Copy/Paste/Delete
-            let menu = MenuBuilder::new(app)
-                .items(&[
-                    &Submenu::with_items(
-                        app,
-                        "Edit",
-                        true,
-                        &[
-                            &PredefinedMenuItem::undo(app, None)?,
-                            &PredefinedMenuItem::redo(app, None)?,
-                            &PredefinedMenuItem::separator(app)?,
-                            &PredefinedMenuItem::cut(app, None)?,
-                            &PredefinedMenuItem::copy(app, None)?,
-                            &PredefinedMenuItem::paste(app, None)?,
-                            &PredefinedMenuItem::select_all(app, None)?,
-                        ],
-                    )?,
-                ])
-                .build()?;
+            // let menu = MenuBuilder::new(app)
+            //     .items(&[
+            //         &Submenu::with_items(
+            //             app,
+            //             "Edit",
+            //             true,
+            //             &[
+            //                 &PredefinedMenuItem::undo(app, None)?,
+            //                 &PredefinedMenuItem::redo(app, None)?,
+            //                 &PredefinedMenuItem::separator(app)?,
+            //                 &PredefinedMenuItem::cut(app, None)?,
+            //                 &PredefinedMenuItem::copy(app, None)?,
+            //                 &PredefinedMenuItem::paste(app, None)?,
+            //                 &PredefinedMenuItem::select_all(app, None)?,
+            //             ],
+            //         )?,
+            //     ])
+            //     .build()?;
             
             // Set menu for the app
-            app.set_menu(menu)?;
+            // app.set_menu(menu)?;
             
-            crate::file_logger::log("[Menu] ✅ Edit menu initialized with keyboard shortcuts");
+            // crate::file_logger::log("[Menu] ✅ Edit menu initialized with keyboard shortcuts");
+            crate::file_logger::log("[Menu] ⚠️ Menu temporarily disabled for heap corruption debugging");
             
 
             // Configure GStreamer paths using Tauri v2 resource_dir API
