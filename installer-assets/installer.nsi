@@ -6,7 +6,7 @@
 # Professional Windows installer with custom branding
 
 # Installer Configuration
-!define PRODUCT_NAME "Battles.app Desktop"
+!define PRODUCT_NAME "BattlesDesktop"
 !define PRODUCT_VERSION "{{version}}"
 !define PRODUCT_PUBLISHER "BATTLES.app™"
 !define PRODUCT_WEB_SITE "https://battles.app"
@@ -20,23 +20,23 @@
 
 # MUI Settings - Modern Interface
 !define MUI_ABORTWARNING
-!define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\nsis3-install.ico"
-!define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\nsis3-uninstall.ico"
+!define MUI_ICON "{{icon_path}}"
+!define MUI_UNICON "{{icon_path}}"
 
 # Welcome page customization
-!define MUI_WELCOMEPAGE_TITLE "Welcome to Battles.app Desktop Setup"
-!define MUI_WELCOMEPAGE_TEXT "This wizard will guide you through the installation of Battles.app Desktop.$\r$\n$\r$\nPro TikTok Live Tools with Stream Deck Integration$\r$\n$\r$\n✨ Real-time FX Control$\r$\n🎮 Elgato Stream Deck Support$\r$\n🎬 Professional Streaming Tools$\r$\n🔥 GPU-Accelerated Performance$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TITLE "Welcome to BattlesDesktop Setup"
+!define MUI_WELCOMEPAGE_TEXT "This wizard will guide you through the installation of BattlesDesktop.$\r$\n$\r$\nPro TikTok Live Tools with Stream Deck Integration$\r$\n$\r$\n✨ Real-time FX Control$\r$\n🎮 Elgato Stream Deck Support$\r$\n🎬 Professional Streaming Tools$\r$\n🔥 GPU-Accelerated Performance$\r$\n$\r$\nClick Next to continue."
 
 # Finish page customization
-!define MUI_FINISHPAGE_TITLE "Battles.app Desktop Installation Complete"
-!define MUI_FINISHPAGE_TEXT "Battles.app Desktop has been successfully installed.$\r$\n$\r$\n🚀 Launch the application to get started!$\r$\n💡 Visit battles.app for support and updates.$\r$\n$\r$\nClick Finish to exit Setup."
+!define MUI_FINISHPAGE_TITLE "BattlesDesktop Installation Complete"
+!define MUI_FINISHPAGE_TEXT "BattlesDesktop has been successfully installed.$\r$\n$\r$\n🚀 Launch the application to get started!$\r$\n💡 Visit battles.app for support and updates.$\r$\n$\r$\nClick Finish to exit Setup."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\battles-desktop.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Launch Battles.app Desktop"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch BattlesDesktop"
 !define MUI_FINISHPAGE_LINK "Visit Battles.app"
 !define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_WEB_SITE}"
 
 # Directory page customization
-!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install Battles.app Desktop in the following folder.$\r$\n$\r$\nTo install in a different folder, click Browse and select another folder."
+!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install BattlesDesktop in the following folder.$\r$\n$\r$\nTo install in a different folder, click Browse and select another folder."
 
 # Pages
 !insertmacro MUI_PAGE_WELCOME
@@ -66,7 +66,7 @@ VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "Comments" "Pro TikTok Live Tools"
 VIAddVersionKey "CompanyName" "${PRODUCT_PUBLISHER}"
 VIAddVersionKey "LegalCopyright" "© 2025 BATTLES.app™"
-VIAddVersionKey "FileDescription" "Battles.app Desktop Installer"
+VIAddVersionKey "FileDescription" "BattlesDesktop Installer"
 VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"
 
 # Modern UI Configuration
@@ -89,8 +89,8 @@ Section "MainSection" SEC01
   
   # Create shortcuts
   CreateDirectory "$SMPROGRAMS\Battles.app"
-  CreateShortCut "$SMPROGRAMS\Battles.app\Battles.app Desktop.lnk" "$INSTDIR\battles-desktop.exe"
-  CreateShortCut "$DESKTOP\Battles.app Desktop.lnk" "$INSTDIR\battles-desktop.exe"
+  CreateShortCut "$SMPROGRAMS\Battles.app\BattlesDesktop.lnk" "$INSTDIR\battles-desktop.exe"
+  CreateShortCut "$DESKTOP\BattlesDesktop.lnk" "$INSTDIR\battles-desktop.exe"
   
   # Write uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -116,8 +116,8 @@ Section "Uninstall"
   RMDir /r "$INSTDIR"
   
   # Remove shortcuts
-  Delete "$SMPROGRAMS\Battles.app\Battles.app Desktop.lnk"
-  Delete "$DESKTOP\Battles.app Desktop.lnk"
+  Delete "$SMPROGRAMS\Battles.app\BattlesDesktop.lnk"
+  Delete "$DESKTOP\BattlesDesktop.lnk"
   RMDir "$SMPROGRAMS\Battles.app"
   
   # Remove registry entries
@@ -133,7 +133,7 @@ Function .onInit
   StrCmp $R0 "" done
   
   MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION \
-  "Battles.app Desktop is already installed.$\n$\nClick OK to remove the previous version or Cancel to cancel this installation." \
+  "BattlesDesktop is already installed.$\n$\nClick OK to remove the previous version or Cancel to cancel this installation." \
   IDOK uninst
   Abort
   

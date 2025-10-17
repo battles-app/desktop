@@ -1,11 +1,11 @@
 {
-  "version": "0.0.21",
-  "notes": "### 🚀 Improvements  • Bug fixes and performance improvements...",
-  "pub_date": "2025-10-10T06:36:19.208Z",
+  "version": "0.0.57",
+  "notes": "### ✨ New Features  • Initial release • Stream Deck integration with beautiful branded animations • Dark theme with logo colors • Real-time FX control for TikTok Live...",
+  "pub_date": "2025-10-16T08:45:58.445Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT2s3MG4va0dQTFhsNUhEbXRTOWg5THNmVzVIYVVTWjY1dE0rZ3phL251WEM5SkgrWjl1MEJpVi9IQnk2RTRjd3BvYjFtOFNXMlV1MGJwbEg2b1VEeXcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwMDc4MTc2CWZpbGU6QmF0dGxlcy5hcHAgRGVza3RvcF8wLjAuMjFfeDY0LXNldHVwLmV4ZQpFRlBWdnc0b2VHVUUwOEtaUnZsb3ByOFFHNWlZLzBqd1I5Qjl0VjhBZTV5YjcveUlnUzRqQjVCNGt0dXRxVHlvU0Uxc2hpSjNQVFZtejl2ZW1XUm9EZz09Cg==",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.21/Battles.app Desktop_0.0.21_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT2dwb2J1U3ZJTm53cTlpbFNtQWJxTkpaY0ZNM01RajNxQVArSktBdE1ZdWxuS3RrU2ZWNUV2UTljelhhTkJxWjcza2F4Z0VLTTFoTG13d3BiSUtYZGd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYwNjA0MzU1CWZpbGU6QmF0dGxlc0Rlc2t0b3BfMC4wLjU3X3g2NC1zZXR1cC5leGUKRHNhMUY3Tjd5cjIreU9odUowRVZHVkJlQUh3Y0dGcnVNS1BXOEpzdURwaDcyYkRDWXpPZC9MY3ZUVVhnbG5wQkd3MEhnWW5NWlpFZjU2NUM5RlhNQnc9PQo=",
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.57/BattlesDesktop_0.0.57_x64-setup.exe"
     }
   }
 }

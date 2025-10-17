@@ -735,8 +735,8 @@ impl GStreamerComposite {
         *self.frame_sender.write() = Some(sender);
     }
 
-    pub fn start(&mut self, camera_device_id: &str, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
-        println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
+    pub fn start(&mut self, width: u32, height: u32) -> Result<(), String> {
+        println!("[Composite] Starting composite pipeline: {}x{}", width, height);
 
         // CRITICAL: Properly stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
@@ -756,8 +756,7 @@ impl GStreamerComposite {
                 }
             }
             
-            // Longer wait to ensure camera is released
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
         
         // Clear the old pipeline reference
@@ -765,99 +764,24 @@ impl GStreamerComposite {
         
         // Initialize WGPU renderer if not already done
         if self.wgpu_renderer.is_none() {
-            println!("[Composite] 🎨 Initializing WGPU renderer (chroma key DISABLED for camera)...");
-            let mut renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
+            println!("[Composite] 🎨 Initializing WGPU renderer for video loops and FX...");
+            let renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
                 .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
             
-            // DISABLE camera chroma key - we only chroma key FX videos in frontend
-            renderer.set_chroma_key_params([0.0, 0.0, 0.0], 0.0, 0.0, false);
-            
             self.wgpu_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
-            println!("[Composite] ✅ WGPU renderer initialized (camera chroma key OFF, FX chroma key in frontend)");
+            println!("[Composite] ✅ WGPU renderer initialized for FX chroma key");
         }
 
         *self.is_running.write() = true;
-
-        // Map rotation degrees to videoflip method
-        let flip_method = match rotation {
-            90 => 1,   // clockwise 90
-            180 => 2,  // rotate 180
-            270 => 3,  // counterclockwise 90 (clockwise 270)
-            _ => 0,    // identity (no rotation)
-        };
         
-        // CRITICAL: videoflip swaps dimensions for 90° and 270° rotations!
-        // If output needs to be 720x1280 with 270° rotation:
-        //   Input to videoflip must be 1280x720
-        //   After rotation, it becomes 720x1280
-        let (pre_rotation_width, pre_rotation_height) = if rotation == 90 || rotation == 270 {
-            (height, width)  // Swap dimensions before rotation
-        } else {
-            (width, height)  // Keep dimensions for 0° and 180°
-        };
-        
-        // Create simple pipeline - use camera if available, otherwise use black canvas
-        let pipeline_str = if has_camera && (!camera_device_id.is_empty()) && camera_device_id != "no_camera" {
-            // Use camera
-            println!("[Composite] 🎥 Attempting to use camera: '{}'", camera_device_id);
-            
-            // Parse device ID to determine source element and property
-            let (source_element, device_property) = if camera_device_id.starts_with("mf:") {
-                // Media Foundation index format: "mf:0", "mf:1", etc.
-                let index = camera_device_id.strip_prefix("mf:").unwrap_or("0");
-                ("mfvideosrc", format!("device-index={}", index))
-            } else if camera_device_id.starts_with("\\\\?") || camera_device_id.starts_with("@device:") {
-                // Legacy device path format (shouldn't happen anymore, but handle it)
-                // Try using device index 0 as fallback
-                println!("[Composite] ⚠️ Legacy device path detected, using mfvideosrc device-index=0");
-                ("mfvideosrc", format!("device-index=0"))
-            } else {
-                // DirectShow device name
-                ("dshowvideosrc", format!("device-name=\"{}\"", camera_device_id))
-            };
-            
-            println!("[Composite] 📹 Using {} with {}", source_element, device_property);
-            
-            // Let camera negotiate its native format, then convert to RGBA
-            // Add videoflip for rotation support
-            // Output RGBA for direct GPU texture upload (no JPEG encoding!)
-            if flip_method == 0 {
-                // No rotation needed - simplified pipeline for better compatibility
-                format!(
-                    "{} {} ! \
-                     videoconvert ! \
-                     videoscale ! \
-                     video/x-raw,format=RGBA,width={},height={} ! \
-                     queue leaky=downstream max-size-buffers=3 ! \
-                     appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                    source_element, device_property, width, height
-                )
-            } else {
-                // Apply rotation with videoflip (use swapped dimensions if needed)
-                format!(
-                    "{} {} ! \
-                     videoconvert ! \
-                     videoscale ! \
-                     video/x-raw,width={},height={} ! \
-                     videoflip method={} ! \
-                     videoconvert ! \
-                     video/x-raw,format=RGBA ! \
-                     queue leaky=downstream max-size-buffers=3 ! \
-                     appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                    source_element, device_property, pre_rotation_width, pre_rotation_height, flip_method
-                )
-            }
-        } else {
-            // No camera selected - use solid black canvas
-            // pattern=2 is "black" in videotestsrc
-            println!("[Composite] 🎨 No camera selected - creating black canvas");
-            format!(
-                "videotestsrc pattern=2 is-live=true ! \
-                 video/x-raw,format=RGBA,width={},height={},framerate={}/1 ! \
-                 appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
-                width, height, fps
-            )
-        };
+        // Use solid black canvas as base (no camera support)
+        // pattern=2 is "black" in videotestsrc
+        let pipeline_str = format!(
+            "videotestsrc pattern=2 is-live=true ! \
+             video/x-raw,format=RGBA,width={},height={},framerate=30/1 ! \
+             appsink name=output emit-signals=true sync=false async=false max-buffers=2 drop=true",
+            width, height
+        );
 
         println!("[Composite] Creating pipeline: {}", pipeline_str);
 
@@ -1189,10 +1113,10 @@ impl GStreamerComposite {
         Ok(())
     }
 
-    pub fn update_layers(&self, camera: (bool, f64), overlay: (bool, f64)) {
+    pub fn update_layers(&self, overlay: (bool, f64)) {
         if let Some(_pipeline) = &self.pipeline {
-            // Update layer visibility based on camera and overlay settings
-            println!("[Composite] Updated layers - Camera: {}, Overlay: {}", camera.0, overlay.0);
+            // Update layer visibility based on overlay settings
+            println!("[Composite] Updated layers - Overlay: {}", overlay.0);
         }
     }
 

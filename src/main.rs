@@ -7,9 +7,8 @@ use tauri::{command, Manager, Emitter};
 use base64::Engine;
 use std::sync::{Arc, Mutex};
 
-// GStreamer camera module (OBS-quality video pipeline)
-mod gstreamer_camera;
-use gstreamer_camera::GStreamerCamera;
+// File logger module
+mod file_logger;
 
 // GStreamer composite module (OBS replacement)
 mod gstreamer_composite;
@@ -29,6 +28,15 @@ use streamdeck_manager::{StreamDeckManager, FxButton, STREAMDECK_MANAGER};
 mod streamdeck_diagnostics;
 use streamdeck_diagnostics::{run_diagnostics, get_driver_download_info, StreamDeckDiagnostics, DriverDownloadInfo};
 
+// DMX Lighting Control
+mod dmx_manager;
+mod dmx_commands;
+use dmx_commands::{
+    scan_dmx_devices, connect_dmx_device, disconnect_dmx_device,
+    get_dmx_state, send_dmx_data, set_dmx_rgb, set_dmx_dimmer, set_dmx_pan_tilt, set_dmx_complete, dmx_blackout
+};
+
+// Media Converter for Automation
 use shared_memory::{Shmem, ShmemConf};
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
@@ -46,9 +54,6 @@ struct CameraDeviceInfo {
 
 // Global state for GStreamer camera
 lazy_static::lazy_static! {
-    static ref GSTREAMER_CAMERA: Arc<parking_lot::RwLock<Option<GStreamerCamera>>> = Arc::new(parking_lot::RwLock::new(None));
-    static ref CAMERA_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
-    
     // Composite pipeline (OBS replacement)
     static ref GSTREAMER_COMPOSITE: Arc<parking_lot::RwLock<Option<GStreamerComposite>>> = Arc::new(parking_lot::RwLock::new(None));
     static ref COMPOSITE_FRAME_SENDER: Arc<parking_lot::RwLock<Option<broadcast::Sender<Vec<u8>>>>> = Arc::new(parking_lot::RwLock::new(None));
@@ -61,7 +66,6 @@ lazy_static::lazy_static! {
     static ref SCREEN_CAPTURE_SENDERS: Arc<parking_lot::RwLock<Vec<Option<broadcast::Sender<Vec<u8>>>>>> = Arc::new(parking_lot::RwLock::new(Vec::new()));
 }
 
-const CAMERA_WS_PORT: u16 = 9876;
 const COMPOSITE_WS_PORT: u16 = 9877;
 const SCREEN_CAPTURE_BASE_PORT: u16 = 9880; // 9880, 9881, 9882... for each monitor
 
@@ -74,10 +78,18 @@ struct MonitorInfo {
     scale_factor: f64,
     is_primary: bool,
     screenshot: Option<String>, // Base64 encoded PNG data URL
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tauri_index: Option<usize>, // Original Tauri enumeration index for preview mapping
 }
 
 // Global cache for monitor screenshots
 static MONITOR_SCREENSHOTS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
+
+// 🔧 FIX: Cache monitor order to ensure consistency between preview ports and indices
+// Key: (position_x, position_y, width, height) -> Value: Tauri enumeration index
+lazy_static::lazy_static! {
+    static ref MONITOR_ORDER_CACHE: Mutex<std::collections::HashMap<(i32, i32, u32, u32), usize>> = Mutex::new(std::collections::HashMap::new());
+}
 
 // Global flag to track if monitor selection modal is open
 static MODAL_IS_OPEN: Mutex<bool> = Mutex::new(false);
@@ -229,20 +241,32 @@ fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
         }
     }
 
-    let monitor_infos: Vec<MonitorInfo> = monitors
+    // 🔧 FIX: Collect monitors and look up their Tauri indices from cache
+    let mut monitor_data: Vec<(usize, MonitorInfo)> = monitors
         .into_iter()
         .enumerate()
-        .map(|(i, m)| {
+        .map(|(enum_index, m)| {
             let position = m.position();
             let size = m.size();
             let scale_factor = m.scale_factor();
             let name = m.name().cloned();
 
-            // Get screenshot from cache (captured in background)
+            // 🔧 FIX: Look up actual Tauri index from cache (matches start_monitor_previews order)
+            let key = (position.x, position.y, size.width, size.height);
+            let tauri_index = if let Ok(order_cache) = MONITOR_ORDER_CACHE.lock() {
+                order_cache.get(&key).copied().unwrap_or(enum_index)
+            } else {
+                enum_index
+            };
+
+            println!("[Monitor Lookup] Position ({}, {}), Size {}x{} -> Tauri index: {}", 
+                     position.x, position.y, size.width, size.height, tauri_index);
+
+            // Get screenshot from cache using Tauri's original index
             let screenshot = {
                 if let Ok(cache) = MONITOR_SCREENSHOTS.lock() {
-                    if i < cache.len() {
-                        cache[i].clone()
+                    if tauri_index < cache.len() {
+                        cache[tauri_index].clone()
                     } else {
                         None
                     }
@@ -251,28 +275,49 @@ fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
                 }
             };
 
-            MonitorInfo {
+            let monitor_info = MonitorInfo {
                 name,
                 position: (position.x, position.y),
                 size: (size.width, size.height),
                 scale_factor,
-                is_primary: i == 0, // Assume first monitor is primary
+                is_primary: false, // Will be set later
                 screenshot,
-            }
+                tauri_index: Some(tauri_index), // Store cached index for preview mapping
+            };
+
+            (tauri_index, monitor_info)
         })
         .collect();
 
-    // Find actual primary monitor (the one at 0,0 or with primary flag)
+    // 🔧 FIX: Sort monitors by position (left-to-right, top-to-bottom)
+    // This matches Windows Display Settings order
+    monitor_data.sort_by(|(_, a), (_, b)| {
+        // Primary sort by Y position (top monitors first)
+        let y_cmp = a.position.1.cmp(&b.position.1);
+        if y_cmp != std::cmp::Ordering::Equal {
+            return y_cmp;
+        }
+        // Secondary sort by X position (left monitors first)
+        a.position.0.cmp(&b.position.0)
+    });
+
+    // 🔧 FIX: Extract sorted monitor infos (now in display order)
+    let mut result: Vec<MonitorInfo> = monitor_data.into_iter().map(|(_, info)| info).collect();
+
+    // Find actual primary monitor (the one at 0,0 or closest to 0,0)
     let mut primary_index = 0;
-    for (i, monitor) in monitor_infos.iter().enumerate() {
-        if monitor.position.0 == 0 && monitor.position.1 == 0 {
+    let mut min_distance = i32::MAX;
+    
+    for (i, monitor) in result.iter().enumerate() {
+        // Calculate distance from origin (0, 0)
+        let distance = monitor.position.0.abs() + monitor.position.1.abs();
+        if distance < min_distance {
+            min_distance = distance;
             primary_index = i;
-            break;
         }
     }
 
     // Mark the correct primary monitor
-    let mut result = monitor_infos;
     for (i, monitor) in result.iter_mut().enumerate() {
         monitor.is_primary = i == primary_index;
     }
@@ -283,7 +328,19 @@ fn read_monitors(app: &tauri::AppHandle) -> Vec<MonitorInfo> {
 // Get monitor information
 #[command]
 async fn get_monitors(app: tauri::AppHandle) -> Vec<MonitorInfo> {
-    read_monitors(&app)
+    crate::file_logger::log("[Monitors] 📺 get_monitors() called");
+    let monitors = read_monitors(&app);
+    crate::file_logger::log(&format!("[Monitors]   Found {} monitors", monitors.len()));
+    for (i, monitor) in monitors.iter().enumerate() {
+        crate::file_logger::log(&format!("[Monitors]   Monitor {}: {}x{} at ({},{}), primary={}, tauri_index={:?}", 
+            i, 
+            monitor.size.0, monitor.size.1,
+            monitor.position.0, monitor.position.1,
+            monitor.is_primary,
+            monitor.tauri_index
+        ));
+    }
+    monitors
 }
 
 
@@ -298,12 +355,34 @@ async fn set_modal_open(is_open: bool) {
 // Start GStreamer screen capture for monitor previews (NEW - replaces screenshots)
 #[command]
 async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
+    crate::file_logger::log("[MonitorPreviews] 🎬 start_monitor_previews() called");
+    
     // Stop any existing captures first
     stop_monitor_previews().await?;
     
     // Get available monitors
-    let monitors = app.available_monitors().map_err(|e| format!("Failed to get monitors: {}", e))?;
+    crate::file_logger::log("[MonitorPreviews]   Fetching available monitors...");
+    let monitors = app.available_monitors().map_err(|e| {
+        let error_msg = format!("Failed to get monitors: {}", e);
+        crate::file_logger::log(&format!("[MonitorPreviews]   ❌ {}", error_msg));
+        error_msg
+    })?;
     let monitor_count = monitors.len();
+    
+    crate::file_logger::log(&format!("[MonitorPreviews]   ✅ Found {} monitors", monitor_count));
+    
+    // 🔧 FIX: Cache monitor order for consistent indexing
+    {
+        let mut order_cache = MONITOR_ORDER_CACHE.lock().unwrap();
+        order_cache.clear();
+        for (index, monitor) in monitors.iter().enumerate() {
+            let pos = monitor.position();
+            let size = monitor.size();
+            let key = (pos.x, pos.y, size.width, size.height);
+            order_cache.insert(key, index);
+            println!("[Monitor Cache] Tauri index {}: position ({}, {}), size {}x{}", index, pos.x, pos.y, size.width, size.height);
+        }
+    }
     
     // Initialize storage
     {
@@ -334,11 +413,7 @@ async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
         let (tx, _rx) = broadcast::channel::<Vec<u8>>(60);
         capture.set_frame_sender(tx.clone());
         
-        // Start the capture pipeline
-        capture.start(position.x, position.y, size.width, size.height)
-            .map_err(|e| format!("Failed to start capture {}: {}", index, e))?;
-        
-        // Store in global state
+        // Store in global state BEFORE starting capture or WebSocket
         {
             let mut captures = SCREEN_CAPTURES.write();
             let mut senders = SCREEN_CAPTURE_SENDERS.write();
@@ -346,9 +421,24 @@ async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
             senders[index] = Some(tx.clone());
         }
         
-        // Start WebSocket server for this monitor
+        // Start WebSocket server FIRST (so clients can connect)
         let port = SCREEN_CAPTURE_BASE_PORT + index as u16;
         start_monitor_preview_websocket(index, port).await;
+    }
+    
+    // Small delay to allow WebSocket clients to connect before frames start arriving
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    
+    // NOW start all capture pipelines
+    for (index, monitor) in monitors.iter().enumerate() {
+        let position = monitor.position();
+        let size = monitor.size();
+        
+        let mut captures = SCREEN_CAPTURES.write();
+        if let Some(capture) = captures[index].as_mut() {
+            capture.start(position.x, position.y, size.width, size.height)
+                .map_err(|e| format!("Failed to start capture {}: {}", index, e))?;
+        }
     }
     
     Ok(())
@@ -357,19 +447,31 @@ async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
 // Stop all monitor preview captures
 #[command]
 async fn stop_monitor_previews() -> Result<(), String> {
+    crate::file_logger::log("[MonitorPreviews] 🛑 stop_monitor_previews() called");
     
     let mut captures = SCREEN_CAPTURES.write();
     let mut senders = SCREEN_CAPTURE_SENDERS.write();
     
+    let capture_count = captures.iter().filter(|c| c.is_some()).count();
+    crate::file_logger::log(&format!("[MonitorPreviews]   Stopping {} active captures...", capture_count));
+    
     // Stop all captures
     for (index, capture_opt) in captures.iter_mut().enumerate() {
         if let Some(mut capture) = capture_opt.take() {
-            capture.stop().map_err(|e| format!("Failed to stop capture {}: {}", index, e))?;
+            crate::file_logger::log(&format!("[MonitorPreviews]   Stopping capture {}...", index));
+            capture.stop().map_err(|e| {
+                let error_msg = format!("Failed to stop capture {}: {}", index, e);
+                crate::file_logger::log(&format!("[MonitorPreviews]   ❌ {}", error_msg));
+                error_msg
+            })?;
+            crate::file_logger::log(&format!("[MonitorPreviews]   ✅ Capture {} stopped", index));
         }
     }
     
     captures.clear();
     senders.clear();
+    
+    crate::file_logger::log("[MonitorPreviews] ✅ All monitor previews stopped");
     
     Ok(())
 }
@@ -620,10 +722,25 @@ async fn create_monitor_window(
     monitor_position: (i32, i32),  // Pass position from frontend to match preview
     monitor_size: (u32, u32)       // Pass size from frontend to match preview
 ) -> Result<(), String> {
+    crate::file_logger::log("[TV Monitor] 📺 create_monitor_window() called");
+    crate::file_logger::log(&format!("[TV Monitor]   URL: {}", url));
+    crate::file_logger::log(&format!("[TV Monitor]   Target position: ({}, {})", monitor_position.0, monitor_position.1));
+    crate::file_logger::log(&format!("[TV Monitor]   Target size: {}x{}", monitor_size.0, monitor_size.1));
+    
     // Get Tauri's native monitor info to find the matching monitor
+    crate::file_logger::log("[TV Monitor]   Fetching available monitors...");
     let native_monitors = app.available_monitors().unwrap_or_default();
+    crate::file_logger::log(&format!("[TV Monitor]   Found {} native monitors", native_monitors.len()));
+    
+    for (i, m) in native_monitors.iter().enumerate() {
+        let pos = m.position();
+        let size = m.size();
+        crate::file_logger::log(&format!("[TV Monitor]     Monitor {}: {}x{} at ({}, {}), scale={}", 
+            i, size.width, size.height, pos.x, pos.y, m.scale_factor()));
+    }
 
     // Find the monitor that matches the position and size from frontend
+    crate::file_logger::log("[TV Monitor]   Searching for matching monitor...");
     let native_monitor = native_monitors.iter()
         .find(|m| {
             let pos = m.position();
@@ -633,21 +750,32 @@ async fn create_monitor_window(
             size.width == monitor_size.0 && 
             size.height == monitor_size.1
         })
-        .ok_or_else(|| format!(
-            "No monitor found matching position ({}, {}) and size {}x{}",
-            monitor_position.0, monitor_position.1, monitor_size.0, monitor_size.1
-        ))?;
+        .ok_or_else(|| {
+            let error_msg = format!(
+                "No monitor found matching position ({}, {}) and size {}x{}",
+                monitor_position.0, monitor_position.1, monitor_size.0, monitor_size.1
+            );
+            crate::file_logger::log(&format!("[TV Monitor]   ❌ {}", error_msg));
+            error_msg
+        })?;
 
     let monitor_pos = native_monitor.position();
     let monitor_size_actual = native_monitor.size();
     let scale_factor = native_monitor.scale_factor();
+    
+    crate::file_logger::log(&format!("[TV Monitor]   ✅ Found matching monitor: {}x{} at ({}, {})", 
+        monitor_size_actual.width, monitor_size_actual.height, monitor_pos.x, monitor_pos.y));
 
-    // Convert physical pixels to logical pixels for Tauri v2
-    // Tauri's inner_size and position expect logical pixels
-    let logical_width = monitor_size_actual.width as f64 / scale_factor;
-    let logical_height = monitor_size_actual.height as f64 / scale_factor;
-    let logical_x = monitor_pos.x as f64 / scale_factor;
-    let logical_y = monitor_pos.y as f64 / scale_factor;
+    // Use PHYSICAL pixels for BOTH size and position to ensure correct fullscreen on high-DPI monitors
+    // Tauri's position() expects physical pixels, and inner_size() can also accept physical
+    let physical_width = monitor_size_actual.width as f64;
+    let physical_height = monitor_size_actual.height as f64;
+    let physical_x = monitor_pos.x as f64;
+    let physical_y = monitor_pos.y as f64;
+    
+    crate::file_logger::log(&format!("[TV Monitor]   Physical position: ({}, {})", physical_x, physical_y));
+    crate::file_logger::log(&format!("[TV Monitor]   Physical size: {}x{}", physical_width, physical_height));
+    crate::file_logger::log(&format!("[TV Monitor]   Scale factor: {}", scale_factor));
 
     // Close any existing TV monitor window first (Tauri v2 API)
     if let Some(existing_window) = app.get_webview_window("tv-monitor") {
@@ -675,18 +803,28 @@ async fn create_monitor_window(
         .map_err(|e| format!("Failed to parse URL '{}': {}", url, e))?;
     
     // Use WebviewWindowBuilder which supports URL in Tauri v2
+    crate::file_logger::log("[TV Monitor]   Building window...");
+    
     let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(parsed_url))
         .title("TV Monitor - Battles.app")
-        .inner_size(logical_width, logical_height)
-        .position(logical_x, logical_y)
+        .inner_size(physical_width, physical_height) // Use physical pixels for correct fullscreen on high-DPI
+        .position(physical_x, physical_y) // Use physical pixels for reliable Windows positioning
         .decorations(false) // Borderless
         .resizable(false)   // Fixed size
         .always_on_top(true) // Above all other windows
         .visible(true)      // ✅ Start VISIBLE (was false)
         .fullscreen(false)   // Use borderless window (not true fullscreen)
         .skip_taskbar(false) // Show in taskbar for easy access
+        .transparent(false)  // 🚀 NO transparency = massive GPU savings
+        .shadow(false)       // 🔧 NO shadow = pixel-perfect positioning!
         .build()
-        .map_err(|e| format!("Failed to build monitor window: {}", e))?;
+        .map_err(|e| {
+            let error_msg = format!("Failed to build monitor window: {}", e);
+            crate::file_logger::log(&format!("[TV Monitor]   ❌ {}", error_msg));
+            error_msg
+        })?;
+    
+    crate::file_logger::log("[TV Monitor]   ✅ Window built successfully");
     
     // CRITICAL: Wait for window to be registered in Tauri's window manager
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -782,6 +920,8 @@ async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(),
         .minimizable(true)
         .maximizable(true)
         .closable(true)
+        .transparent(false)  // 🚀 NO transparency = massive GPU savings
+        .shadow(true)        // Keep shadow for visual separation
         .build()
         .map_err(|e| format!("Failed to create regular window: {}", e))?;
 
@@ -810,108 +950,10 @@ async fn create_regular_window(app: tauri::AppHandle, url: String) -> Result<(),
 
 #[command]
 async fn initialize_camera_system() -> Result<String, String> {
-    println!("[GStreamer] Initializing camera system");
-    
-    // Only initialize once
-    if CAMERA_FRAME_SENDER.read().is_some() {
-        println!("[GStreamer] Already initialized");
-        return Ok("GStreamer camera system already initialized".to_string());
-    }
-    
-    // Initialize GStreamer camera
-    let camera = GStreamerCamera::new()
-        .map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
-    
-    *GSTREAMER_CAMERA.write() = Some(camera);
-    
-    // Create broadcast channel for camera frames with larger buffer
-    // 60 frames = 2 seconds of buffer at 30fps (prevents lag spikes)
-    let (tx, _rx) = broadcast::channel::<Vec<u8>>(60);
-    
-    // Set frame sender in camera
-    if let Some(cam) = GSTREAMER_CAMERA.read().as_ref() {
-        cam.set_frame_sender(tx.clone());
-    }
-    
-    *CAMERA_FRAME_SENDER.write() = Some(tx);
-    
-    // Start WebSocket server (only once)
-    start_camera_websocket_server().await;
-    
-    println!("[GStreamer] ✅ WebSocket server started on port {}", CAMERA_WS_PORT);
-    Ok(format!("GStreamer initialized - WebSocket on port {}", CAMERA_WS_PORT))
+    Err("Camera system has been removed".to_string())
 }
 
-// WebSocket server for real-time binary camera streaming
-async fn start_camera_websocket_server() {
-    tokio::spawn(async {
-        let addr = format!("127.0.0.1:{}", CAMERA_WS_PORT);
-        let listener = match TcpListener::bind(&addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                println!("[Camera WS] Failed to bind to {}: {}", addr, e);
-                return;
-            }
-        };
-        
-        println!("[Camera WS] WebSocket server listening on {}", addr);
-        
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(async move {
-                let ws_stream = match accept_async(stream).await {
-                    Ok(ws) => ws,
-                    Err(e) => {
-                        println!("[Camera WS] WebSocket handshake failed: {}", e);
-                        return;
-                    }
-                };
-                
-                println!("[Camera WS] Client connected");
-                
-                // Subscribe to camera frames
-                let mut rx = match CAMERA_FRAME_SENDER.read().as_ref() {
-                    Some(sender) => sender.subscribe(),
-                    None => {
-                        println!("[Camera WS] No frame sender available");
-                        return;
-                    }
-                };
-                
-                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-                
-                // Stream frames to client
-                loop {
-                    tokio::select! {
-                        frame_result = rx.recv() => {
-                            match frame_result {
-                                Ok(frame_data) => {
-                                    // Send binary frame
-                                    if ws_sender.send(tokio_tungstenite::tungstenite::Message::Binary(frame_data)).await.is_err() {
-                                        println!("[Camera WS] Client disconnected");
-                                        break;
-                                    }
-                                }
-                                Err(_) => {
-                                    // Channel closed or lagged
-                                    break;
-                                }
-                            }
-                        }
-                        msg = ws_receiver.next() => {
-                            match msg {
-                                Some(Ok(_)) => {}, // Ignore client messages
-                                _ => {
-                                    println!("[Camera WS] Client disconnected");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    });
-}
+// Camera WebSocket server removed (camera system deleted)
 
 // Initialize composite system
 #[command]
@@ -1055,25 +1097,7 @@ async fn start_composite_websocket_server() {
 
 #[command]
 async fn get_available_cameras() -> Result<Vec<CameraDeviceInfo>, String> {
-    println!("[GStreamer] Enumerating cameras");
-    
-    let cameras_info = GStreamerCamera::list_cameras()?;
-    
-    let cameras: Vec<CameraDeviceInfo> = cameras_info
-        .into_iter()
-        .map(|cam| {
-            println!("[GStreamer] Found: {}", cam.name);
-            CameraDeviceInfo {
-                id: cam.id,
-                name: cam.name,
-                description: cam.description,
-                is_available: true,
-            }
-        })
-        .collect();
-    
-    println!("[GStreamer] Total cameras found: {}", cameras.len());
-    Ok(cameras)
+    Ok(vec![]) // Camera system removed
 }
 
 // System monitoring task - DISABLED because emergency_cleanup() was killing pipelines
@@ -1087,41 +1111,18 @@ async fn start_system_monitor() {
 }
 
 #[command]
-async fn start_camera_preview(device_id: String, _app: tauri::AppHandle) -> Result<(), String> {
-    start_camera_preview_with_quality(device_id, "high".to_string(), _app).await
+async fn start_camera_preview(_device_id: String, _app: tauri::AppHandle) -> Result<(), String> {
+    Err("Camera system removed".to_string())
 }
 
 #[command]
-async fn start_camera_preview_with_quality(device_id: String, quality: String, _app: tauri::AppHandle) -> Result<(), String> {
-    println!("[GStreamer] Starting preview for device: {} with quality: {}", device_id, quality);
-    
-    // Stop any existing camera
-    stop_camera_preview().await?;
-    
-    // Start GStreamer pipeline (runs in background)
-    let mut camera_lock = GSTREAMER_CAMERA.write();
-    if let Some(camera) = camera_lock.as_mut() {
-        camera.start_with_quality(&device_id, &quality)?;
-        println!("[GStreamer] ✅ Camera started successfully!");
-    } else {
-        return Err("GStreamer camera not initialized".to_string());
-    }
-    drop(camera_lock);
-    
-    Ok(())
+async fn start_camera_preview_with_quality(_device_id: String, _quality: String, _app: tauri::AppHandle) -> Result<(), String> {
+    Err("Camera system removed".to_string())
 }
 
 #[command]
 async fn stop_camera_preview() -> Result<(), String> {
-    println!("[GStreamer] Stopping preview");
-    
-    let mut camera_lock = GSTREAMER_CAMERA.write();
-    if let Some(camera) = camera_lock.as_mut() {
-        camera.stop()?;
-    }
-    drop(camera_lock);
-    
-    Ok(())
+    Ok(()) // No-op - camera system removed
 }
 
 // ====================
@@ -1129,24 +1130,14 @@ async fn stop_camera_preview() -> Result<(), String> {
 // ====================
 
 #[command]
-async fn start_composite_pipeline(camera_device_id: String, width: u32, height: u32, fps: u32, rotation: u32, has_camera: bool) -> Result<(), String> {
-    println!("[Composite] Starting composite pipeline: {}x{} @ {}fps (rotation: {}°)", width, height, fps, rotation);
-    println!("[Composite] Main.rs received - camera_device_id: '{}', has_camera: {}", camera_device_id, has_camera);
-
-    // Validate camera device if camera is selected
-    if has_camera && !camera_device_id.is_empty() {
-        println!("[Composite] 🔍 Validating camera device path...");
-        // The device path should be a Windows device path format
-        if !camera_device_id.contains("vid_") && !camera_device_id.contains("videotestsrc") {
-            println!("[Composite] ⚠️ Warning: Camera device path format looks unusual: {}", camera_device_id);
-        }
-    }
+async fn start_composite_pipeline(width: u32, height: u32) -> Result<(), String> {
+    println!("[Composite] Starting composite pipeline: {}x{}", width, height);
 
     // Call the synchronous start method
     let result = {
         let mut composite_lock = GSTREAMER_COMPOSITE.write();
         if let Some(composite) = composite_lock.as_mut() {
-            composite.start(&camera_device_id, width, height, fps, rotation, has_camera)
+            composite.start(width, height)
         } else {
             Err("Composite pipeline not initialized. Call initialize_composite_system first.".to_string())
         }
@@ -1183,10 +1174,10 @@ async fn stop_composite_pipeline() -> Result<(), String> {
 }
 
 #[command]
-async fn update_composite_layers(camera: (bool, f64), overlay: (bool, f64)) -> Result<(), String> {
+async fn update_composite_layers(overlay: (bool, f64)) -> Result<(), String> {
     let composite_lock = GSTREAMER_COMPOSITE.read();
     if let Some(composite) = composite_lock.as_ref() {
-        composite.update_layers(camera, overlay);
+        composite.update_layers(overlay);
     }
     drop(composite_lock);
     
@@ -1252,7 +1243,7 @@ async fn play_composite_fx(
         println!("[Composite] 📥 Downloading FX from Nuxt proxy...");
         
         // Download from Nuxt proxy (handles authentication)
-        let full_url = format!("https://local.battles.app:3000{}", file_url);
+        let full_url = format!("https://battles.app{}", file_url);
         
         // Download asynchronously in background
         let local_path_clone = local_path.clone();
@@ -1565,10 +1556,7 @@ async fn clear_video_loop_cache() -> Result<(), String> {
                     }
                 };
                 
-                // Broadcast binary frame to WebSocket clients
-                if let Some(sender) = CAMERA_FRAME_SENDER.read().as_ref() {
-                    let _ = sender.send(jpeg_data);
-                }
+                // Camera broadcast removed
                 
                 frame_count += 1;
             }
@@ -1757,9 +1745,33 @@ struct StreamDeckInfo {
 }
 
 #[command]
-async fn streamdeck_init() -> Result<(), String> {
+async fn streamdeck_init(app: tauri::AppHandle) -> Result<(), String> {
+    crate::file_logger::log("[StreamDeck] streamdeck_init() called from frontend");
+    
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
+    
+    // Check if already initialized
+    if let Some(ref manager) = *manager_lock {
+        let is_connected = manager.is_connected();
+        let button_count = manager.get_loaded_button_count();
+        crate::file_logger::log(&format!("[StreamDeck] Already initialized (connected={}, buttons={}), skipping (idempotent)", 
+            is_connected, button_count));
+        
+        // Re-emit connected event if connected to help frontend catch up
+        if is_connected {
+            crate::file_logger::log("[StreamDeck] Re-emitting streamdeck://connected");
+            let _ = app.emit("streamdeck://connected", ());
+        }
+        
+        return Ok(());
+    }
+    
+    // Not initialized yet - create new manager
+    crate::file_logger::log("[StreamDeck] Creating new StreamDeck manager (first init)");
     let manager = StreamDeckManager::new()?;
-    *STREAMDECK_MANAGER.lock() = Some(manager);
+    *manager_lock = Some(manager);
+    crate::file_logger::log("[StreamDeck] StreamDeck manager created successfully");
+    
     Ok(())
 }
 
@@ -1837,12 +1849,44 @@ async fn streamdeck_update_layout(
     battle_board: Vec<FxButton>,
     user_fx: Vec<FxButton>
 ) -> Result<(), String> {
+    crate::file_logger::log(&format!("[StreamDeck] 🎨 Update layout called - Battle Board: {} buttons, User FX: {} buttons", 
+        battle_board.len(), user_fx.len()));
+    
+    // Log button names for debugging
+    if !battle_board.is_empty() {
+        let names: Vec<String> = battle_board.iter().take(3).map(|b| b.name.clone()).collect();
+        crate::file_logger::log(&format!("[StreamDeck]    Battle Board: {:?}...", names));
+    }
+    if !user_fx.is_empty() {
+        let names: Vec<String> = user_fx.iter().take(3).map(|b| b.name.clone()).collect();
+        crate::file_logger::log(&format!("[StreamDeck]    User FX: {:?}...", names));
+    }
+    
     let mut manager_lock = STREAMDECK_MANAGER.lock();
     
     if let Some(ref mut manager) = *manager_lock {
-        manager.update_layout(battle_board, user_fx)?;
-        Ok(())
+        match manager.update_layout(battle_board.clone(), user_fx.clone()) {
+            Ok(_) => {
+                // Check actual animation state after update
+                let anim_active = manager.is_loading_animation_active();
+                let total_buttons = battle_board.len() + user_fx.len();
+                
+                if total_buttons == 0 {
+                    crate::file_logger::log("[StreamDeck] ✅ Empty layout update - Animation still playing");
+                } else if anim_active {
+                    crate::file_logger::log(&format!("[StreamDeck] ⚠️ Layout updated but animation STILL ACTIVE (bug!)"));
+                } else {
+                    crate::file_logger::log(&format!("[StreamDeck] ✅ Layout updated - Animation STOPPED, {} buttons mapped", total_buttons));
+                }
+                Ok(())
+            }
+            Err(e) => {
+                crate::file_logger::log(&format!("[StreamDeck] ❌ Layout update failed: {}", e));
+                Err(e)
+            }
+        }
     } else {
+        crate::file_logger::log("[StreamDeck] ❌ Not initialized");
         Err("Stream Deck not initialized".to_string())
     }
 }
@@ -1853,6 +1897,17 @@ async fn streamdeck_set_button_state(fx_id: String, is_playing: bool) -> Result<
     
     if let Some(ref mut manager) = *manager_lock {
         manager.set_button_state(&fx_id, is_playing)?;
+    }
+    
+    Ok(())
+}
+
+#[command]
+async fn streamdeck_flush_updates() -> Result<(), String> {
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
+    
+    if let Some(ref mut manager) = *manager_lock {
+        manager.flush_updates()?;
     }
     
     Ok(())
@@ -1936,10 +1991,12 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
         }
         
         let mut connection_check_interval = tokio::time::interval(std::time::Duration::from_secs(2));
-        let mut button_check_interval = tokio::time::interval(std::time::Duration::from_millis(5));
-        let mut animation_check_interval = tokio::time::interval(std::time::Duration::from_millis(6)); // ~166 FPS
+        let mut button_check_interval = tokio::time::interval(std::time::Duration::from_millis(1)); // 1000 FPS - INSTANT button detection
+        let mut animation_check_interval = tokio::time::interval(std::time::Duration::from_millis(33)); // ~30 FPS - smooth animation without killing performance
         let mut was_connected = false;
         let mut animation_frame: usize = 0;
+        let mut last_animation_state = false;
+        let mut last_animation_log_frame: usize = 0;
         
         loop {
             tokio::select! {
@@ -1953,6 +2010,19 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                         }
                     };
                     
+                    // Log animation state changes
+                    if should_animate != last_animation_state {
+                        crate::file_logger::log(&format!("[Watcher] Animation state changed: {} -> {} (frame {})", 
+                            last_animation_state, should_animate, animation_frame));
+                        last_animation_state = should_animate;
+                    }
+                    
+                    // Log periodically when animation is active (every 1000 frames = ~6 seconds)
+                    if should_animate && animation_frame > 0 && animation_frame % 1000 == 0 && animation_frame != last_animation_log_frame {
+                        crate::file_logger::log(&format!("[Watcher] Animation still active at frame {}", animation_frame));
+                        last_animation_log_frame = animation_frame;
+                    }
+                    
                     // Play next animation frame if active
                     if should_animate {
                         if let Some(mut manager_lock) = STREAMDECK_MANAGER.try_lock() {
@@ -1963,7 +2033,9 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                         }
                     } else {
                         // Reset frame counter when animation stops
-                        animation_frame = 0;
+                        if animation_frame > 0 {
+                            animation_frame = 0;
+                        }
                     }
                 }
                 _ = connection_check_interval.tick() => {
@@ -1986,10 +2058,12 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                             // Try to reconnect
                             let mut manager_lock = STREAMDECK_MANAGER.lock();
                             if let Some(ref mut manager) = *manager_lock {
-                                println!("[Stream Deck Watcher] Attempting to reconnect...");
+                                crate::file_logger::log("[Stream Deck Watcher] Attempting to reconnect...");
                                 if let Ok(info) = manager.connect() {
-                                    println!("[Stream Deck Watcher] ✅ Reconnected: {}", info);
+                                    crate::file_logger::log(&format!("[Stream Deck Watcher] ✅ Reconnected: {}", info));
                                     let _ = app.emit("streamdeck://connected", ());
+                                } else {
+                                    crate::file_logger::log("[Stream Deck Watcher] ❌ Reconnection failed");
                                 }
                             }
                         }
@@ -2014,22 +2088,97 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                                 let pressed_buttons = manager.read_button_presses();
                             
                             for button_idx in pressed_buttons {
-                                // Handle button press and get FX info
-                                if let Some((fx_id, is_playing)) = manager.handle_button_press(button_idx) {
+                                // Handle button press and get event
+                                if let Some(event) = manager.handle_button_press(button_idx) {
+                                    use crate::streamdeck_manager::ButtonPressEvent;
                                     
-                                    // Emit event to frontend with FX ID and new state
-                                    #[derive(Clone, serde::Serialize)]
-                                    struct ButtonPressEvent {
-                                        fx_id: String,
-                                        is_playing: bool,
-                                        button_idx: u8,
+                                    match event {
+                                        ButtonPressEvent::FxPressed { fx_id, is_playing } => {
+                                            // PERFORMANCE: Minimal logging in hot path
+                                            println!("[SD] BTN{}: {} {}", button_idx, fx_id, if is_playing { "▶" } else { "⏹" });
+                                            
+                                            #[derive(Clone, serde::Serialize)]
+                                            struct FxButtonPressEvent {
+                                                fx_id: String,
+                                                is_playing: bool,
+                                                button_idx: u8,
+                                            }
+                                            
+                                            let event_payload = FxButtonPressEvent {
+                                                fx_id: fx_id.clone(),
+                                                is_playing,
+                                                button_idx,
+                                            };
+                                            
+                                            // Fire and forget - no logging for performance
+                                            let _ = app.emit("streamdeck://button_press", event_payload);
+                                        }
+                                        ButtonPressEvent::TvMonitorToggle => {
+                                            crate::file_logger::log("[StreamDeck] 📺 TV Monitor toggle pressed!");
+                                            
+                                            #[derive(Clone, serde::Serialize)]
+                                            struct TvMonitorEvent {
+                                                action: String,
+                                            }
+                                            
+                                            let event_payload = TvMonitorEvent {
+                                                action: "toggle".to_string(),
+                                            };
+                                            
+                                            match app.emit("streamdeck://tv_monitor", event_payload) {
+                                                Ok(_) => {
+                                                    crate::file_logger::log("[StreamDeck] ✅ TV Monitor event emitted");
+                                                }
+                                                Err(e) => {
+                                                    crate::file_logger::log(&format!("[StreamDeck] ❌ Failed to emit TV event: {}", e));
+                                                }
+                                            }
+                                        }
+                                        ButtonPressEvent::VideoToggle { is_playing } => {
+                                            crate::file_logger::log(&format!("[StreamDeck] 🎬 Video toggle pressed! Playing: {}", is_playing));
+                                            
+                                            #[derive(Clone, serde::Serialize)]
+                                            struct VideoToggleEvent {
+                                                is_playing: bool,
+                                            }
+                                            
+                                            let event_payload = VideoToggleEvent { is_playing };
+                                            
+                                            match app.emit("streamdeck://video_toggle", event_payload) {
+                                                Ok(_) => {
+                                                    crate::file_logger::log("[StreamDeck] ✅ Video toggle event emitted");
+                                                }
+                                                Err(e) => {
+                                                    crate::file_logger::log(&format!("[StreamDeck] ❌ Failed to emit video toggle: {}", e));
+                                                }
+                                            }
+                                        }
+                                        ButtonPressEvent::VideoLoopBrowse { direction, loop_index } => {
+                                            crate::file_logger::log(&format!("[StreamDeck] 🔄 Video loop browse! Direction: {}, Index: {}", direction, loop_index));
+                                            
+                                            #[derive(Clone, serde::Serialize)]
+                                            struct VideoLoopBrowseEvent {
+                                                direction: i32,
+                                                loop_index: usize,
+                                            }
+                                            
+                                            let event_payload = VideoLoopBrowseEvent {
+                                                direction,
+                                                loop_index,
+                                            };
+                                            
+                                            match app.emit("streamdeck://video_loop_browse", event_payload) {
+                                                Ok(_) => {
+                                                    crate::file_logger::log("[StreamDeck] ✅ Video loop browse event emitted");
+                                                }
+                                                Err(e) => {
+                                                    crate::file_logger::log(&format!("[StreamDeck] ❌ Failed to emit loop browse: {}", e));
+                                                }
+                                            }
+                                        }
                                     }
-                                    
-                                    let _ = app.emit("streamdeck://button_press", ButtonPressEvent {
-                                        fx_id,
-                                        is_playing,
-                                        button_idx,
-                                    });
+                                } else {
+                                    crate::file_logger::log(&format!("[StreamDeck] ⚠️ Button {} has no mapping", button_idx));
                                 }
                             }
                             }
@@ -2042,6 +2191,9 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
 }
 
 fn main() {
+    // Initialize file logger first
+    file_logger::init_logger();
+    
     // Configure cache plugin for FX files
     let cache_config = tauri_plugin_cache::CacheConfig {
         cache_dir: Some("battles_fx_cache".into()),
@@ -2062,12 +2214,45 @@ fn main() {
                 use tauri::Manager;
                 
                 if let Ok(resource_dir) = app.path().resource_dir() {
-                    println!("[GStreamer] 📁 Resource directory: {}", resource_dir.display());
+                    // In debug builds, no DLLs are bundled (using system GStreamer)
+                    // In release builds, all DLLs are bundled via tauri.conf resources field
+                    #[cfg(debug_assertions)]
+                    {
+                        crate::file_logger::log("[GStreamer] 🔧 DEV MODE: Using system GStreamer (no bundled DLLs)");
+                    }
                     
-                    // GStreamer plugins subdirectory
-                    let gst_plugin_dir = resource_dir.join("gstreamer-1.0");
+                    #[cfg(not(debug_assertions))]
+                    {
+                        crate::file_logger::log(&format!("[GStreamer] 📁 Resource directory: {}", resource_dir.display()));
+                        
+                        // Count DLLs in resource directory (bundled via tauri.conf resources field)
+                        if let Ok(entries) = std::fs::read_dir(&resource_dir) {
+                            let dll_count = entries.filter(|e| {
+                                e.as_ref().ok().map(|e| {
+                                    e.path().extension().and_then(|ext| ext.to_str()).map(|s| s == "dll").unwrap_or(false)
+                                }).unwrap_or(false)
+                            }).count();
+                            crate::file_logger::log(&format!("[GStreamer]   Found {} bundled DLLs", dll_count));
+                        }
+                    }
                     
-                    // Try to detect system GStreamer installation
+                    // GStreamer runtime subdirectory (if exists)
+                    let gst_runtime_dir = resource_dir.join("gstreamer-runtime");
+                    let gst_plugin_dir = gst_runtime_dir.join("gstreamer-1.0");
+                    
+                    crate::file_logger::log(&format!("[GStreamer]   Runtime dir exists: {}", gst_runtime_dir.exists()));
+                    crate::file_logger::log(&format!("[GStreamer]   Plugin dir exists: {}", gst_plugin_dir.exists()));
+                    
+                    // CRITICAL: All GStreamer DLLs (core + plugins) are in the resource root
+                    // Point GST_PLUGIN_PATH to resource_dir directly (not a subdirectory)
+                    let mut plugin_paths = vec![resource_dir.to_string_lossy().to_string()];
+                    
+                    // Also add subdirectory if it exists (for organized structure)
+                    if gst_plugin_dir.exists() {
+                        plugin_paths.insert(0, gst_plugin_dir.to_string_lossy().to_string());
+                    }
+                    
+                    // Try to detect system GStreamer installation as fallback
                     let system_gst_paths = vec![
                         "E:\\gstreamer\\1.0\\msvc_x86_64\\lib\\gstreamer-1.0",
                         "C:\\gstreamer\\1.0\\msvc_x86_64\\lib\\gstreamer-1.0",
@@ -2075,12 +2260,10 @@ fn main() {
                         "C:\\Program Files\\GStreamer\\1.0\\msvc_x86_64\\lib\\gstreamer-1.0",
                     ];
                     
-                    let mut plugin_paths = vec![gst_plugin_dir.to_string_lossy().to_string()];
-                    
                     // Add system GStreamer plugins as fallback
                     for sys_path in system_gst_paths {
                         if std::path::Path::new(sys_path).exists() {
-                            println!("[GStreamer] 🔍 Found system GStreamer at: {}", sys_path);
+                            crate::file_logger::log(&format!("[GStreamer] 🔍 Found system GStreamer at: {}", sys_path));
                             plugin_paths.push(sys_path.to_string());
                             
                             // Also add system bin directory to PATH for DLL dependencies
@@ -2089,7 +2272,7 @@ fn main() {
                                 if let Ok(mut path) = std::env::var("PATH") {
                                     path = format!("{};{}", sys_bin, path);
                                     std::env::set_var("PATH", path);
-                                    println!("[GStreamer] ✅ Added system bin to PATH: {}", sys_bin);
+                                    crate::file_logger::log(&format!("[GStreamer] ✅ Added system bin to PATH: {}", sys_bin));
                                 }
                             }
                             break;
@@ -2099,27 +2282,46 @@ fn main() {
                     // Set GST_PLUGIN_PATH with bundled plugins first, then system plugins
                     let plugin_path_str = plugin_paths.join(";");
                     std::env::set_var("GST_PLUGIN_PATH", &plugin_path_str);
-                    println!("[GStreamer] 🔌 Plugin search paths:");
+                    crate::file_logger::log("[GStreamer] 🔌 Plugin search paths:");
                     for path in &plugin_paths {
-                        println!("[GStreamer]    - {}", path);
+                        crate::file_logger::log(&format!("[GStreamer]    - {}", path));
                     }
                     
                     // Set GST_PLUGIN_SYSTEM_PATH to include system plugins
                     if plugin_paths.len() > 1 {
-                        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", plugin_paths[1].clone());
-                        println!("[GStreamer] 🌐 System plugin path: {}", plugin_paths[1]);
+                        std::env::set_var("GST_PLUGIN_SYSTEM_PATH", plugin_paths.last().unwrap().clone());
+                        crate::file_logger::log(&format!("[GStreamer] 🌐 System plugin path: {}", plugin_paths.last().unwrap()));
                     }
                     
-                    // Add resource directories to PATH so Windows can find DLLs
-                    if let Ok(mut path) = std::env::var("PATH") {
-                        // Add main resource dir (contains top-level DLLs)
-                        path = format!("{};{}", resource_dir.display(), path);
+                    // CRITICAL: Add resource directory to PATH for DLL discovery
+                    // Tauri's resources field places DLLs directly in resource_dir
+                    // IMPORTANT: Prepend to PATH so bundled DLLs take priority over system DLLs
+                    if let Ok(path) = std::env::var("PATH") {
+                        #[cfg(debug_assertions)]
+                        {
+                            // DEV MODE: Keep system GStreamer, just add resource dir for other DLLs
+                            let new_path = format!("{};{}", resource_dir.display(), path);
+                            std::env::set_var("PATH", new_path);
+                            crate::file_logger::log("[GStreamer] ✅ DEV MODE: Added resource dir to PATH (keeping system GStreamer)");
+                            crate::file_logger::log(&format!("[GStreamer]    Priority 1: {}", resource_dir.display()));
+                        }
                         
-                        // Add gstreamer-1.0 subdir (contains GStreamer plugin DLLs)
-                        path = format!("{};{}", gst_plugin_dir.display(), path);
-                        
-                        std::env::set_var("PATH", path);
-                        println!("[GStreamer] ✅ Added resource dirs to PATH for DLL discovery");
+                        #[cfg(not(debug_assertions))]
+                        {
+                            // RELEASE MODE: Remove system GStreamer to use ONLY bundled DLLs
+                            let path_clean = path.split(';')
+                                .filter(|p| !p.to_lowercase().contains("gstreamer"))
+                                .collect::<Vec<_>>()
+                                .join(";");
+                            
+                            // Add resource dir FIRST (contains all bundled DLLs from tauri.conf resources)
+                            let new_path = format!("{};{}", resource_dir.display(), path_clean);
+                            
+                            std::env::set_var("PATH", new_path);
+                            crate::file_logger::log("[GStreamer] ✅ RELEASE MODE: Using ONLY bundled GStreamer DLLs");
+                            crate::file_logger::log("[GStreamer]    ⚠️  Removed system GStreamer from PATH to prevent conflicts");
+                            crate::file_logger::log(&format!("[GStreamer]    Priority 1: {}", resource_dir.display()));
+                        }
                     }
                 } else {
                     // Fallback to exe directory for development
@@ -2147,7 +2349,60 @@ fn main() {
             start_streamdeck_watcher(app_handle.clone());
             println!("[Stream Deck] Watcher started");
             
-            // Stream Deck cleanup is handled by disconnect() in frontend onUnmounted
+            // Optimize main window for GPU efficiency
+            if let Some(window) = app.get_webview_window("main") {
+                // Evaluate JS to optimize rendering and reduce GPU usage
+                let _ = window.eval(r#"
+                    // Reduce unnecessary repaints and compositing
+                    if (window.requestIdleCallback) {
+                        window.requestIdleCallback(() => {
+                            // Disable CSS will-change on elements (reduces GPU layers)
+                            document.body.style.willChange = 'auto';
+                            
+                            // Force CPU rendering for static content
+                            document.body.style.transform = 'translateZ(0)';
+                        });
+                    }
+                    
+                    console.log('[GPU Optimization] Applied rendering optimizations');
+                "#);
+            }
+            
+            // Setup window close handler for cleanup
+            let app_handle_cleanup = app.handle().clone();
+            if let Some(window) = app.get_webview_window("main") {
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        crate::file_logger::log("[Cleanup] Main window closing - cleaning up...");
+                        
+                        // 1. Disconnect StreamDeck
+                        crate::file_logger::log("[Cleanup] Disconnecting StreamDeck...");
+                        if let Some(mut manager_lock) = STREAMDECK_MANAGER.try_lock() {
+                            if let Some(ref mut manager) = *manager_lock {
+                                let _ = manager.disconnect();
+                                crate::file_logger::log("[Cleanup] ✅ StreamDeck disconnected");
+                            }
+                        }
+                        
+                        // 2. Close any open TV monitor windows
+                        crate::file_logger::log("[Cleanup] Closing TV monitor windows...");
+                        let windows: Vec<_> = app_handle_cleanup.webview_windows().into_iter().collect();
+                        crate::file_logger::log(&format!("[Cleanup] Found {} windows total", windows.len()));
+                        for (label, window) in windows {
+                            crate::file_logger::log(&format!("[Cleanup] Checking window: {}", label));
+                            // Match exact label "tv-monitor" (not "tv-monitor-" with hyphen)
+                            if label == "tv-monitor" || label.starts_with("tv-monitor-") {
+                                crate::file_logger::log(&format!("[Cleanup] ✅ Closing TV monitor window: {}", label));
+                                match window.close() {
+                                    Ok(_) => crate::file_logger::log(&format!("[Cleanup] ✅ Successfully closed: {}", label)),
+                                    Err(e) => crate::file_logger::log(&format!("[Cleanup] ❌ Failed to close {}: {}", label, e)),
+                                }
+                            }
+                        }
+                        crate::file_logger::log("[Cleanup] ✅ All cleanup completed");
+                    }
+                });
+            }
             
             Ok(())
         })
@@ -2158,15 +2413,14 @@ fn main() {
             create_monitor_window,
             create_regular_window,
             set_modal_open,
+            // ✅ SCREEN CAPTURE: GStreamer preview for TV monitor modal (ACTIVELY USED)
             start_monitor_previews,
             stop_monitor_previews,
-            start_realtime_capture,
-            initialize_camera_system,
+            // ❌ REMOVED: start_realtime_capture - dead code (scap library, not called)
+            // ❌ REMOVED: All camera device handlers - camera system deleted, stubs return errors
+            // ❌ REMOVED: initialize_camera_system, get_available_cameras, start_camera_preview, 
+            //            start_camera_preview_with_quality, stop_camera_preview
             initialize_composite_system,
-            get_available_cameras,
-            start_camera_preview,
-            start_camera_preview_with_quality,
-            stop_camera_preview,
             start_composite_pipeline,
             stop_composite_pipeline,
             update_composite_layers,
@@ -2174,14 +2428,24 @@ fn main() {
             stop_composite_output,
             play_composite_fx,
             stop_composite_fx,
+            // DMX Lighting Control
+            scan_dmx_devices,
+            connect_dmx_device,
+            disconnect_dmx_device,
+            get_dmx_state,
+            send_dmx_data,
+            set_dmx_rgb,
+            set_dmx_dimmer,
+            set_dmx_pan_tilt,
+            set_dmx_complete,
+            dmx_blackout,
+            // Video Loop Cache
             download_and_cache_video_loop,
             get_cached_video_loop_path,
             clear_video_loop_cache,
-            initialize_virtual_camera,
-            start_virtual_camera,
-            stop_virtual_camera,
-            send_frame_to_virtual_camera,
-            get_virtual_camera_status,
+            // ❌ REMOVED: All virtual camera handlers - not used by frontend
+            // ❌ REMOVED: initialize_virtual_camera, start_virtual_camera, stop_virtual_camera,
+            //            send_frame_to_virtual_camera, get_virtual_camera_status
             streamdeck_init,
             streamdeck_scan,
             streamdeck_connect,
@@ -2189,6 +2453,7 @@ fn main() {
             streamdeck_get_info,
             streamdeck_update_layout,
             streamdeck_set_button_state,
+            streamdeck_flush_updates,
             streamdeck_run_diagnostics,
             streamdeck_get_driver_info
         ])

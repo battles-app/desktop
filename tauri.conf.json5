@@ -31,7 +31,7 @@
         "title": "BattlesDesktop",
         "titleBarStyle": "Overlay",
         "transparent": true,
-        "url": "https://battles.app/",
+        "url": "https://local.battles.app:3000/",
         "visible": true,
         "center": true,
         "windowEffects": {
@@ -46,7 +46,7 @@
     "withGlobalTauri": true
   },
   "build": {
-    "devUrl": "https://battles.app/",
+    "devUrl": "https://local.battles.app:3000/",
     "frontendDist": "../battles.app/dist"
   },
   "bundle": {

@@ -1,0 +1,10 @@
+// Windows Resource File for BattlesDesktop
+// This embeds the application manifest for elevated USB/HID access
+
+// Embed the manifest
+// 1 24 "app.manifest" // DISABLED - Tauri embeds its own manifest
+
+// Application icon
+// 1 ICON "icons\\icon.ico" // DISABLED - Tauri handles icons via tauri.conf.json5
+
+

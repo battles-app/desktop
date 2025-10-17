@@ -8,11 +8,36 @@ fn main() {
     // Bundle GStreamer DLLs for Windows
     if cfg!(target_os = "windows") {
         bundle_gstreamer_dlls();
+        
+        // Embed Windows manifest for elevated USB/HID access
+        embed_windows_manifest();
     }
+}
+
+#[cfg(target_os = "windows")]
+fn embed_windows_manifest() {
+    // Compile and embed the .rc file which includes the manifest
+    embed_resource::compile("app.rc", embed_resource::NONE);
+    println!("cargo:rerun-if-changed=app.rc");
+    println!("cargo:rerun-if-changed=app.manifest");
+}
+
+#[cfg(not(target_os = "windows"))]
+fn embed_windows_manifest() {
+    // No-op on non-Windows platforms
 }
 
 fn bundle_gstreamer_dlls() {
     println!("cargo:rerun-if-changed=build.rs");
+    
+    // Get target directory and project root
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    
+    // SKIP bundling in debug/dev builds - use system GStreamer only
+    if profile == "debug" {
+        println!("cargo:warning=Skipping GStreamer DLL bundling in debug mode (using system GStreamer)");
+        return;
+    }
     
     // Get GStreamer path from environment
     let gst_path = env::var("GSTREAMER_1_0_ROOT_MSVC_X86_64")
@@ -26,125 +51,86 @@ fn bundle_gstreamer_dlls() {
         eprintln!("Skipping DLL bundling. Application may not run on target system.");
         return;
     }
-    
-    // Get target directory - use the actual target/release directory
-    // NSIS bundler will automatically include DLLs from this location
-    let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let target_dir = PathBuf::from(&manifest_dir).join("target").join(profile);
+    let gstreamer_runtime_dir = PathBuf::from(&manifest_dir).join("gstreamer-runtime");
+    
+    // Ensure gstreamer-runtime directory exists in project root for Tauri resource dir
+    let _ = fs::create_dir_all(&gstreamer_runtime_dir);
+    
+    // CRITICAL: Also create gstreamer-runtime in target directory (for NSIS bundler)
+    let target_gstreamer_dir = target_dir.join("gstreamer-runtime");
+    let _ = fs::create_dir_all(&target_gstreamer_dir);
     
     // Silent bundling for clean build output
     
-    // Essential GStreamer DLLs - only copy what's absolutely needed
-    let required_dlls = vec![
-        // Core GLib/GObject
-        "glib-2.0-0.dll",
-        "gobject-2.0-0.dll",
-        "gmodule-2.0-0.dll",
-        "gio-2.0-0.dll",
-        
-        // Core GStreamer
-        "gstreamer-1.0-0.dll",
-        "gstbase-1.0-0.dll",
-        "gstapp-1.0-0.dll",
-        "gstvideo-1.0-0.dll",
-        "gstaudio-1.0-0.dll",
-        "gstpbutils-1.0-0.dll",
-        "gstcontroller-1.0-0.dll",
-        "gstnet-1.0-0.dll",
-        "gstgl-1.0-0.dll",
-        "gstallocators-1.0-0.dll",
-        "gstrtp-1.0-0.dll",
-        "gstrtsp-1.0-0.dll",
-        "gsttag-1.0-0.dll",
-        
-        // Required dependencies
-        "intl-8.dll",
-        "ffi-7.dll",
-        "z-1.dll",
-        "pcre2-8-0.dll",
-        
-        // Video processing
-        "orc-0.4-0.dll",
-        
-        // Graphics
-        "pixman-1-0.dll",
-        "graphene-1.0-0.dll",
-    ];
+    // Copy ALL GStreamer DLLs (not just a subset)
+    // GStreamer plugins have complex dependencies - copying everything ensures no missing DLLs
+    let mut copied_count = 0;
+    let mut skipped_count = 0;
     
-    let mut _copied = 0;
-    let mut missing = Vec::new();
-    
-    // Copy DLLs directly to target directory (NSIS will bundle them automatically)
-    for dll in &required_dlls {
-        let src = gst_bin.join(dll);
-        let dst = target_dir.join(dll);
-        
-        if src.exists() {
-            if fs::copy(&src, &dst).is_ok() {
-                _copied += 1;
+    // Read all DLLs from GStreamer bin directory
+    if let Ok(entries) = fs::read_dir(&gst_bin) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("dll") {
+                if let Some(dll_name) = path.file_name().and_then(|s| s.to_str()) {
+                    // Copy to FOUR locations:
+                    // 1. target/[profile]/ (for dev .exe)
+                    let dst_target = target_dir.join(dll_name);
+                    if fs::copy(&path, &dst_target).is_ok() {
+                        copied_count += 1;
+                    }
+                    
+                    // 2. gstreamer-runtime/ (for Tauri resource_dir at runtime)
+                    let dst_runtime = gstreamer_runtime_dir.join(dll_name);
+                    let _ = fs::copy(&path, &dst_runtime);
+                    
+                    // 3. target/[profile]/gstreamer-runtime/ (organized structure)
+                    let dst_target_runtime = target_gstreamer_dir.join(dll_name);
+                    let _ = fs::copy(&path, &dst_target_runtime);
+                    
+                    // 4. PROJECT ROOT (for NSIS bundler to pick up with resources field)
+                    let dst_project_root = PathBuf::from(&manifest_dir).join(dll_name);
+                    let _ = fs::copy(&path, &dst_project_root);
+                }
             }
-        } else {
-            missing.push(dll);
         }
+    } else {
+        eprintln!("Warning: Could not read GStreamer bin directory");
+        skipped_count += 1;
     }
     
-    // Bundle essential GStreamer plugins
+    // Bundle ALL GStreamer plugins (not just essential ones)
+    // Plugins are already .dll files in the gstreamer-1.0 subdirectory
+    // BUT they're also in the main bin directory, so they're already copied above
+    // We still copy them to gstreamer-1.0 subdirectories for organized structure
     if gst_plugins.exists() {
-        let plugins_dir = target_dir.join("gstreamer-1.0");
-        let _ = fs::create_dir_all(&plugins_dir);
+        let plugins_dir_target = target_dir.join("gstreamer-1.0");
+        let plugins_dir_runtime = gstreamer_runtime_dir.join("gstreamer-1.0");
+        let plugins_dir_target_runtime = target_gstreamer_dir.join("gstreamer-1.0");
+        let _ = fs::create_dir_all(&plugins_dir_target);
+        let _ = fs::create_dir_all(&plugins_dir_runtime);
+        let _ = fs::create_dir_all(&plugins_dir_target_runtime);
         
-           let essential_plugins = vec![
-               // Core plugins
-               "gstapp.dll",
-               "gstcoreelements.dll",
-               "gstvideoconvertscale.dll",
-               "gstvideofilter.dll",
-               "gstvideotestsrc.dll",
-               "gstvideoparsersbad.dll",
-               
-               // Audio plugins
-               "gstaudioconvert.dll",
-               "gstaudioresample.dll",
-               "gstaudiotestsrc.dll",
-               
-               // Auto-detection and playback
-               "gstautodetect.dll",
-               "gstplayback.dll",
-               "gsttypefindfunctions.dll",
-               
-               // Graphics/Display (includes screen capture elements)
-               "gstd3d11.dll",                 // Direct3D 11 (includes d3d11screencapturesrc)
-               "gstopengl.dll",
-               
-               // CRITICAL: Windows camera support via DirectShow
-               "gstdirectshow.dll",        // DirectShow plugin - REQUIRED for Windows cameras
-               "gstdirectsoundsrc.dll",    // DirectShow audio
-               
-               // CRITICAL: Media Foundation for modern Windows cameras
-               "gstmediafoundation.dll",   // Media Foundation plugin - mfvideosrc (REQUIRED)
-               
-               // CRITICAL: WASAPI for Windows audio/video devices
-               "gstwasapi.dll",            // Windows Audio Session API
-               
-               // CRITICAL: Screen capture plugins - includes all screen capture sources
-               "gstd3d11screencapturesrc.dll",  // D3D11 screen capture (if exists as separate plugin)
-               "gstwin32.dll",                   // Win32 screen capture elements (gdiscreencapsrc)
-           ];
-        
-        for plugin in &essential_plugins {
-            let src = gst_plugins.join(plugin);
-            let dst = plugins_dir.join(plugin);
-            
-            if src.exists() {
-                let _ = fs::copy(&src, &dst);
+        // Copy ALL plugin DLLs from gstreamer-1.0 directory
+        if let Ok(entries) = fs::read_dir(&gst_plugins) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("dll") {
+                    if let Some(plugin_name) = path.file_name().and_then(|s| s.to_str()) {
+                        // Copy to organized subdirectories
+                        let _ = fs::copy(&path, plugins_dir_target.join(plugin_name));
+                        let _ = fs::copy(&path, plugins_dir_runtime.join(plugin_name));
+                        let _ = fs::copy(&path, plugins_dir_target_runtime.join(plugin_name));
+                        
+                        // ALSO copy to project root (for Tauri resources field)
+                        let dst_project_root = PathBuf::from(&manifest_dir).join(plugin_name);
+                        let _ = fs::copy(&path, &dst_project_root);
+                    }
+                }
             }
         }
-    }
-    
-    // Only show warning if critical DLLs are missing
-    if !missing.is_empty() && missing.len() > 5 {
-        eprintln!("Warning: {} GStreamer DLLs not found. App may not run.", missing.len());
     }
     
     // Tell cargo to link GStreamer

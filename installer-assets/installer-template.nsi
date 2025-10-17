@@ -48,14 +48,14 @@ SetCompressor lzma
 !define MUI_UNICON "${INSTALLERICON}"
 
 # Custom Welcome Page
-!define MUI_WELCOMEPAGE_TITLE "Welcome to Battles.app Desktop Setup"
-!define MUI_WELCOMEPAGE_TEXT "This wizard will guide you through the installation of Battles.app Desktop.$\r$\n$\r$\n✨ Real-time FX Control$\r$\n🎮 Elgato Stream Deck Support$\r$\n🎬 Professional Streaming Tools$\r$\n🔥 GPU-Accelerated Performance$\r$\n$\r$\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TITLE "Welcome to BattlesDesktop Setup"
+!define MUI_WELCOMEPAGE_TEXT "This wizard will guide you through the installation of BattlesDesktop.$\r$\n$\r$\n✨ Real-time FX Control$\r$\n🎮 Elgato Stream Deck Support$\r$\n🎬 Professional Streaming Tools$\r$\n🔥 GPU-Accelerated Performance$\r$\n$\r$\nClick Next to continue."
 
 # Custom Finish Page  
 !define MUI_FINISHPAGE_TITLE "Installation Complete!"
-!define MUI_FINISHPAGE_TEXT "Battles.app Desktop has been successfully installed!$\r$\n$\r$\n🚀 Launch the application to get started$\r$\n💡 Visit battles.app for support and updates"
+!define MUI_FINISHPAGE_TEXT "BattlesDesktop has been successfully installed!$\r$\n$\r$\n🚀 Launch the application to get started$\r$\n💡 Visit battles.app for support and updates"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${MAINBINARYNAME}.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Launch Battles.app Desktop"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch BattlesDesktop"
 !define MUI_FINISHPAGE_LINK "Visit Battles.app"
 !define MUI_FINISHPAGE_LINK_LOCATION "https://battles.app"
 
@@ -77,7 +77,7 @@ SetCompressor lzma
 # Version Info
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "${PRODUCTNAME}"
-VIAddVersionKey "FileDescription" "Battles.app Desktop Installer"
+VIAddVersionKey "FileDescription" "BattlesDesktop Installer"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${MANUFACTURER}"
 VIAddVersionKey "LegalCopyright" "© 2025 ${MANUFACTURER}"

@@ -9,12 +9,35 @@ lazy_static! {
     static ref LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
 }
 
-/// Initialize the file logger in the executable's directory
+/// Initialize the file logger in AppData\Local
 pub fn init_logger() {
-    let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    let exe_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    // Determine log directory based on OS
+    let log_dir = if cfg!(target_os = "windows") {
+        // Use %LOCALAPPDATA%\BattlesDesktop\ on Windows
+        match std::env::var("LOCALAPPDATA") {
+            Ok(local_app_data) => {
+                PathBuf::from(local_app_data).join("BattlesDesktop")
+            }
+            Err(_) => {
+                // Fallback to executable directory if LOCALAPPDATA not available
+                let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+                exe_path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf()
+            }
+        }
+    } else {
+        // For non-Windows, use executable directory
+        let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+        exe_path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf()
+    };
     
-    let log_file_path = exe_dir.join("battles-desktop.log");
+    // Ensure the log directory exists
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("⚠️  Failed to create log directory {}: {}", log_dir.display(), e);
+        eprintln!("⚠️  Log directory: {}", log_dir.display());
+        return;
+    }
+    
+    let log_file_path = log_dir.join("battles-desktop.log");
     
     match OpenOptions::new()
         .create(true)
@@ -24,7 +47,7 @@ pub fn init_logger() {
         Ok(mut file) => {
             let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
             let separator = "=".repeat(80);
-            let header = format!("\n\n{}\n🚀 Battles.app Desktop - Session Started: {}\n{}\n", separator, timestamp, separator);
+            let header = format!("\n\n{}\n🚀 BattlesDesktop - Session Started: {}\n{}\n", separator, timestamp, separator);
             let _ = file.write_all(header.as_bytes());
             let _ = file.flush();
             
@@ -44,12 +67,13 @@ pub fn log(message: &str) {
     // Print to console
     println!("{}", message);
     
-    // Write to file with timestamp
+    // Write to file with timestamp (buffered - no immediate flush for performance)
     if let Some(ref mut file) = *LOG_FILE.lock() {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let log_line = format!("[{}] {}\n", timestamp, message);
         let _ = file.write_all(log_line.as_bytes());
-        let _ = file.flush(); // Flush immediately to ensure logs are written
+        // REMOVED: Immediate flush - let OS buffer handle it for performance
+        // Logs will still be written, just batched by the OS (much faster)
     }
 }
 
