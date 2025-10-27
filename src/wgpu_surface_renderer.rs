@@ -60,8 +60,6 @@ impl WgpuSurfaceRenderer {
         width: u32,
         height: u32
     ) -> Result<Self, String> {
-        println!("[WGPU Surface] 🚀 Initializing direct surface renderer ({}x{})", width, height);
-        println!("[WGPU Surface] 💡 Rendering to transparent window - WebView will overlay on top!");
 
         let instance = Instance::new(&InstanceDescriptor {
             backends: Backends::PRIMARY,
@@ -70,25 +68,20 @@ impl WgpuSurfaceRenderer {
 
         // Create surface from the native window (NOT the WebView!)
         // The WebView is transparent, so WGPU renders "behind" it
-        println!("[WGPU Surface] 🔧 Creating surface from native window handle...");
         let surface = unsafe {
             let target = wgpu::SurfaceTargetUnsafe::from_window(window.as_ref())
                 .map_err(|e| {
                     let err = format!("Failed to get surface target from window: {}", e);
-                    println!("[WGPU Surface] ❌ {}", err);
                     err
                 })?;
             
             instance.create_surface_unsafe(target)
                 .map_err(|e| {
                     let err = format!("Failed to create WGPU surface: {}", e);
-                    println!("[WGPU Surface] ❌ {}", err);
                     err
                 })?
         };
-        println!("[WGPU Surface] ✅ Surface created from native window handle!");
 
-        println!("[WGPU Surface] 🔧 Requesting GPU adapter...");
         let adapter = match instance
             .request_adapter(&RequestAdapterOptions {
                 power_preference: PowerPreference::HighPerformance,
@@ -97,17 +90,14 @@ impl WgpuSurfaceRenderer {
             })
             .await {
                 Ok(adapter) => {
-                    println!("[WGPU Surface] ✅ GPU adapter found");
                     adapter
                 },
                 Err(e) => {
                     let err = format!("Failed to find suitable GPU adapter: {:?}", e);
-                    println!("[WGPU Surface] ❌ {}", err);
                     return Err(err);
                 },
             };
 
-        println!("[WGPU Surface] 🔧 Requesting GPU device...");
         let (device, queue) = adapter
             .request_device(&DeviceDescriptor {
                 label: Some("WGPU Surface Device"),
@@ -120,30 +110,22 @@ impl WgpuSurfaceRenderer {
             .await
             .map_err(|e| {
                 let err = format!("Failed to create device: {}", e);
-                println!("[WGPU Surface] ❌ {}", err);
                 err
             })?;
-        println!("[WGPU Surface] ✅ GPU device created");
 
-        println!("[WGPU Surface] 🔧 Configuring surface...");
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats.iter()
             .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(surface_caps.formats[0]);
         
-        println!("[WGPU Surface] 📊 Surface format: {:?}", surface_format);
-        println!("[WGPU Surface] 📊 Alpha modes: {:?}", surface_caps.alpha_modes);
 
         // Use Immediate for lowest latency, fall back to Mailbox, then Fifo
         let present_mode = if surface_caps.present_modes.contains(&PresentMode::Immediate) {
-            println!("[WGPU Surface] ✅ Using PresentMode::Immediate (lowest latency!)");
             PresentMode::Immediate
         } else if surface_caps.present_modes.contains(&PresentMode::Mailbox) {
-            println!("[WGPU Surface] ✅ Using PresentMode::Mailbox (low latency)");
             PresentMode::Mailbox
         } else {
-            println!("[WGPU Surface] ⚠️ Using PresentMode::Fifo (VSync)");
             PresentMode::Fifo
         };
 
@@ -159,15 +141,12 @@ impl WgpuSurfaceRenderer {
         };
 
         surface.configure(&device, &config);
-        println!("[WGPU Surface] ✅ Surface configured ({}x{})", width, height);
 
         // Chroma key shader (same as before)
-        println!("[WGPU Surface] 🔧 Loading shader...");
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Chroma Key Shader"),
             source: ShaderSource::Wgsl(include_str!("chroma_key_shader.wgsl").into()),
         });
-        println!("[WGPU Surface] ✅ Shader loaded");
 
         // Create vertex buffer
         let vertex_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -280,7 +259,6 @@ impl WgpuSurfaceRenderer {
             cache: None,
         });
 
-        println!("[WGPU Surface] ✅ Direct surface renderer initialized");
 
         Ok(Self {
             _window: window,

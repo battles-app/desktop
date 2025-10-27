@@ -25,8 +25,6 @@ const openai = new OpenAI({
 });
 
 async function generateLicense() {
-  console.log('🤖 Generating BSL 1.1 License with AI...');
-  
   const prompt = `Generate a professional Business Source License 1.1 (BSL 1.1) for "Battles.app Desktop" software.
 
 **Company Information:**
@@ -75,12 +73,9 @@ Generate a complete, legally sound BSL 1.1 license document. Use proper legal fo
     });
     
     const license = response.choices[0].message.content.trim();
-    console.log('✅ AI-generated license created!');
     return license;
     
   } catch (error) {
-    console.error('❌ OpenAI API failed:', error.message);
-    console.log('Falling back to template license...');
     return generateFallbackLicense();
   }
 }
@@ -168,25 +163,14 @@ IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY DAMAGES, INCLUDING BUT NOT LIMI
 }
 
 async function main() {
-  console.log('');
-  console.log('════════════════════════════════════════');
-  console.log('  BSL 1.1 License Generator');
-  console.log('════════════════════════════════════════');
-  console.log('');
-  
   const license = await generateLicense();
   
   // Save to LICENSE file
   const licensePath = path.join(rootDir, 'LICENSE');
   fs.writeFileSync(licensePath, license, 'utf-8');
-  
-  console.log('');
-  console.log('✅ LICENSE saved to:', licensePath);
-  console.log('');
 }
 
 main().catch(error => {
-  console.error('Error:', error.message);
   process.exit(1);
 });
 

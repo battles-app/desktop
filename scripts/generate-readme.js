@@ -105,9 +105,6 @@ const appContext = {
 
 // Generate README using OpenAI GPT-4
 async function generateReadme(version, changelog = '') {
-  console.log('🤖 Generating README with AI...');
-  console.log(`Version: ${version}`);
-  
   const prompt = `You are an expert at creating stunning, professional GitHub README files. Create a beautiful README.md for "${appContext.name}" following modern GitHub best practices.
 
 CRITICAL: Output ONLY the raw markdown content. DO NOT wrap it in code blocks like \`\`\`markdown or any other formatting. Start directly with the opening <div>.
@@ -247,12 +244,9 @@ Study the style of popular repositories like microsoft/vscode, tauri-apps/tauri,
     });
     
     const readme = response.choices[0].message.content.trim();
-    console.log('✅ AI-generated README created!');
     return readme;
     
   } catch (error) {
-    console.error('❌ OpenAI API failed:', error.message);
-    console.log('Falling back to template README...');
     return generateFallbackReadme(version, changelog);
   }
 }
@@ -479,35 +473,20 @@ ${changelog || '• Bug fixes and improvements'}
 // Main function
 async function main() {
   const version = getCurrentVersion();
-  
-  console.log('');
-  console.log('════════════════════════════════════════');
-  console.log('  AI Content Generator');
-  console.log('════════════════════════════════════════');
-  console.log('');
-  
   // Check for changelog argument
   const changelog = process.argv[2] || '';
   
   // Generate release notes (for GitHub release)
-  console.log('📝 Generating release notes...');
   const releaseNotes = await generateReleaseNotes(version, changelog);
   const releaseNotesPath = path.join(rootDir, 'RELEASE_NOTES.md');
   fs.writeFileSync(releaseNotesPath, releaseNotes, 'utf-8');
-  console.log('✅ Release notes saved to:', releaseNotesPath);
-  
   // Generate repository README
-  console.log('📝 Generating repository README...');
   const readme = await generateReadme(version, changelog);
   const readmePath = path.join(rootDir, 'RELEASE_README.md');
   fs.writeFileSync(readmePath, readme, 'utf-8');
-  console.log('✅ Repository README saved to:', readmePath);
-  
-  console.log('');
 }
 
 main().catch(error => {
-  console.error('Error:', error.message);
   process.exit(1);
 });
 

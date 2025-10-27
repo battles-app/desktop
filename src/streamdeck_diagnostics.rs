@@ -41,7 +41,6 @@ pub fn run_diagnostics() -> StreamDeckDiagnostics {
             
             // List all HID devices (not just Stream Decks) for debugging
             let all_devices: Vec<_> = hid.device_list().collect();
-            println!("[Stream Deck Diagnostics] Found {} total HID devices", all_devices.len());
             
             // List Stream Deck devices
             let devices = list_devices(&hid);

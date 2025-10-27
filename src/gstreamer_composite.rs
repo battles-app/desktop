@@ -699,7 +699,6 @@ impl GStreamerComposite {
         // Initialize GStreamer
         gst::init().map_err(|e| format!("Failed to initialize GStreamer: {}", e))?;
 
-        println!("[Composite] GStreamer initialized for WGPU-powered compositing");
 
         Ok(Self {
             pipeline: None,
@@ -716,8 +715,6 @@ impl GStreamerComposite {
     /// Initialize WGPU surface renderer with transparent WebView overlay
     #[allow(dead_code)]
     pub async fn set_window_async(&mut self, window: Arc<tauri::Window>, width: u32, height: u32) -> Result<(), String> {
-        println!("[Composite] 🖼️  Initializing WGPU surface renderer...");
-        println!("[Composite] 💡 Using transparent WebView overlay architecture");
         
         // Create surface renderer (async)
         let renderer = WgpuSurfaceRenderer::new(window, width, height)
@@ -726,8 +723,6 @@ impl GStreamerComposite {
         
         self.surface_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
         
-        println!("[Composite] ✅ Surface renderer initialized - ZERO-LATENCY mode!");
-        println!("[Composite] 🎨 WebView is transparent - WGPU renders behind it");
         Ok(())
     }
 
@@ -736,11 +731,9 @@ impl GStreamerComposite {
     }
 
     pub fn start(&mut self, width: u32, height: u32) -> Result<(), String> {
-        println!("[Composite] Starting composite pipeline: {}x{}", width, height);
 
         // CRITICAL: Properly stop existing pipeline if any
         if let Some(pipeline) = &self.pipeline {
-            println!("[Composite] ⚠️ Stopping existing pipeline before starting new one...");
             *self.is_running.write() = false;
             
             // Set to NULL state and wait for it to complete
@@ -749,10 +742,8 @@ impl GStreamerComposite {
             // Wait for state change to complete (up to 2 seconds)
             match pipeline.state(Some(gst::ClockTime::from_seconds(2))).1 {
                 gst::State::Null => {
-                    println!("[Composite] ✅ Previous pipeline stopped cleanly");
                 }
                 state => {
-                    println!("[Composite] ⚠️ Previous pipeline in state: {:?} (forcing cleanup)", state);
                 }
             }
             
@@ -764,12 +755,10 @@ impl GStreamerComposite {
         
         // Initialize WGPU renderer if not already done
         if self.wgpu_renderer.is_none() {
-            println!("[Composite] 🎨 Initializing WGPU renderer for video loops and FX...");
             let renderer = pollster::block_on(WgpuChromaRenderer::new(width, height))
                 .map_err(|e| format!("Failed to create WGPU renderer: {}", e))?;
             
             self.wgpu_renderer = Some(Arc::new(parking_lot::Mutex::new(renderer)));
-            println!("[Composite] ✅ WGPU renderer initialized for FX chroma key");
         }
 
         *self.is_running.write() = true;
@@ -783,13 +772,11 @@ impl GStreamerComposite {
             width, height
         );
 
-        println!("[Composite] Creating pipeline: {}", pipeline_str);
 
         // Create pipeline
         let pipeline = match gst::parse::launch(&pipeline_str) {
             Ok(p) => p,
             Err(e) => {
-                println!("[Composite] ❌ Failed to parse pipeline string: {}", e);
                 return Err(format!("Failed to parse pipeline: {}", e));
             }
         };
@@ -797,18 +784,15 @@ impl GStreamerComposite {
         let pipeline = match pipeline.dynamic_cast::<Pipeline>() {
             Ok(p) => p,
             Err(_) => {
-                println!("[Composite] ❌ Failed to cast to Pipeline");
                 return Err("Failed to cast to Pipeline".to_string());
             }
         };
         
-        println!("[Composite] ✅ Pipeline created successfully");
 
         // Set up frame callback BEFORE starting pipeline
         let appsink = match pipeline.by_name("output") {
             Some(element) => element,
             None => {
-                println!("[Composite] ❌ Failed to find appsink element 'output' in pipeline");
                 // Clean up pipeline before returning
                 let _ = pipeline.set_state(gst::State::Null);
                 return Err("Failed to get output appsink - element not found in pipeline".to_string());
@@ -818,13 +802,11 @@ impl GStreamerComposite {
         let appsink = match appsink.dynamic_cast::<AppSink>() {
             Ok(sink) => sink,
             Err(_) => {
-                println!("[Composite] ❌ Failed to cast output element to AppSink");
                 let _ = pipeline.set_state(gst::State::Null);
                 return Err("Failed to cast to AppSink".to_string());
             }
         };
         
-        println!("[Composite] ✅ AppSink element found and configured");
 
         let frame_sender = self.frame_sender.clone();
         let is_running = self.is_running.clone();
@@ -845,7 +827,6 @@ impl GStreamerComposite {
                     let sample = match appsink.pull_sample() {
                         Ok(s) => s,
                         Err(e) => {
-                            println!("[Composite] ❌ Failed to pull sample: {:?}", e);
                             return Err(gst::FlowError::Eos);
                         }
                     };
@@ -853,7 +834,6 @@ impl GStreamerComposite {
                     let buffer = match sample.buffer() {
                         Some(b) => b,
                         None => {
-                            println!("[Composite] ❌ Sample has no buffer");
                             return Err(gst::FlowError::Error);
                         }
                     };
@@ -861,7 +841,6 @@ impl GStreamerComposite {
                     let map = match buffer.map_readable() {
                         Ok(m) => m,
                         Err(e) => {
-                            println!("[Composite] ❌ Failed to map buffer: {:?}", e);
                             return Err(gst::FlowError::Error);
                         }
                     };
@@ -880,7 +859,6 @@ impl GStreamerComposite {
                     *count += 1;
                     
                     if *count == 1 {
-                        println!("[Composite] 🎬 FIRST FRAME! Processing with WGPU ({}x{})", frame_width, frame_height);
                     }
                     // Removed excessive frame logging (was spamming console every 90 frames)
 
@@ -891,7 +869,6 @@ impl GStreamerComposite {
                             if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
                                 if let Err(e) = renderer.render_to_surface() {
                                     if *count % 90 == 0 {
-                                        println!("[Composite] ⚠️  Surface render failed: {}", e);
                                     }
                                 }
                                 // Removed excessive frame logging (was spamming console)
@@ -936,10 +913,8 @@ impl GStreamerComposite {
                 .build(),
         );
         
-        println!("[Composite] ✅ AppSink callbacks configured");
 
         // Start pipeline with state transitions
-        println!("[Composite] 🔄 Setting pipeline to READY state...");
         pipeline
             .set_state(gst::State::Ready)
             .map_err(|e| format!("Failed to set pipeline to READY: {:?}", e))?;
@@ -947,28 +922,22 @@ impl GStreamerComposite {
         // Wait for READY state
         std::thread::sleep(std::time::Duration::from_millis(200));
         
-        println!("[Composite] 🔄 Setting pipeline to PAUSED state...");
         pipeline
             .set_state(gst::State::Paused)
             .map_err(|e| format!("Failed to set pipeline to PAUSED: {:?}", e))?;
         
         // Wait for PAUSED state to complete
-        println!("[Composite] ⏳ Waiting for pipeline to reach PAUSED state...");
         match pipeline.state(Some(gst::ClockTime::from_seconds(5))).1 {
             gst::State::Paused => {
-                println!("[Composite] ✅ Pipeline is PAUSED and ready");
             }
             state => {
-                println!("[Composite] ⚠️ Pipeline in unexpected state: {:?}", state);
             }
         }
         
-        println!("[Composite] 🔄 Setting pipeline to PLAYING state...");
         let state_change_result = pipeline.set_state(gst::State::Playing);
         
         match state_change_result {
             Ok(_) => {
-                println!("[Composite] ✅ Pipeline set to PLAYING");
             }
             Err(e) => {
                 // Get more detailed error info
@@ -978,7 +947,6 @@ impl GStreamerComposite {
                         let error_msg = format!("GStreamer error: {} (debug: {:?})", 
                             err.error(), 
                             err.debug());
-                        println!("[Composite] ❌ {}", error_msg);
                         return Err(error_msg);
                     }
                 }
@@ -990,7 +958,6 @@ impl GStreamerComposite {
         std::thread::sleep(std::time::Duration::from_millis(500));
         
         let (_, current_state, pending_state) = pipeline.state(None);
-        println!("[Composite] 📊 Pipeline state: {:?} (pending: {:?})", current_state, pending_state);
         
         // Check for any errors on the bus
         if let Some(bus) = pipeline.bus() {
@@ -998,35 +965,29 @@ impl GStreamerComposite {
                 match msg.view() {
                     gst::MessageView::Error(err) => {
                         let error_msg = format!("Pipeline error: {} (debug: {:?})", err.error(), err.debug());
-                        println!("[Composite] ❌ {}", error_msg);
                         return Err(error_msg);
                     }
                     gst::MessageView::Warning(warn) => {
-                        println!("[Composite] ⚠️ Pipeline warning: {} (debug: {:?})", warn.error(), warn.debug());
                     }
                     _ => {}
                 }
             }
         }
         
-        println!("[Composite] ✅ Pipeline fully initialized and running");
 
         self.pipeline = Some(pipeline);
         Ok(())
     }
 
     pub fn play_fx_from_file(&mut self, file_path: String, keycolor: String, tolerance: f64, similarity: f64, use_chroma_key: bool) -> Result<(), String> {
-        println!("[Composite] 🎬 Playing FX: {} (chroma: {})", file_path, use_chroma_key);
 
         // Check if pipeline is running
         if !self.is_running() {
-            println!("[Composite] ❌ Pipeline not initialized - cannot play FX");
             return Err("Pipeline not initialized".to_string());
         }
 
         // Check if FX file exists
         if !std::path::Path::new(&file_path).exists() {
-            println!("[Composite] ❌ FX file does not exist: {}", file_path);
             return Err(format!("FX file does not exist: {}", file_path));
         }
 
@@ -1038,7 +999,6 @@ impl GStreamerComposite {
                       file_path.to_lowercase().ends_with(".webm");
 
         if is_video {
-            println!("[Composite] 🎥 Video FX detected - this will be implemented with GStreamer overlay");
             // For now, log that we received the FX command
             // Full GStreamer overlay integration would require rebuilding the pipeline with compositor
             // This is a complex change that requires:
@@ -1050,10 +1010,8 @@ impl GStreamerComposite {
             self.current_fx_file = Some(file_path.clone());
             self.current_chroma_params = Some((keycolor, tolerance, similarity, use_chroma_key));
             
-            println!("[Composite] ✅ Video FX stored (overlay implementation in progress)");
             Ok(())
         } else {
-            println!("[Composite] 🖼️ Image FX detected - loading for overlay");
             
             // Parse keycolor for future use (currently unused but saved for later implementation)
             let _key_rgb = if keycolor.starts_with('#') {
@@ -1087,13 +1045,11 @@ impl GStreamerComposite {
             let rgba_image = fx_image.to_rgba8();
             let (width, height) = rgba_image.dimensions();
 
-            println!("[Composite] 📷 FX image loaded: {}x{}", width, height);
 
             // Store current FX parameters
             self.current_fx_file = Some(file_path.clone());
             self.current_chroma_params = Some((keycolor, tolerance, similarity, use_chroma_key));
 
-            println!("[Composite] ✅ Image FX loaded (overlay implementation in progress)");
             Ok(())
         }
     }
@@ -1109,19 +1065,16 @@ impl GStreamerComposite {
         self.current_fx_file = None;
         self.current_chroma_params = None;
 
-        println!("[Composite] 🛑 FX stopped");
         Ok(())
     }
 
     pub fn update_layers(&self, overlay: (bool, f64)) {
         if let Some(_pipeline) = &self.pipeline {
             // Update layer visibility based on overlay settings
-            println!("[Composite] Updated layers - Overlay: {}", overlay.0);
         }
     }
 
     pub fn set_output_format(&mut self, format: &str) -> Result<(), String> {
-        println!("[Composite] Setting output format: {}", format);
 
         // For now, just support "preview" format
         // Could extend to support different output formats like MP4, RTMP, etc.
@@ -1133,7 +1086,6 @@ impl GStreamerComposite {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        println!("[Composite] Stopping composite pipeline");
 
         *self.is_running.write() = false;
 
@@ -1147,7 +1099,6 @@ impl GStreamerComposite {
         self.wgpu_renderer = None;
         self.fx_appsrc = None;
 
-        println!("[Composite] Composite pipeline stopped");
         Ok(())
     }
 

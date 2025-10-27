@@ -18,8 +18,6 @@ fn main() {
 fn embed_windows_manifest() {
     // Compile and embed the .rc file which includes the manifest
     embed_resource::compile("app.rc", embed_resource::NONE);
-    println!("cargo:rerun-if-changed=app.rc");
-    println!("cargo:rerun-if-changed=app.manifest");
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -28,14 +26,12 @@ fn embed_windows_manifest() {
 }
 
 fn bundle_gstreamer_dlls() {
-    println!("cargo:rerun-if-changed=build.rs");
     
     // Get target directory and project root
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     
     // SKIP bundling in debug/dev builds - use system GStreamer only
     if profile == "debug" {
-        println!("cargo:warning=Skipping GStreamer DLL bundling in debug mode (using system GStreamer)");
         return;
     }
     
@@ -47,8 +43,6 @@ fn bundle_gstreamer_dlls() {
     let gst_plugins = PathBuf::from(&gst_path).join("lib").join("gstreamer-1.0");
     
     if !gst_bin.exists() {
-        eprintln!("Warning: GStreamer bin directory not found at {:?}", gst_bin);
-        eprintln!("Skipping DLL bundling. Application may not run on target system.");
         return;
     }
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
@@ -97,7 +91,6 @@ fn bundle_gstreamer_dlls() {
             }
         }
     } else {
-        eprintln!("Warning: Could not read GStreamer bin directory");
         skipped_count += 1;
     }
     
@@ -134,7 +127,6 @@ fn bundle_gstreamer_dlls() {
     }
     
     // Tell cargo to link GStreamer
-    println!("cargo:rustc-link-search=native={}", gst_bin.display());
 }
 
 

@@ -7,8 +7,6 @@ const DIRECTUS_URL = 'https://server.battles.app';
 const ADMIN_TOKEN = 'AhY_g2PTZe5lyMRSzpJ_hzOy_nOBPAQB';
 
 async function getOrphanedFileIds(client) {
-  console.log('📊 Fetching all files from Directus database...\n');
-  
   try {
     const files = await client.request(
       readFiles({
@@ -16,19 +14,13 @@ async function getOrphanedFileIds(client) {
         fields: ['id', 'filename_disk', 'filename_download']
       })
     );
-    
-    console.log(`✅ Found ${files.length} files in database\n`);
     return files;
   } catch (error) {
-    console.error('❌ Error fetching files:', error.message);
     throw error;
   }
 }
 
 async function massDeleteFiles(client, fileIds, batchSize = 50) {
-  console.log(`\n🗑️  Mass deleting ${fileIds.length} orphaned files...\n`);
-  console.log(`   Batch size: ${batchSize} files per request\n`);
-  
   let totalDeleted = 0;
   let totalErrors = 0;
   const errors = [];
@@ -38,9 +30,6 @@ async function massDeleteFiles(client, fileIds, batchSize = 50) {
     const batch = fileIds.slice(i, Math.min(i + batchSize, fileIds.length));
     const batchNum = Math.floor(i / batchSize) + 1;
     const totalBatches = Math.ceil(fileIds.length / batchSize);
-    
-    console.log(`📦 Processing batch ${batchNum}/${totalBatches} (${batch.length} files)...`);
-    
     // Delete files one by one but with Promise.allSettled for parallel execution
     const deletePromises = batch.map(async (fileId) => {
       try {
@@ -89,9 +78,6 @@ async function massDeleteFiles(client, fileIds, batchSize = 50) {
         process.stdout.write('❌');
       }
     });
-    
-    console.log(` | ✅ ${batchSuccess} deleted, ❌ ${batchErrors} errors`);
-    
     // Small delay between batches to avoid rate limiting
     if (i + batchSize < fileIds.length) {
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -102,8 +88,6 @@ async function massDeleteFiles(client, fileIds, batchSize = 50) {
 }
 
 async function deleteByFilenames(client, filenames) {
-  console.log('🔍 Finding file IDs from filenames...\n');
-  
   try {
     const allFiles = await client.request(
       readFiles({
@@ -127,25 +111,15 @@ async function deleteByFilenames(client, filenames) {
         notFound.push(filename);
       }
     }
-    
-    console.log(`✅ Found ${fileIds.length} matching files`);
     if (notFound.length > 0) {
-      console.log(`⚠️  ${notFound.length} filenames not found in database`);
     }
-    console.log('');
-    
     return fileIds;
   } catch (error) {
-    console.error('❌ Error finding files:', error.message);
     throw error;
   }
 }
 
 async function main() {
-  console.log('╔════════════════════════════════════════════════════════════════════════╗');
-  console.log('║         Directus Mass Delete - Orphaned Files Remover                 ║');
-  console.log('╚════════════════════════════════════════════════════════════════════════╝\n');
-  
   const args = process.argv.slice(2);
   
   // Check for file list
@@ -168,14 +142,9 @@ async function main() {
   
   try {
     // Create Directus client
-    console.log('🔌 Connecting to Directus...');
-    console.log(`   URL: ${DIRECTUS_URL}`);
     const client = createDirectus(DIRECTUS_URL)
       .with(rest())
       .with(staticToken(ADMIN_TOKEN));
-    
-    console.log('✅ Connected to Directus\n');
-    
     if (mode === 'filenames') {
       const filenamesIndex = args.indexOf('--filenames');
       const filenamesString = args[filenamesIndex + 1];
@@ -183,56 +152,27 @@ async function main() {
       
       fileIds = await deleteByFilenames(client, filenames);
     } else if (mode === 'check-all') {
-      console.log('⚠️  This mode is not yet implemented.');
-      console.log('💡 Please use --ids or --filenames to specify files to delete.\n');
       process.exit(1);
     } else if (mode === 'prompt') {
-      console.log('❌ No files specified for deletion.\n');
-      console.log('Usage:');
-      console.log('  node mass-delete-orphans.js --ids "id1,id2,id3"');
-      console.log('  node mass-delete-orphans.js --filenames "file1.jpg,file2.jpg"');
-      console.log('  node mass-delete-orphans.js --all-orphans\n');
       process.exit(1);
     }
     
     if (fileIds.length === 0) {
-      console.log('❌ No files to delete.\n');
       process.exit(0);
     }
-    
-    console.log(`📋 Files to delete: ${fileIds.length}\n`);
-    console.log('⚠️  WARNING: This will permanently delete these files from Directus!\n');
-    console.log('Press Ctrl+C to cancel, or wait 5 seconds to continue...\n');
-    
     await new Promise(resolve => setTimeout(resolve, 5000));
     
     // Perform mass deletion
     const result = await massDeleteFiles(client, fileIds);
-    
-    console.log('\n' + '═'.repeat(80));
-    console.log('\n📊 Mass Deletion Summary:');
-    console.log(`   ✅ Successfully deleted: ${result.totalDeleted}`);
-    console.log(`   ❌ Errors: ${result.totalErrors}\n`);
-    
     if (result.errors.length > 0) {
-      console.log('❌ Errors encountered:');
-      console.log('─'.repeat(80));
       result.errors.slice(0, 20).forEach((err, i) => {
-        console.log(`${i + 1}. File ID: ${err.id}`);
-        console.log(`   Error: ${err.error}\n`);
       });
       
       if (result.errors.length > 20) {
-        console.log(`   ... and ${result.errors.length - 20} more errors\n`);
       }
     }
-    
-    console.log('✅ Mass deletion completed!\n');
-    
   } catch (error) {
-    console.error('\n❌ Fatal error:', error.message);
     if (error.stack) {
-      console.error('\nStack trace:', error.stack);
     }
     process.exit(1);
   }

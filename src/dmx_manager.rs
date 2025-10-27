@@ -191,34 +191,102 @@ impl DmxManager {
     fn scan_ethernet_devices(&self) -> Result<Vec<DmxDevice>, String> {
         let mut devices = Vec::new();
 
-        println!("[DMX Scan] 🔍 Scanning local network for Enttec ODE devices...");
+        println!("[DMX Scan] 🔍 Scanning ALL network interfaces for Enttec ODE devices...");
 
-        // Get local IP address to determine subnet
-        let local_ip = std::net::UdpSocket::bind("0.0.0.0:0")
-            .and_then(|s| {
-                s.connect("8.8.8.8:80")?;
-                s.local_addr()
-            })
-            .ok()
-            .map(|addr| addr.ip().to_string())
-            .unwrap_or_else(|| "192.168.1.1".to_string());
+        // Get ALL local network interfaces
+        use std::net::{IpAddr, Ipv4Addr};
+        
+        let mut subnets_to_scan: Vec<String> = Vec::new();
+        
+        // Method 1: Get all local network interfaces using system commands
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(output) = std::process::Command::new("ipconfig")
+                .output()
+            {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                for line in output_str.lines() {
+                    if line.contains("IPv4 Address") || line.contains("IP Address") {
+                        // Extract IP address from line like "   IPv4 Address. . . . . . . . . . . : 192.168.1.116"
+                        if let Some(ip_part) = line.split(':').nth(1) {
+                            let ip_str = ip_part.trim();
+                            if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
+                                // Skip loopback and APIPA addresses
+                                if !ip.is_loopback() && !ip.to_string().starts_with("169.254") {
+                                    let octets = ip.octets();
+                                    let subnet = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
+                                    if !subnets_to_scan.contains(&subnet) {
+                                        subnets_to_scan.push(subnet.clone());
+                                        println!("[DMX Scan] 📍 Found interface: {}.{} -> will scan subnet {}.x", subnet, octets[3], subnet);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        #[cfg(not(target_os = "windows"))]
+        {
+            // For Linux/Mac, use ifconfig or ip addr
+            if let Ok(output) = std::process::Command::new("sh")
+                .arg("-c")
+                .arg("ip addr show 2>/dev/null || ifconfig")
+                .output()
+            {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                for line in output_str.lines() {
+                    if line.contains("inet ") && !line.contains("inet6") {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        for (i, part) in parts.iter().enumerate() {
+                            if *part == "inet" && i + 1 < parts.len() {
+                                let ip_str = parts[i + 1].split('/').next().unwrap_or("");
+                                if let Ok(ip) = ip_str.parse::<Ipv4Addr>() {
+                                    if !ip.is_loopback() && !ip.to_string().starts_with("169.254") {
+                                        let octets = ip.octets();
+                                        let subnet = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
+                                        if !subnets_to_scan.contains(&subnet) {
+                                            subnets_to_scan.push(subnet.clone());
+                                            println!("[DMX Scan] 📍 Found interface: {}.{} -> will scan subnet {}.x", subnet, octets[3], subnet);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fallback: If no interfaces found, use the old method
+        if subnets_to_scan.is_empty() {
+            println!("[DMX Scan] ⚠️  Could not detect network interfaces, using fallback method");
+            let local_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+                .and_then(|s| {
+                    s.connect("8.8.8.8:80")?;
+                    s.local_addr()
+                })
+                .ok()
+                .map(|addr| addr.ip().to_string())
+                .unwrap_or_else(|| "192.168.1.1".to_string());
+            
+            if let Some(last_dot) = local_ip.rfind('.') {
+                subnets_to_scan.push(local_ip[..last_dot].to_string());
+            } else {
+                subnets_to_scan.push("192.168.1".to_string());
+            }
+        }
 
-        println!("[DMX Scan] 📍 Local IP: {}", local_ip);
-
-        // Extract subnet (e.g., "192.168.1" from "192.168.1.116")
-        let subnet = if let Some(last_dot) = local_ip.rfind('.') {
-            &local_ip[..last_dot]
-        } else {
-            "192.168.1"
-        };
-
-        println!("[DMX Scan] 🔍 Quick scan of subnet {}.x for Art-Net devices...", subnet);
+        println!("[DMX Scan] 🔍 Will scan {} subnet(s): {:?}", subnets_to_scan.len(), subnets_to_scan);
 
         // Create one socket for all polling (faster)
-        if let Ok(socket) = UdpSocket::bind("0.0.0.0:6454") {
-            socket.set_read_timeout(Some(Duration::from_millis(50))).ok();
-            socket.set_write_timeout(Some(Duration::from_millis(10))).ok();
-            socket.set_broadcast(true).ok();
+        match UdpSocket::bind("0.0.0.0:6454") {
+            Ok(socket) => {
+                println!("[DMX Scan] 🔌 Created UDP socket on port 6454");
+                socket.set_read_timeout(Some(Duration::from_millis(50))).ok();
+                socket.set_write_timeout(Some(Duration::from_millis(10))).ok();
+                socket.set_broadcast(true).ok();
             
             // Build Art-Net Poll packet once
             let mut poll_packet = Vec::new();
@@ -228,31 +296,78 @@ impl DmxManager {
             poll_packet.push(0x06); // Flags
             poll_packet.push(0x00); // Priority
             
-            // Send polls to likely ranges (faster than full scan)
+            // Send polls to full subnet (1-254) to ensure we find the ODE
             let ranges = vec![
-                1..50,    // Common DHCP range
-                40..60,   // Your ODE is at .43
-                100..120, // Common static range
-                150..170, // Another common range
+                1..255,    // Full subnet scan
             ];
             
-            for range in ranges {
-                for i in range {
-                    let test_ip = format!("{}.{}", subnet, i);
-                    let _ = socket.send_to(&poll_packet, format!("{}:6454", test_ip));
-                }
+            // First, send a broadcast poll
+            if let Ok(_) = socket.send_to(&poll_packet, "255.255.255.255:6454") {
+                println!("[DMX Scan] 📡 Sent broadcast Art-Net poll to 255.255.255.255");
             }
             
-            // Collect responses for 2 seconds
+            println!("[DMX Scan] 📤 Sending Art-Net polls to all subnets...");
+            let mut sent_count = 0;
+            
+            // Scan ALL detected subnets
+            for subnet in &subnets_to_scan {
+                println!("[DMX Scan] 📤 Scanning subnet {}.x...", subnet);
+                for range in &ranges {
+                    for i in range.clone() {
+                        let test_ip = format!("{}.{}", subnet, i);
+                        if let Ok(_) = socket.send_to(&poll_packet, format!("{}:6454", test_ip)) {
+                            sent_count += 1;
+                        }
+                    }
+                }
+            }
+            println!("[DMX Scan] 📤 Sent {} Art-Net poll packets total", sent_count);
+            
+            // Collect responses for 3 seconds (longer for full subnet scan)
             let start = std::time::Instant::now();
             let mut found_ips = std::collections::HashSet::new();
+            println!("[DMX Scan] 🔍 Listening for Art-Net responses for 3 seconds...");
+            let mut response_count = 0;
             
-            while start.elapsed() < Duration::from_secs(2) {
+            // Build list of our own IPs to filter out
+            let mut our_ips: Vec<String> = Vec::new();
+            for subnet in &subnets_to_scan {
+                // Try to get our IP on this subnet by parsing ipconfig output again
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(output) = std::process::Command::new("ipconfig").output() {
+                        let output_str = String::from_utf8_lossy(&output.stdout);
+                        for line in output_str.lines() {
+                            if line.contains("IPv4 Address") || line.contains("IP Address") {
+                                if let Some(ip_part) = line.split(':').nth(1) {
+                                    let ip_str = ip_part.trim();
+                                    if ip_str.starts_with(subnet) {
+                                        our_ips.push(ip_str.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            println!("[DMX Scan] 🔒 Will filter out our own IPs: {:?}", our_ips);
+            
+            while start.elapsed() < Duration::from_secs(3) {
                 let mut buf = [0u8; 1024];
                 if let Ok((len, addr)) = socket.recv_from(&mut buf) {
+                    response_count += 1;
+                    let ip = addr.ip().to_string();
+                    
+                    // Skip packets from our own IPs
+                    if our_ips.contains(&ip) {
+                        println!("[DMX Scan] 🔄 Skipping packet from self ({})", ip);
+                        continue;
+                    }
+                    
+                    println!("[DMX Scan] 📥 Received {} bytes from {}", len, addr);
+                    
                     // Check if response is ArtPollReply (OpCode 0x2100)
                     if len > 10 && buf[8] == 0x00 && buf[9] == 0x21 {
-                        let ip = addr.ip().to_string();
                         if found_ips.insert(ip.clone()) {
                             println!("[DMX Scan] ✅ Found Art-Net device at {}", ip);
                             devices.push(DmxDevice {
@@ -272,10 +387,22 @@ impl DmxManager {
                                 },
                             });
                         }
+                    } else {
+                        println!("[DMX Scan] ⚠️  Received non-ArtPollReply packet (OpCode: 0x{:02X}{:02X})", buf[9], buf[8]);
                     }
                 }
             }
+            
+            println!("[DMX Scan] 📊 Response summary: {} total responses, {} unique Art-Net devices found", response_count, found_ips.len());
         }
+        Err(e) => {
+            println!("[DMX Scan] ❌ Failed to bind UDP socket on port 6454: {}", e);
+            println!("[DMX Scan] ⚠️  This could mean:");
+            println!("[DMX Scan]    - Port 6454 is already in use by another application");
+            println!("[DMX Scan]    - Firewall is blocking the port");
+            println!("[DMX Scan]    - Running without Administrator privileges");
+        }
+    }
         
         println!("[DMX Scan] ✅ Subnet scan complete - found {} devices", devices.len());
 
@@ -1040,3 +1167,4 @@ impl DmxManager {
 lazy_static::lazy_static! {
     pub static ref DMX_MANAGER: DmxManager = DmxManager::new();
 }
+

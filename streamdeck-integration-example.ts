@@ -37,7 +37,6 @@ export class StreamDeckManager {
   // Initialize Stream Deck system
   async initialize(): Promise<void> {
     try {
-      console.log('[Stream Deck] Initializing...');
       await invoke('streamdeck_init');
       this.isInitialized = true;
       
@@ -46,10 +45,7 @@ export class StreamDeckManager {
       
       // Setup event listeners
       await this.setupEventListeners();
-      
-      console.log('[Stream Deck] ✅ Initialized and ready');
     } catch (error) {
-      console.error('[Stream Deck] ❌ Initialization failed:', error);
       throw error;
     }
   }
@@ -59,10 +55,8 @@ export class StreamDeckManager {
     try {
       const result = await invoke<string>('streamdeck_connect');
       this.isConnected = true;
-      console.log('[Stream Deck] ✅ Connected:', result);
       return result;
     } catch (error) {
-      console.error('[Stream Deck] ❌ Connection failed:', error);
       this.isConnected = false;
       throw error;
     }
@@ -73,9 +67,7 @@ export class StreamDeckManager {
     try {
       await invoke('streamdeck_disconnect');
       this.isConnected = false;
-      console.log('[Stream Deck] Disconnected');
     } catch (error) {
-      console.error('[Stream Deck] Disconnect error:', error);
     }
   }
 
@@ -92,19 +84,11 @@ export class StreamDeckManager {
   // Update button layout
   async updateLayout(battleBoard: FxButton[], userFx: FxButton[]): Promise<void> {
     try {
-      console.log('[Stream Deck] Updating layout:', {
-        battleBoard: battleBoard.length,
-        userFx: userFx.length
-      });
-      
       await invoke('streamdeck_update_layout', {
         battleBoard,
         userFx
       });
-      
-      console.log('[Stream Deck] ✅ Layout updated');
     } catch (error) {
-      console.error('[Stream Deck] ❌ Layout update failed:', error);
       throw error;
     }
   }
@@ -117,7 +101,6 @@ export class StreamDeckManager {
         isPlaying
       });
     } catch (error) {
-      console.error('[Stream Deck] Set button state error:', error);
     }
   }
 
@@ -125,14 +108,12 @@ export class StreamDeckManager {
   private async setupEventListeners(): Promise<void> {
     // Listen for device connection
     this.unlistenConnected = await listen('streamdeck://connected', () => {
-      console.log('[Stream Deck] 🔌 Device connected');
       this.isConnected = true;
       this.onDeviceConnected();
     });
 
     // Listen for device disconnection
     this.unlistenDisconnected = await listen('streamdeck://disconnected', () => {
-      console.log('[Stream Deck] 🔌 Device disconnected');
       this.isConnected = false;
       this.onDeviceDisconnected();
     });
@@ -142,11 +123,6 @@ export class StreamDeckManager {
       'streamdeck://button-press',
       (event) => {
         const { button_idx, fx_id, should_play } = event.payload;
-        console.log('[Stream Deck] 🎮 Button pressed:', {
-          button: button_idx,
-          fx: fx_id,
-          play: should_play
-        });
         this.onButtonPress(fx_id, should_play);
       }
     );
@@ -188,7 +164,6 @@ export function useStreamDeck() {
 
     protected onDeviceDisconnected(): void {
       // Show notification
-      console.warn('Stream Deck disconnected! Waiting for reconnection...');
     }
 
     protected onButtonPress(fxId: string, shouldPlay: boolean): void {
@@ -268,7 +243,6 @@ export function useStreamDeck() {
       streamDeck.value = new CustomStreamDeckManager();
       await streamDeck.value.initialize();
     } catch (error) {
-      console.error('Failed to initialize Stream Deck:', error);
       // Stream Deck is optional, don't block app startup
     }
   });

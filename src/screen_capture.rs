@@ -69,8 +69,8 @@ impl ScreenCaptureMonitor {
         
         crate::file_logger::log("[ScreenCapture]   ✅ Using D3D11 screen capture");
 
-        // Calculate preview dimensions (max 240x135 for low bandwidth and fast startup)
-        let preview_width = 240u32;
+        // Calculate preview dimensions (320x180 to match frontend expectations)
+        let preview_width = 320u32;
         let preview_height = ((preview_width as f64 / monitor_width as f64) * monitor_height as f64) as u32;
 
         // Build GStreamer pipeline for screen capture
@@ -224,7 +224,7 @@ impl ScreenCaptureMonitor {
     
     // Fallback: DirectX 9 screen capture
     fn start_with_dx9(&mut self, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
-        let preview_width = 240u32;
+        let preview_width = 320u32;
         let preview_height = ((preview_width as f64 / monitor_width as f64) * monitor_height as f64) as u32;
         
         let pipeline_str = format!(
@@ -245,7 +245,7 @@ impl ScreenCaptureMonitor {
     
     // Fallback: GDI screen capture (slowest but most compatible)
     fn start_with_gdi(&mut self, monitor_width: u32, monitor_height: u32) -> Result<(), String> {
-        let preview_width = 240u32;
+        let preview_width = 320u32;
         let preview_height = ((preview_width as f64 / monitor_width as f64) * monitor_height as f64) as u32;
         
         let pipeline_str = format!(

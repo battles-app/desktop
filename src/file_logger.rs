@@ -32,8 +32,6 @@ pub fn init_logger() {
     
     // Ensure the log directory exists
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        eprintln!("⚠️  Failed to create log directory {}: {}", log_dir.display(), e);
-        eprintln!("⚠️  Log directory: {}", log_dir.display());
         return;
     }
     
@@ -54,10 +52,8 @@ pub fn init_logger() {
             *LOG_FILE.lock() = Some(file);
             
             // Print to console where logs are being saved
-            println!("📝 Logging to: {}", log_file_path.display());
         }
         Err(e) => {
-            eprintln!("⚠️  Failed to create log file at {}: {}", log_file_path.display(), e);
         }
     }
 }
@@ -65,7 +61,6 @@ pub fn init_logger() {
 /// Log a message to both console and file
 pub fn log(message: &str) {
     // Print to console
-    println!("{}", message);
     
     // Write to file with timestamp (buffered - no immediate flush for performance)
     if let Some(ref mut file) = *LOG_FILE.lock() {
@@ -83,7 +78,7 @@ macro_rules! log_info {
     ($($arg:tt)*) => {
         {
             let msg = format!($($arg)*);
-            $crate::file_logger::log(&msg);
+            $crate::file_logger::
         }
     };
 }

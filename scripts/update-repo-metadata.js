@@ -26,14 +26,9 @@ const colors = {
 };
 
 function log(message, color = 'reset') {
-  console.log(`${colors[color]}${message}${colors.reset}`);
 }
 
 async function generateMetadata() {
-  log('\n════════════════════════════════════════', 'cyan');
-  log('  AI Repository Metadata Generator', 'cyan');
-  log('════════════════════════════════════════\n', 'cyan');
-
   const prompt = `Generate professional GitHub repository metadata for "Battles.app Desktop".
 
 **Software Details:**
@@ -66,8 +61,6 @@ async function generateMetadata() {
 Return as JSON with keys: shortDescription, tagline, topics (array), socialPreview`;
 
   try {
-    log('🤖 Generating metadata with AI...', 'cyan');
-    
     const response = await openai.chat.completions.create({
       model: 'gpt-4-turbo-preview',
       messages: [
@@ -86,14 +79,9 @@ Return as JSON with keys: shortDescription, tagline, topics (array), socialPrevi
     });
     
     const metadata = JSON.parse(response.choices[0].message.content.trim());
-    log('✅ AI-generated metadata created!\n', 'green');
-    
     return metadata;
     
   } catch (error) {
-    log(`❌ OpenAI API failed: ${error.message}`, 'yellow');
-    log('Using fallback metadata...\n', 'yellow');
-    
     return {
       shortDescription: '🎮 Professional TikTok Live streaming utilities with Elgato Stream Deck integration. Real-time animations, light shows, and AI-powered tools for engaging live streams on Windows.',
       tagline: 'Pro TikTok Live Utilities with Stream Deck Integration',
@@ -121,31 +109,11 @@ Return as JSON with keys: shortDescription, tagline, topics (array), socialPrevi
 
 async function main() {
   const metadata = await generateMetadata();
-  
-  log('📋 Generated Metadata:\n', 'cyan');
-  
-  log('Short Description:', 'green');
-  log(`  ${metadata.shortDescription}\n`, 'reset');
-  
-  log('Tagline:', 'green');
-  log(`  ${metadata.tagline}\n`, 'reset');
-  
-  log('Topics:', 'green');
   log(`  ${metadata.topics.join(', ')}\n`, 'reset');
-  
-  log('Social Preview:', 'green');
-  log(`  ${metadata.socialPreview}\n`, 'reset');
-  
-  log('\n💡 How to Apply:', 'cyan');
-  log('  1. Go to: https://github.com/battles-app/desktop/settings', 'reset');
-  log('  2. Paste short description in "Description"', 'reset');
   log('  3. Add topics (comma-separated)', 'reset');
-  log('  4. Set website to: https://battles.app', 'reset');
-  log('  5. Social preview image: Add a screenshot or logo\n', 'reset');
 }
 
 main().catch(error => {
-  console.error('Error:', error.message);
   process.exit(1);
 });
 

@@ -10,9 +10,6 @@ const LOGO_SVG = path.join(__dirname, 'logo.svg');
 const SIZES = [16, 32, 48, 64, 128, 256, 512, 1024];
 const PADDING_PERCENT = 0.12; // 12% padding on each side (slightly less for better visibility)
 const CORNER_RADIUS_PERCENT = 0.0; // No corner radius - full transparency
-
-console.log('🎨 Battles.app Icon Generator\n');
-
 // Create temp directory for PNGs
 const tempDir = path.join(__dirname, '.icon-temp');
 if (!fs.existsSync(tempDir)) {
@@ -20,8 +17,6 @@ if (!fs.existsSync(tempDir)) {
 }
 
 async function generateTransparentIcon(size) {
-  console.log(`📐 Generating ${size}x${size}...`);
-  
   // Calculate dimensions
   const padding = Math.floor(size * PADDING_PERCENT);
   const logoSize = size - (padding * 2);
@@ -65,19 +60,14 @@ async function generateTransparentIcon(size) {
     // Save PNG
     const pngPath = path.join(tempDir, `icon-${size}.png`);
     await sharp(final).toFile(pngPath);
-    
-    console.log(`  ✅ Saved: icon-${size}.png`);
     return { path: pngPath, buffer: final, size };
     
   } catch (error) {
-    console.error(`  ❌ Error generating ${size}x${size}:`, error.message);
     throw error;
   }
 }
 
 async function convertToICO(icons) {
-  console.log('\n🔄 Converting to ICO format...');
-  
   try {
     // ICO format supports 16, 32, 48, 256 sizes
     const icoSizes = [16, 32, 48, 256];
@@ -90,17 +80,13 @@ async function convertToICO(icons) {
       const icoPath = path.join(__dirname, 'favicon.ico');
       
       fs.writeFileSync(icoPath, icoBuffer);
-      console.log(`  ✅ Created: favicon.ico (${icoBuffers.length} sizes)`);
       return icoPath;
     }
   } catch (error) {
-    console.error('  ❌ Error creating ICO:', error.message);
   }
 }
 
 async function copyToWebApp(icons) {
-  console.log('\n🌐 Copying to web app...');
-  
   try {
     // Copy 512x512 as favicon for web app
     const webIcon = icons.find(icon => icon.size === 512);
@@ -112,19 +98,14 @@ async function copyToWebApp(icons) {
       if (fs.existsSync(webAppPublic)) {
         const webIconPath = path.join(webAppPublic, 'favicon.png');
         fs.copyFileSync(webIcon.path, webIconPath);
-        console.log(`  ✅ Copied to: battles.app/public/favicon.png`);
       } else {
-        console.log(`  ⚠️  Web app directory not found: ${webAppPublic}`);
       }
     }
   } catch (error) {
-    console.error('  ❌ Error copying to web app:', error.message);
   }
 }
 
 async function createAppleIcons(icons) {
-  console.log('\n🍎 Creating Apple Touch Icons...');
-  
   try {
     const appleIcon = icons.find(icon => icon.size === 180);
     if (!appleIcon) {
@@ -139,11 +120,9 @@ async function createAppleIcons(icons) {
       const icon180 = icons.find(icon => icon.size === 180);
       if (icon180) {
         fs.copyFileSync(icon180.path, appleIconPath);
-        console.log(`  ✅ Created: apple-touch-icon.png (180x180)`);
       }
     }
   } catch (error) {
-    console.error('  ❌ Error creating Apple icons:', error.message);
   }
 }
 
@@ -154,20 +133,14 @@ async function main() {
       require('sharp');
       require('to-ico');
     } catch (e) {
-      console.error('❌ Missing dependencies!');
-      console.error('📦 Installing dependencies...\n');
       const { execSync } = require('child_process');
       execSync('bun install', { stdio: 'inherit' });
     }
     
     // Check if logo.svg exists
     if (!fs.existsSync(LOGO_SVG)) {
-      console.error(`❌ Logo not found: ${LOGO_SVG}`);
       process.exit(1);
     }
-    
-    console.log('🎨 Generating transparent high-quality icons with padding...\n');
-    
     // Generate all PNG sizes
     const icons = [];
     for (const size of SIZES) {
@@ -179,30 +152,7 @@ async function main() {
     await convertToICO(icons);
     await copyToWebApp(icons);
     await createAppleIcons(icons);
-    
-    console.log('\n✨ All icons generated successfully!');
-    console.log('\n📁 Generated files:');
-    console.log('  ✅ favicon.ico (Windows icon - 16, 32, 48, 256)');
-    console.log(`  ✅ .icon-temp/ (PNG files: ${SIZES.join(', ')} px)`);
-    console.log('  ✅ battles.app/public/favicon.png (512x512)');
-    console.log('  ✅ battles.app/public/apple-touch-icon.png (180x180)');
-    
-    console.log('\n📝 Icon features:');
-    console.log(`  • ${PADDING_PERCENT * 100}% padding on all sides`);
-    console.log('  • Fully transparent background');
-    console.log('  • High-quality lanczos3 scaling');
-    console.log('  • No background or corners');
-    
-    console.log('\n📝 Optional - macOS ICNS:');
-    console.log('  1. Upload .icon-temp/icon-1024.png to: https://cloudconvert.com/png-to-icns');
-    console.log('  2. Save as icon.icns in battlesDesktop/ directory');
-    console.log('  3. Update tauri.conf.json to include "icon.icns" in the icon array');
-    
-    console.log('\n✅ Done!\n');
-    
   } catch (error) {
-    console.error('\n❌ Fatal error:', error.message);
-    console.error(error.stack);
     process.exit(1);
   }
 }
