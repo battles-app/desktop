@@ -60,8 +60,8 @@ fn bundle_gstreamer_dlls() {
     
     // Copy ALL GStreamer DLLs (not just a subset)
     // GStreamer plugins have complex dependencies - copying everything ensures no missing DLLs
-    let mut copied_count = 0;
-    let mut skipped_count = 0;
+    let mut _copied_count = 0;
+    let mut _skipped_count = 0;
     
     // Read all DLLs from GStreamer bin directory
     if let Ok(entries) = fs::read_dir(&gst_bin) {
@@ -73,7 +73,7 @@ fn bundle_gstreamer_dlls() {
                     // 1. target/[profile]/ (for dev .exe)
                     let dst_target = target_dir.join(dll_name);
                     if fs::copy(&path, &dst_target).is_ok() {
-                        copied_count += 1;
+                        _copied_count += 1;
                     }
                     
                     // 2. gstreamer-runtime/ (for Tauri resource_dir at runtime)
@@ -91,7 +91,7 @@ fn bundle_gstreamer_dlls() {
             }
         }
     } else {
-        skipped_count += 1;
+        _skipped_count += 1;
     }
     
     // Bundle ALL GStreamer plugins (not just essential ones)

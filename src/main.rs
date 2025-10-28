@@ -3,9 +3,10 @@
     windows_subsystem = "windows"
 )]
 
-use tauri::{command, Manager, Emitter, menu::{MenuBuilder, MenuItem, PredefinedMenuItem, Submenu}};
+use tauri::{command, Manager, Emitter};
 use base64::Engine;
 use std::sync::{Arc, Mutex};
+use serde::{Serialize, Deserialize};
 
 // File logger module
 mod file_logger;
