@@ -31,7 +31,7 @@ pub fn init_logger() {
     };
     
     // Ensure the log directory exists
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+    if let Err(_e) = std::fs::create_dir_all(&log_dir) {
         return;
     }
     
@@ -53,7 +53,7 @@ pub fn init_logger() {
             
             // Print to console where logs are being saved
         }
-        Err(e) => {
+        Err(_e) => {
         }
     }
 }

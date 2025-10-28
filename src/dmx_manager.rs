@@ -194,7 +194,7 @@ impl DmxManager {
         println!("[DMX Scan] 🔍 Scanning ALL network interfaces for Enttec ODE devices...");
 
         // Get ALL local network interfaces
-        use std::net::{IpAddr, Ipv4Addr};
+        use std::net::Ipv4Addr;
         
         let mut subnets_to_scan: Vec<String> = Vec::new();
         

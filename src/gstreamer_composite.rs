@@ -743,7 +743,7 @@ impl GStreamerComposite {
             match pipeline.state(Some(gst::ClockTime::from_seconds(2))).1 {
                 gst::State::Null => {
                 }
-                state => {
+                _state => {
                 }
             }
             
@@ -826,7 +826,7 @@ impl GStreamerComposite {
 
                     let sample = match appsink.pull_sample() {
                         Ok(s) => s,
-                        Err(e) => {
+                        Err(_e) => {
                             return Err(gst::FlowError::Eos);
                         }
                     };
@@ -840,7 +840,7 @@ impl GStreamerComposite {
 
                     let map = match buffer.map_readable() {
                         Ok(m) => m,
-                        Err(e) => {
+                        Err(_e) => {
                             return Err(gst::FlowError::Error);
                         }
                     };
@@ -867,7 +867,7 @@ impl GStreamerComposite {
                         if let Some(mut renderer) = renderer_arc.try_lock() {
                             // Upload texture and render DIRECTLY to native window surface
                             if let Ok(()) = renderer.update_texture_from_rgba(rgba_data, frame_width, frame_height) {
-                                if let Err(e) = renderer.render_to_surface() {
+                                if let Err(_e) = renderer.render_to_surface() {
                                     if *count % 90 == 0 {
                                     }
                                 }
@@ -930,7 +930,7 @@ impl GStreamerComposite {
         match pipeline.state(Some(gst::ClockTime::from_seconds(5))).1 {
             gst::State::Paused => {
             }
-            state => {
+            _state => {
             }
         }
         
@@ -957,7 +957,7 @@ impl GStreamerComposite {
         // Wait a moment and verify pipeline is actually playing
         std::thread::sleep(std::time::Duration::from_millis(500));
         
-        let (_, current_state, pending_state) = pipeline.state(None);
+        let (_, _current_state, _pending_state) = pipeline.state(None);
         
         // Check for any errors on the bus
         if let Some(bus) = pipeline.bus() {
@@ -967,7 +967,7 @@ impl GStreamerComposite {
                         let error_msg = format!("Pipeline error: {} (debug: {:?})", err.error(), err.debug());
                         return Err(error_msg);
                     }
-                    gst::MessageView::Warning(warn) => {
+                    gst::MessageView::Warning(_warn) => {
                     }
                     _ => {}
                 }
@@ -1043,7 +1043,7 @@ impl GStreamerComposite {
                 .map_err(|e| format!("Failed to load FX image: {}", e))?;
 
             let rgba_image = fx_image.to_rgba8();
-            let (width, height) = rgba_image.dimensions();
+            let (_width, _height) = rgba_image.dimensions();
 
 
             // Store current FX parameters
@@ -1068,7 +1068,7 @@ impl GStreamerComposite {
         Ok(())
     }
 
-    pub fn update_layers(&self, overlay: (bool, f64)) {
+    pub fn update_layers(&self, _overlay: (bool, f64)) {
         if let Some(_pipeline) = &self.pipeline {
             // Update layer visibility based on overlay settings
         }

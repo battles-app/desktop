@@ -400,13 +400,13 @@ async fn start_monitor_previews(app: tauri::AppHandle) -> Result<(), String> {
     
     // Start capture for each monitor
     for (index, monitor) in monitors.iter().enumerate() {
-        let position = monitor.position();
-        let size = monitor.size();
+        let _position = monitor.position();
+        let _size = monitor.size();
         
         // Starting capture for monitor {index}
         
         // Create screen capture
-        let mut capture = ScreenCaptureMonitor::new(index)
+        let capture = ScreenCaptureMonitor::new(index)
             .map_err(|e| format!("Failed to create capture {}: {}", index, e))?;
         
         // Create broadcast channel for this monitor with larger buffer

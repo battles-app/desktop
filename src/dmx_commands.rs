@@ -566,11 +566,11 @@ pub async fn set_dmx_complete(
 /// Handle timeline automation frame (called every frame during playback)
 #[command]
 pub async fn dmx_automation_frame(
-    light_id: String,
-    r: u8,
-    g: u8,
-    b: u8,
-    intensity: u8
+    _light_id: String,
+    _r: u8,
+    _g: u8,
+    _b: u8,
+    _intensity: u8
 ) -> Result<(), String> {
     // This is a lightweight call that just forwards to set_dmx_rgb
     // The timeline component will call this 60 times per second during playback

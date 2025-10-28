@@ -40,7 +40,7 @@ pub fn run_diagnostics() -> StreamDeckDiagnostics {
             diagnostics.hidapi_initialized = true;
             
             // List all HID devices (not just Stream Decks) for debugging
-            let all_devices: Vec<_> = hid.device_list().collect();
+            let _all_devices: Vec<_> = hid.device_list().collect();
             
             // List Stream Deck devices
             let devices = list_devices(&hid);
