@@ -3,7 +3,8 @@
     "security": {
       "pattern": {
         "use": "brownfield"
-      }
+      },
+      "csp": null
     },
     "macOSPrivateApi": true,
     "windows": [
@@ -35,16 +36,9 @@
         "url": "https://local.battles.app:3000/",
         "visible": true,
         "center": true,
-        // DISABLED: Window effects can block drag-and-drop and text selection
-        "windowEffects": null
-        // To re-enable: uncomment below and remove "windowEffects": null above
-        /* "windowEffects": {
-          "effects": [
-            "hudWindow",
-            "mica"
-          ],
-          "state": "active"
-        } */
+        "devtools": true,
+        "zoomHotkeysEnabled": true,
+        "proxyUrl": null
       }
     ],
     "withGlobalTauri": true
