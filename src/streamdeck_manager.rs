@@ -1825,12 +1825,15 @@ impl StreamDeckManager {
     /// Update button state WITHOUT rendering (called when FX stops playing)
     /// Use render_all_buttons() after batch updates to update visuals
     pub fn set_button_state(&mut self, fx_id: &str, is_playing: bool) -> Result<(), String> {
+        crate::file_logger::log(&format!("[StreamDeck] 🔍 set_button_state called: ID='{}' playing={}", fx_id, is_playing));
+        
         // Find button with this FX ID and update state
         let mut button_to_update: Option<(u8, FxButton)> = None;
         
         for (idx, button_type_opt) in self.button_layout.iter().enumerate() {
             if let Some(ButtonType::FxButton(fx_button)) = button_type_opt {
                 if fx_button.id == fx_id {
+                    crate::file_logger::log(&format!("[StreamDeck]   ✅ Found button at index {}: {}", idx, fx_button.name));
                     button_to_update = Some((idx as u8, fx_button.clone()));
                     break;
                 }
@@ -1859,6 +1862,7 @@ impl StreamDeckManager {
             
             Ok(())
         } else {
+            crate::file_logger::log(&format!("[StreamDeck]   ❌ Button with ID '{}' NOT FOUND in layout", fx_id));
             Err(format!("FX ID '{}' not found in button layout", fx_id))
         }
     }
