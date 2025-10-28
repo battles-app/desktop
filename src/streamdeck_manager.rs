@@ -584,6 +584,52 @@ impl StreamDeckManager {
         Ok(())
     }
     
+    /// NEW: Sync mappings from database with exact x,y coordinates
+    pub fn sync_mappings(&mut self, grid_cols: usize, grid_rows: usize, fx_buttons: Vec<(usize, FxButton)>) -> Result<(), String> {
+        crate::file_logger::log(&format!("[StreamDeck] sync_mappings() START - Grid: {}x{}, Buttons: {}", 
+            grid_cols, grid_rows, fx_buttons.len()));
+        
+        // Stop loading animation if we have buttons
+        if !fx_buttons.is_empty() {
+            self.stop_loading_animation();
+        }
+        
+        // Build image cache for fast lookups
+        self.image_cache.clear();
+        for (_idx, fx) in &fx_buttons {
+            let cache_key = format!("{}_{}", fx.id, fx.name);
+            if let Some(cached_path) = self.find_cached_image_internal(&cache_key) {
+                self.image_cache.insert(cache_key, cached_path);
+            }
+            // Download if not cached (non-blocking)
+            self.download_image_to_cache(fx);
+        }
+        
+        // Clear and resize button layout
+        self.button_layout.clear();
+        self.button_layout.resize(self.button_count(), None);
+        
+        // Map buttons to their exact positions from database
+        let mut mapped_count = 0;
+        for (button_index, fx_button) in fx_buttons {
+            if button_index < self.button_layout.len() {
+                self.button_layout[button_index] = Some(ButtonType::FxButton(fx_button));
+                mapped_count += 1;
+            } else {
+                crate::file_logger::log(&format!("[StreamDeck] ⚠️ Button index {} out of range (max: {})", 
+                    button_index, self.button_layout.len()));
+            }
+        }
+        
+        crate::file_logger::log(&format!("[StreamDeck] Mapped {} buttons using database coordinates", mapped_count));
+        
+        // Render buttons to the device
+        self.render_all_buttons()?;
+        crate::file_logger::log("[StreamDeck] sync_mappings() END - Success");
+        
+        Ok(())
+    }
+    
     /// Update button layout with FX buttons  
     /// Battle board effects go on left side, user FX on right side
     pub fn update_layout(&mut self, battle_board: Vec<FxButton>, user_fx: Vec<FxButton>) -> Result<(), String> {

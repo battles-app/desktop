@@ -1891,6 +1891,66 @@ async fn streamdeck_update_layout(
     }
 }
 
+// NEW: Sync mappings from database to StreamDeck device
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ButtonMappingData {
+    x: i32,
+    y: i32,
+    button_index: usize,
+    item_type: String,
+    item_id: String,
+    item_name: String,
+    image_url: String,
+    config: serde_json::Value,
+}
+
+#[command]
+async fn streamdeck_sync_mappings(
+    device_name: String,
+    grid_cols: usize,
+    grid_rows: usize,
+    button_mappings: Vec<ButtonMappingData>
+) -> Result<(), String> {
+    crate::file_logger::log(&format!(
+        "[StreamDeck] 📡 Sync mappings called - Device: {}, Grid: {}x{}, Buttons: {}", 
+        device_name, grid_cols, grid_rows, button_mappings.len()
+    ));
+    
+    let mut manager_lock = STREAMDECK_MANAGER.lock();
+    
+    if let Some(ref mut manager) = *manager_lock {
+        // Convert button mappings to FxButton format for rendering
+        let mut fx_buttons: Vec<(usize, FxButton)> = Vec::new();
+        
+        for mapping in button_mappings {
+            let button_index = (mapping.y * grid_cols as i32 + mapping.x) as usize;
+            
+            fx_buttons.push((
+                button_index,
+                FxButton {
+                    id: mapping.item_id,
+                    name: mapping.item_name,
+                    image_url: if mapping.image_url.is_empty() { None } else { Some(mapping.image_url) },
+                    is_global: mapping.item_type == "battle_fx",
+                    position: button_index,
+                }
+            ));
+        }
+        
+        crate::file_logger::log(&format!("[StreamDeck] 📍 Button positions: {:?}", 
+            fx_buttons.iter().map(|(idx, btn)| format!("{}:{}", idx, btn.name)).collect::<Vec<_>>()));
+        
+        // Render buttons using the sync_mappings method
+        manager.sync_mappings(grid_cols, grid_rows, fx_buttons)?;
+        
+        crate::file_logger::log("[StreamDeck] ✅ Mappings synced successfully");
+        Ok(())
+    } else {
+        crate::file_logger::log("[StreamDeck] ⚠️ Manager not initialized");
+        Err("Manager not initialized".to_string())
+    }
+}
+
 #[command]
 async fn streamdeck_set_button_state(fx_id: String, is_playing: bool) -> Result<(), String> {
     let mut manager_lock = STREAMDECK_MANAGER.lock();
@@ -2482,6 +2542,7 @@ fn main() {
             streamdeck_disconnect,
             streamdeck_get_info,
             streamdeck_update_layout,
+            streamdeck_sync_mappings, // NEW: Sync database mappings
             streamdeck_set_button_state,
             streamdeck_flush_updates,
             streamdeck_run_diagnostics,
