@@ -38,7 +38,7 @@
         "center": true,
         "devtools": true,
         "zoomHotkeysEnabled": true,
-        "proxyUrl": null
+        "proxyUrl": null,
       }
     ],
     "withGlobalTauri": true

@@ -74,5 +74,8 @@
     "core:webview:allow-webview-size",
     "core:webview:allow-webview-close",
     "core:webview:allow-internal-toggle-devtools"
-  ]
+  ],
+  "webview": {
+    "dragDropEnabled": true
+  }
 }
