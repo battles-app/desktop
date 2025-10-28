@@ -30,6 +30,7 @@
         "theme": "Dark",
         "title": "BattlesDesktop",
         "titleBarStyle": "Overlay",
+        "dragDropEnabled": true,
         "transparent": true,
         "url": "https://local.battles.app:3000/",
         "visible": true,
