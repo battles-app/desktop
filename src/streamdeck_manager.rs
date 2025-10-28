@@ -8,6 +8,7 @@ use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut, draw_filled_circle
 use imageproc::rect::Rect;
 use ab_glyph::{FontRef, PxScale};
 use std::path::PathBuf;
+use base64::{Engine as _, engine::general_purpose};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ButtonType {
@@ -595,15 +596,21 @@ impl StreamDeckManager {
             self.stop_loading_animation();
         }
         
-        // Build image cache for fast lookups
+        // Download/decode images first (base64 is synchronous, HTTP is async)
+        for (_idx, fx) in &fx_buttons {
+            self.download_image_to_cache(fx);
+        }
+        
+        // Build image cache for fast lookups AFTER decoding base64 images
         self.image_cache.clear();
         for (_idx, fx) in &fx_buttons {
             let cache_key = format!("{}_{}", fx.id, fx.name);
             if let Some(cached_path) = self.find_cached_image_internal(&cache_key) {
-                self.image_cache.insert(cache_key, cached_path);
+                self.image_cache.insert(cache_key.clone(), cached_path.clone());
+                crate::file_logger::log(&format!("[StreamDeck] 📂 Cached image found for {}: {}", fx.name, cached_path.display()));
+            } else {
+                crate::file_logger::log(&format!("[StreamDeck] ❌ No cached image for {} (ID: {})", fx.name, fx.id));
             }
-            // Download if not cached (non-blocking)
-            self.download_image_to_cache(fx);
         }
         
         // Clear and resize button layout
@@ -846,9 +853,9 @@ impl StreamDeckManager {
         None
     }
     
-    /// Download image from Nuxt proxy, cache it, and trigger re-render
+    /// Download image from Nuxt proxy OR decode base64 synchronously, cache it
     fn download_image_to_cache(&self, fx_button: &FxButton) {
-        crate::file_logger::log(&format!("[StreamDeck] 📥 Starting download for: {} (id: {})", 
+        crate::file_logger::log(&format!("[StreamDeck] 📥 Processing image for: {} (id: {})", 
             fx_button.name, fx_button.id));
         
         if fx_button.image_url.is_none() {
@@ -857,46 +864,41 @@ impl StreamDeckManager {
         }
         
         let cache_dir = Self::get_cache_dir();
-        crate::file_logger::log(&format!("[StreamDeck]   Cache directory: {}", cache_dir.display()));
         
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
             crate::file_logger::log(&format!("[StreamDeck]   ❌ Failed to create cache directory: {}", e));
             return;
         }
         
-        crate::file_logger::log(&format!("[StreamDeck]   ✅ Cache directory ready"));
+        let image_url = fx_button.image_url.as_ref().unwrap();
         
         // Cache filename: Try to preserve extension from URL or default to .jpg
-        let extension = if let Some(url) = &fx_button.image_url {
-            if url.contains(".webp") {
-                "webp"
-            } else if url.contains(".png") {
-                "png"
-            } else if url.contains(".avif") {
-                "avif"
-            } else {
-                "jpg"
-            }
+        let extension = if image_url.starts_with("data:image/") {
+            "png" // Base64 images are typically PNG
+        } else if image_url.contains(".webp") {
+            "webp"
+        } else if image_url.contains(".png") {
+            "png"
+        } else if image_url.contains(".avif") {
+            "avif"
         } else {
             "jpg"
         };
+        
         // IMPORTANT: Use ID in cache filename to prevent collisions between global and user FX with same name!
-        // e.g., "global_21_snipe.jpg" vs "user_5_snipe.jpg"
         let cache_filename = format!("{}_{}.{}", fx_button.id, fx_button.name, extension);
         let cache_path = cache_dir.join(&cache_filename);
         
         // Delete old cached files with different extensions FIRST
-        // Also delete OLD FORMAT files (without ID prefix) for migration
         let all_extensions = vec!["webp", "jpg", "jpeg", "png", "avif", "gif"];
         for old_ext in all_extensions {
             if old_ext != extension {
-                // Delete new format with different extension: global_21_snipe.png when global_21_snipe.jpg is requested
                 let old_cache_path = cache_dir.join(format!("{}_{}.{}", fx_button.id, fx_button.name, old_ext));
                 if old_cache_path.exists() {
                     let _ = std::fs::remove_file(&old_cache_path);
                 }
             }
-            // ALSO delete old format WITHOUT ID prefix for migration: snipe.jpg -> global_21_snipe.jpg
+            // ALSO delete old format WITHOUT ID prefix for migration
             let legacy_cache_path = cache_dir.join(format!("{}.{}", fx_button.name, old_ext));
             if legacy_cache_path.exists() {
                 let _ = std::fs::remove_file(&legacy_cache_path);
@@ -909,15 +911,47 @@ impl StreamDeckManager {
             return;
         }
         
-        crate::file_logger::log(&format!("[StreamDeck]   🌐 Starting HTTP download..."));
+        // Handle base64 data URLs SYNCHRONOUSLY (fast, no network)
+        if image_url.starts_with("data:image/") {
+            crate::file_logger::log(&format!("[StreamDeck]   📊 Decoding base64 data for {}", fx_button.name));
+            
+            // Extract base64 data after "data:image/png;base64," or similar
+            if let Some(comma_pos) = image_url.find(',') {
+                let base64_data = &image_url[comma_pos + 1..];
+                
+                // Decode base64
+                match general_purpose::STANDARD.decode(base64_data) {
+                    Ok(bytes) => {
+                        crate::file_logger::log(&format!("[StreamDeck]   ✅ Decoded {} bytes", bytes.len()));
+                        
+                        // Write to cache file
+                        match std::fs::write(&cache_path, &bytes) {
+                            Ok(_) => {
+                                crate::file_logger::log(&format!("[StreamDeck]   ✅ Cached to: {}", cache_path.display()));
+                            }
+                            Err(e) => {
+                                crate::file_logger::log(&format!("[StreamDeck]   ❌ Failed to write: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        crate::file_logger::log(&format!("[StreamDeck]   ❌ Failed to decode base64: {}", e));
+                    }
+                }
+            }
+            return;
+        }
         
-        // Download from Nuxt proxy (non-blocking in background)
-        let image_url = fx_button.image_url.clone().unwrap();
+        // HTTP downloads happen in background thread (slow, network required)
+        crate::file_logger::log(&format!("[StreamDeck]   🌐 Starting HTTP download in background..."));
+        
+        let image_url = image_url.clone();
         let name = fx_button.name.clone();
         let fx_id = fx_button.id.clone();
         let cache_path_clone = cache_path.clone();
         
         std::thread::spawn(move || {
+            
             // Use different base URL based on build mode
             #[cfg(debug_assertions)]
             let base_url = "https://battles.app";
