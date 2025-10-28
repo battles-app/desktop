@@ -2440,22 +2440,52 @@ fn main() {
             start_streamdeck_watcher(app_handle.clone());
             println!("[Stream Deck] Watcher started");
             
-            // Optimize main window for GPU efficiency
+            // DISABLED: GPU optimization was blocking all input events (keyboard, mouse, drag-drop)
+            // The transform: translateZ(0) creates a compositing layer that intercepts pointer events
+            // TODO: Find a way to optimize GPU without breaking WebView2 input
+            // if let Some(window) = app.get_webview_window("main") {
+            //     let _ = window.eval(r#"
+            //         if (window.requestIdleCallback) {
+            //             window.requestIdleCallback(() => {
+            //                 document.body.style.willChange = 'auto';
+            //                 document.body.style.transform = 'translateZ(0)';
+            //             });
+            //         }
+            //         console.log('[GPU Optimization] Applied rendering optimizations');
+            //     "#);
+            // }
+            
+            // FIX: Ensure WebView2 can receive keyboard input and drag-drop events
             if let Some(window) = app.get_webview_window("main") {
-                // Evaluate JS to optimize rendering and reduce GPU usage
+                // Give the window focus first
+                let _ = window.set_focus();
+                
+                // Inject JavaScript to ensure the page can receive keyboard and drag events
                 let _ = window.eval(r#"
-                    // Reduce unnecessary repaints and compositing
-                    if (window.requestIdleCallback) {
-                        window.requestIdleCallback(() => {
-                            // Disable CSS will-change on elements (reduces GPU layers)
-                            document.body.style.willChange = 'auto';
-                            
-                            // Force CPU rendering for static content
-                            document.body.style.transform = 'translateZ(0)';
-                        });
-                    }
-                    
-                    console.log('[GPU Optimization] Applied rendering optimizations');
+                    (function() {
+                        console.log('[WebView Fix] Enabling keyboard input and drag-drop...');
+                        
+                        // Ensure body and document are focusable
+                        document.body.setAttribute('tabindex', '0');
+                        
+                        // Focus the body to receive keyboard events
+                        if (document.readyState === 'loading') {
+                            document.addEventListener('DOMContentLoaded', function() {
+                                setTimeout(function() {
+                                    document.body.focus();
+                                    console.log('[WebView Fix] ✅ Document focused, keyboard enabled');
+                                }, 100);
+                            });
+                        } else {
+                            document.body.focus();
+                            console.log('[WebView Fix] ✅ Document focused, keyboard enabled');
+                        }
+                        
+                        // Test keyboard listener
+                        window.addEventListener('keydown', function(e) {
+                            console.log('[WebView Fix] Keyboard event detected:', e.key);
+                        }, { once: true });
+                    })();
                 "#);
             }
             
