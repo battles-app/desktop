@@ -8,40 +8,8 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "useHttpsScheme": true,
-        "label": "main",
-        "acceptFirstMouse": true,
-        "alwaysOnTop": false,
-        "contentProtected": false,
-        "decorations": true,
-        "focus": true,
-        "fullscreen": false,
-        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
-        "width": 712,
-        "height": 1286,
-        "hiddenTitle": false,
-        "incognito": false,
-        "maxHeight": 2400,
-        "maxWidth": 2560,
-        "minHeight": 400,
-        "minWidth": 312,
-        "resizable": true,
-        "shadow": true,
-        "theme": "Dark",
-        "title": "BattlesDesktop",
-        "titleBarStyle": "Overlay",
-        "dragDropEnabled": true,
-        "transparent": true,
-        "url": "https://local.battles.app:3000/",
         "visible": true,
-        "center": true,
-        "windowEffects": {
-          "effects": [
-            "hudWindow",
-            "mica"
-          ],
-          "state": "active"
-        }
+        
       }
     ],
     "withGlobalTauri": true
