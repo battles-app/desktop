@@ -791,7 +791,7 @@ impl DmxManager {
             return Err("Device not connected".to_string());
         }
 
-        println!("[DMX] Sending to {}:{} → {:?}", universe, start_channel, data);
+        // println!("[DMX] Sending to {}:{} → {:?}", universe, start_channel, data);
 
         // Update internal DMX buffer
         {
@@ -809,7 +809,7 @@ impl DmxManager {
             "enttec_usb" | "enttec_usb_mk2" => self.send_enttec_usb_dmx(universe, &data)?,
             // Enttec ODE devices use Art-Net natively!
             "enttec_ode" | "enttec_ode_mk2" | "enttec_ode_mk3" => {
-                println!("[DMX] 📡 ODE Mk3 uses Art-Net protocol - sending Art-Net packet");
+                // println!("[DMX] 📡 ODE Mk3 uses Art-Net protocol - sending Art-Net packet");
                 self.send_artnet_dmx_to_ip(&device.port.as_ref().unwrap(), universe, start_channel, &data)?
             }
             "opendmx" | "serial" => self.send_serial_dmx(universe, &data)?,
@@ -974,7 +974,7 @@ impl DmxManager {
     fn send_dmxis_dmx(&self, _universe: u8, _data: &[u8]) -> Result<(), String> {
         // DMXIS uses a proprietary HID protocol
         // This would need the specific DMXIS protocol implementation
-        println!("[DMX] DMXIS DMX send not yet implemented");
+        // println!("[DMX] DMXIS DMX send not yet implemented");
         Ok(())
     }
 
@@ -1006,13 +1006,13 @@ impl DmxManager {
         packet.extend_from_slice(&full_data);
 
         let dest = format!("{}:6454", ip);
-        println!("[DMX] 📡 Art-Net: Sending {} bytes to {} (Universe {})", packet.len(), dest, universe);
-        println!("[DMX] 📡 Art-Net: First 20 channels → {:?}", &full_data[0..20.min(full_data.len())]);
+        // println!("[DMX] 📡 Art-Net: Sending {} bytes to {} (Universe {})", packet.len(), dest, universe);
+        // println!("[DMX] 📡 Art-Net: First 20 channels → {:?}", &full_data[0..20.min(full_data.len())]);
 
         socket.send_to(&packet, &dest)
             .map_err(|e| format!("Failed to send Art-Net packet: {}", e))?;
 
-        println!("[DMX] ✅ Art-Net packet sent successfully to ODE!");
+        // println!("[DMX] ✅ Art-Net packet sent successfully to ODE!");
         Ok(())
     }
 
@@ -1043,13 +1043,13 @@ impl DmxManager {
         packet.push((full_data.len() & 0xFF) as u8); // Length LSB
         packet.extend_from_slice(&full_data);
 
-        println!("[DMX] 📡 Art-Net: Broadcasting {} bytes to 255.255.255.255:6454 (Universe {})", packet.len(), universe);
-        println!("[DMX] 📡 Art-Net: First 10 channels → {:?}", &full_data[0..10.min(full_data.len())]);
+        // println!("[DMX] 📡 Art-Net: Broadcasting {} bytes to 255.255.255.255:6454 (Universe {})", packet.len(), universe);
+        // println!("[DMX] 📡 Art-Net: First 10 channels → {:?}", &full_data[0..10.min(full_data.len())]);
 
         socket.send_to(&packet, "255.255.255.255:6454")
             .map_err(|e| format!("Failed to send Art-Net packet: {}", e))?;
 
-        println!("[DMX] ✅ Art-Net packet sent successfully");
+        // println!("[DMX] ✅ Art-Net packet sent successfully");
         Ok(())
     }
 

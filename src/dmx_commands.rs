@@ -68,7 +68,7 @@ fn build_dmx_packet_from_mode(
         if let (Some(idx), Some(val)) = (mode.mode_channel_index, mode.mode_value_for_dmx) {
             if idx < packet.len() {
                 packet[idx] = val;
-                println!("[DMX Builder] Mode channel {} = {}", idx, val);
+                // println!("[DMX Builder] Mode channel {} = {}", idx, val);
             }
         }
     }
@@ -80,7 +80,7 @@ fn build_dmx_packet_from_mode(
     if let Some(idx) = mode.dimmer_channel_index {
         if idx < packet.len() {
             packet[idx] = intensity;
-            println!("[DMX Builder] Dimmer channel {} = {}", idx, intensity);
+            // println!("[DMX Builder] Dimmer channel {} = {}", idx, intensity);
         }
     }
     
@@ -88,7 +88,7 @@ fn build_dmx_packet_from_mode(
     if let Some(idx) = mode.strobe_channel_index {
         if idx < packet.len() {
             packet[idx] = 0;
-            println!("[DMX Builder] Strobe channel {} = 0", idx);
+            // println!("[DMX Builder] Strobe channel {} = 0", idx);
         }
     }
     
@@ -111,8 +111,8 @@ fn build_dmx_packet_from_mode(
         )
     };
     
-    println!("[DMX Builder] RGB: {} segments starting at channel {} (has_dimmer: {}, intensity: {})", 
-        segment_count, rgb_start, has_dimmer, intensity);
+    // println!("[DMX Builder] RGB: {} segments starting at channel {} (has_dimmer: {}, intensity: {})", 
+    //     segment_count, rgb_start, has_dimmer, intensity);
     
     for segment in 0..segment_count {
         let base_idx = rgb_start + (segment * 3);
@@ -120,8 +120,8 @@ fn build_dmx_packet_from_mode(
             packet[base_idx] = final_r;
             packet[base_idx + 1] = final_g;
             packet[base_idx + 2] = final_b;
-            println!("[DMX Builder] Segment {} → R:{} G:{} B:{} (original R:{} G:{} B:{})", 
-                segment, final_r, final_g, final_b, r, g, b);
+            // println!("[DMX Builder] Segment {} → R:{} G:{} B:{} (original R:{} G:{} B:{})", 
+            //     segment, final_r, final_g, final_b, r, g, b);
         }
     }
     
@@ -186,10 +186,10 @@ pub async fn set_dmx_rgb(
     
     // Build DMX packet using generic builder (works for ALL fixtures!)
     let data = if let Some(mode) = mode_data {
-        println!("[DMX Universal] Mode: {} ({} channels)", mode.name, mode.channels.len());
-        if pan.is_some() || tilt.is_some() {
-            println!("[DMX Universal] Moving head: Pan={:?}°, Tilt={:?}°", pan, tilt);
-        }
+        // println!("[DMX Universal] Mode: {} ({} channels)", mode.name, mode.channels.len());
+        // if pan.is_some() || tilt.is_some() {
+        //     println!("[DMX Universal] Moving head: Pan={:?}°, Tilt={:?}°", pan, tilt);
+        // }
         
         let channel_count = mode.channels.len();
         let mut packet = vec![0; channel_count];
@@ -199,7 +199,7 @@ pub async fn set_dmx_rgb(
             if let (Some(idx), Some(val)) = (mode.mode_channel_index, mode.mode_value_for_dmx) {
                 if idx < packet.len() {
                     packet[idx] = val;
-                    println!("[DMX Universal] Mode CH{} = {}", idx + 1, val);
+                    // println!("[DMX Universal] Mode CH{} = {}", idx + 1, val);
                 }
             }
         }
@@ -210,7 +210,7 @@ pub async fn set_dmx_rgb(
             if let Some(pan_idx) = mode.pan_channel_index {
                 if pan_idx < packet.len() {
                     packet[pan_idx] = pan_dmx;
-                    println!("[DMX Universal] Pan CH{} = {} ({}°)", pan_idx + 1, pan_dmx, pan_deg);
+                    // println!("[DMX Universal] Pan CH{} = {} ({}°)", pan_idx + 1, pan_dmx, pan_deg);
                 }
             }
         }
@@ -221,7 +221,7 @@ pub async fn set_dmx_rgb(
             if let Some(tilt_idx) = mode.tilt_channel_index {
                 if tilt_idx < packet.len() {
                     packet[tilt_idx] = tilt_dmx;
-                    println!("[DMX Universal] Tilt CH{} = {} ({}°, full range)", tilt_idx + 1, tilt_dmx, tilt_deg);
+                    // println!("[DMX Universal] Tilt CH{} = {} ({}°, full range)", tilt_idx + 1, tilt_dmx, tilt_deg);
                 }
             }
         }
@@ -239,8 +239,8 @@ pub async fn set_dmx_rgb(
                     intensity_val
                 };
                 packet[idx] = dimmer_value;
-                println!("[DMX Universal] Dimmer CH{} = {} (inverted={})", 
-                    idx + 1, dimmer_value, mode.invert_dimmer.unwrap_or(false));
+                // println!("[DMX Universal] Dimmer CH{} = {} (inverted={})", 
+                //     idx + 1, dimmer_value, mode.invert_dimmer.unwrap_or(false));
             }
         }
         
@@ -269,10 +269,10 @@ pub async fn set_dmx_rgb(
             )
         };
         
-        println!("[DMX Universal] RGB: {} segments at CH{} (dimmer={}, intensity={}, has_dimmer={})", 
-            segment_count, rgb_start + 1, has_dimmer, intensity_val, has_dimmer);
-        println!("[DMX Universal] RGB Input: R:{} G:{} B:{}", r, g, b);
-        println!("[DMX Universal] RGB Final: R:{} G:{} B:{}", final_r, final_g, final_b);
+        // println!("[DMX Universal] RGB: {} segments at CH{} (dimmer={}, intensity={}, has_dimmer={})", 
+        //     segment_count, rgb_start + 1, has_dimmer, intensity_val, has_dimmer);
+        // println!("[DMX Universal] RGB Input: R:{} G:{} B:{}", r, g, b);
+        // println!("[DMX Universal] RGB Final: R:{} G:{} B:{}", final_r, final_g, final_b);
         
         for segment in 0..segment_count {
             let base_idx = rgb_start + (segment * 3);
@@ -280,15 +280,15 @@ pub async fn set_dmx_rgb(
                 packet[base_idx] = final_r;
                 packet[base_idx + 1] = final_g;
                 packet[base_idx + 2] = final_b;
-                println!("[DMX Universal] Segment {} → packet[{}]={} packet[{}]={} packet[{}]={} (CH{}-{} → R:{} G:{} B:{})", 
-                    segment, 
-                    base_idx, final_r, 
-                    base_idx + 1, final_g, 
-                    base_idx + 2, final_b,
-                    base_idx + 1, base_idx + 3, 
-                    final_r, final_g, final_b);
+                // println!("[DMX Universal] Segment {} → packet[{}]={} packet[{}]={} packet[{}]={} (CH{}-{} → R:{} G:{} B:{})", 
+                //     segment, 
+                //     base_idx, final_r, 
+                //     base_idx + 1, final_g, 
+                //     base_idx + 2, final_b,
+                //     base_idx + 1, base_idx + 3, 
+                //     final_r, final_g, final_b);
             } else {
-                println!("[DMX Universal] ⚠️ Segment {} SKIPPED: base_idx={}, packet.len()={}", segment, base_idx, packet.len());
+                // println!("[DMX Universal] ⚠️ Segment {} SKIPPED: base_idx={}, packet.len()={}", segment, base_idx, packet.len());
             }
         }
         
@@ -308,7 +308,7 @@ pub async fn set_dmx_rgb(
                         intensity_val
                     };
                     packet[white_idx] = white_value;
-                    println!("[DMX Universal] White CH{} = {} (White mode)", white_idx + 1, white_value);
+                    // println!("[DMX Universal] White CH{} = {} (White mode)", white_idx + 1, white_value);
                     
                     // Turn off RGB when using white
                     for segment in 0..segment_count {
@@ -322,7 +322,7 @@ pub async fn set_dmx_rgb(
                 } else {
                     // Using RGB colors - turn off white
                     packet[white_idx] = 0;
-                    println!("[DMX Universal] White CH{} = 0 (RGB mode)", white_idx + 1);
+                    // println!("[DMX Universal] White CH{} = 0 (RGB mode)", white_idx + 1);
                 }
             }
         }
@@ -335,7 +335,7 @@ pub async fn set_dmx_rgb(
                 let warm_component = (r as u16 + g as u16) / 2; // Average of R and G for warm
                 let warm_value = ((warm_component * intensity_val as u16) / 255) as u8;
                 packet[ww_idx] = warm_value;
-                println!("[DMX Universal] Warm White CH{} = {} (R:{} G:{})", ww_idx + 1, warm_value, r, g);
+                // println!("[DMX Universal] Warm White CH{} = {} (R:{} G:{})", ww_idx + 1, warm_value, r, g);
             }
         }
         
@@ -346,7 +346,7 @@ pub async fn set_dmx_rgb(
                 let cold_component = b;
                 let cold_value = ((cold_component as u16 * intensity_val as u16) / 255) as u8;
                 packet[cw_idx] = cold_value;
-                println!("[DMX Universal] Cold White CH{} = {} (B:{})", cw_idx + 1, cold_value, b);
+                // println!("[DMX Universal] Cold White CH{} = {} (B:{})", cw_idx + 1, cold_value, b);
             }
         }
         
@@ -362,19 +362,19 @@ pub async fn set_dmx_rgb(
                 };
                 let amber_value = ((amber_component as u16 * intensity_val as u16) / 255) as u8;
                 packet[amber_idx] = amber_value;
-                println!("[DMX Universal] Amber CH{} = {} (R:{} G:{})", amber_idx + 1, amber_value, r, g);
+                // println!("[DMX Universal] Amber CH{} = {} (R:{} G:{})", amber_idx + 1, amber_value, r, g);
             }
         }
         
         packet
     } else {
         // Fallback for simple RGB fixtures (3 channels)
-        println!("[DMX Universal] Fallback: simple 3-channel RGB");
+        // println!("[DMX Universal] Fallback: simple 3-channel RGB");
         vec![r, g, b]
     };
     
-    println!("[DMX Universal] ✅ Sending {} bytes to {}:{}", data.len(), universe, start_channel);
-    println!("[DMX Universal] 📦 Packet: {:?}", data);
+    // println!("[DMX Universal] ✅ Sending {} bytes to {}:{}", data.len(), universe, start_channel);
+    // println!("[DMX Universal] 📦 Packet: {:?}", data);
     
     DMX_MANAGER.send_dmx(universe, start_channel, &data)
 }
@@ -412,8 +412,8 @@ pub async fn set_dmx_pan_tilt(
     let pan_dmx = ((pan as f32 / 540.0) * 255.0) as u8;
     let tilt_dmx = ((tilt as f32 / 270.0) * 255.0) as u8;
     
-    println!("[DMX Pan/Tilt] Pan {}° → DMX {}, Tilt {}° → DMX {}", 
-             pan, pan_dmx, tilt, tilt_dmx);
+    // println!("[DMX Pan/Tilt] Pan {}° → DMX {}, Tilt {}° → DMX {}", 
+    //          pan, pan_dmx, tilt, tilt_dmx);
     
     // Build DMX packet
     let data = if let Some(mode) = mode_data {
@@ -433,7 +433,7 @@ pub async fn set_dmx_pan_tilt(
         if let Some(pan_idx) = mode.pan_channel_index {
             if pan_idx < packet.len() {
                 packet[pan_idx] = pan_dmx;
-                println!("[DMX Pan/Tilt] Pan channel {} = {}", pan_idx, pan_dmx);
+                // println!("[DMX Pan/Tilt] Pan channel {} = {}", pan_idx, pan_dmx);
             }
         }
         
@@ -441,18 +441,18 @@ pub async fn set_dmx_pan_tilt(
         if let Some(tilt_idx) = mode.tilt_channel_index {
             if tilt_idx < packet.len() {
                 packet[tilt_idx] = tilt_dmx;
-                println!("[DMX Pan/Tilt] Tilt channel {} = {}", tilt_idx, tilt_dmx);
+                // println!("[DMX Pan/Tilt] Tilt channel {} = {}", tilt_idx, tilt_dmx);
             }
         }
         
         packet
     } else {
         // Fallback: assume pan at channel 0, tilt at channel 1
-        println!("[DMX Pan/Tilt] Using fallback: pan ch 0, tilt ch 1");
+        // println!("[DMX Pan/Tilt] Using fallback: pan ch 0, tilt ch 1");
         vec![pan_dmx, tilt_dmx]
     };
     
-    println!("[DMX Pan/Tilt] Sending {} bytes to {}:{}", data.len(), universe, start_channel);
+    // println!("[DMX Pan/Tilt] Sending {} bytes to {}:{}", data.len(), universe, start_channel);
     DMX_MANAGER.send_dmx(universe, start_channel, &data)
 }
 
@@ -470,8 +470,8 @@ pub async fn set_dmx_complete(
     tilt: Option<u16>, // 0-270 degrees
     mode_data: Option<ModeData>
 ) -> Result<(), String> {
-    println!("[DMX Complete] Setting full fixture state: RGB({},{},{}) @ {}, Pan={:?}, Tilt={:?}", 
-             r, g, b, intensity, pan, tilt);
+    // println!("[DMX Complete] Setting full fixture state: RGB({},{},{}) @ {}, Pan={:?}, Tilt={:?}", 
+    //          r, g, b, intensity, pan, tilt);
     
     let data = if let Some(mode) = mode_data {
         let channel_count = mode.channels.len();
@@ -492,7 +492,7 @@ pub async fn set_dmx_complete(
             if let Some(pan_idx) = mode.pan_channel_index {
                 if pan_idx < packet.len() {
                     packet[pan_idx] = pan_dmx;
-                    println!("[DMX Complete] Pan channel {} = {} ({}°)", pan_idx, pan_dmx, pan_deg);
+                    // println!("[DMX Complete] Pan channel {} = {} ({}°)", pan_idx, pan_dmx, pan_deg);
                 }
             }
         }
@@ -502,7 +502,7 @@ pub async fn set_dmx_complete(
             if let Some(tilt_idx) = mode.tilt_channel_index {
                 if tilt_idx < packet.len() {
                     packet[tilt_idx] = tilt_dmx;
-                    println!("[DMX Complete] Tilt channel {} = {} ({}°)", tilt_idx, tilt_dmx, tilt_deg);
+                    // println!("[DMX Complete] Tilt channel {} = {} ({}°)", tilt_idx, tilt_dmx, tilt_deg);
                 }
             }
         }
@@ -514,7 +514,7 @@ pub async fn set_dmx_complete(
         if let Some(idx) = mode.dimmer_channel_index {
             if idx < packet.len() {
                 packet[idx] = intensity;
-                println!("[DMX Complete] Dimmer channel {} = {}", idx, intensity);
+                // println!("[DMX Complete] Dimmer channel {} = {}", idx, intensity);
             }
         }
         
@@ -541,7 +541,7 @@ pub async fn set_dmx_complete(
             )
         };
         
-        println!("[DMX Complete] RGB: {} segments starting at channel {}", segment_count, rgb_start);
+        // println!("[DMX Complete] RGB: {} segments starting at channel {}", segment_count, rgb_start);
         
         for segment in 0..segment_count {
             let base_idx = rgb_start + (segment * 3);
@@ -549,7 +549,7 @@ pub async fn set_dmx_complete(
                 packet[base_idx] = final_r;
                 packet[base_idx + 1] = final_g;
                 packet[base_idx + 2] = final_b;
-                println!("[DMX Complete] Segment {} → R:{} G:{} B:{}", segment, final_r, final_g, final_b);
+                // println!("[DMX Complete] Segment {} → R:{} G:{} B:{}", segment, final_r, final_g, final_b);
             }
         }
         
@@ -559,7 +559,7 @@ pub async fn set_dmx_complete(
         vec![r, g, b]
     };
     
-    println!("[DMX Complete] Sending {} bytes to {}:{}", data.len(), universe, start_channel);
+    // println!("[DMX Complete] Sending {} bytes to {}:{}", data.len(), universe, start_channel);
     DMX_MANAGER.send_dmx(universe, start_channel, &data)
 }
 
@@ -578,8 +578,8 @@ pub async fn dmx_automation_frame(
     // TODO: We need to look up the light's DMX address, universe, and mode_data
     // For now, this is a placeholder that shows the architecture
     
-    println!("[DMX Automation] Frame for {}: RGB({},{},{}) @ {}", 
-        light_id, r, g, b, intensity);
+    // println!("[DMX Automation] Frame for {}: RGB({},{},{}) @ {}", 
+    //     light_id, r, g, b, intensity);
     
     Ok(())
 }
