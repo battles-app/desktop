@@ -20,7 +20,7 @@ pub enum ButtonType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ButtonPressEvent {
-    FxPressed { fx_id: String, is_playing: bool },
+    FxPressed { fx_id: String, is_playing: bool, item_type: String },
     TvMonitorToggle,
     VideoToggle { is_playing: bool },
     VideoLoopBrowse { direction: i32, loop_index: usize }, // direction: 1 for up, -1 for down
@@ -33,6 +33,7 @@ pub struct FxButton {
     pub image_url: Option<String>,
     pub is_global: bool, // true for battle board, false for user FX
     pub position: usize, // Original position in the list
+    pub item_type: String, // NEW: "battle_fx", "user_fx", "video_loop", "dmx_scene", "dmx_automation"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1051,6 +1052,7 @@ impl StreamDeckManager {
                         image_url: None,
                         is_global: false,
                         position: row,
+                        item_type: "control".to_string(), // Legacy control button
                     }));
                 }
             }
@@ -1732,11 +1734,12 @@ impl StreamDeckManager {
                 entry.is_playing = !entry.is_playing;
                 let new_state = entry.is_playing;
                 let fx_id = fx_button.id.clone();
+                let item_type = fx_button.item_type.clone();
                 
                 // DON'T update visual here - let frontend control it via set_button_state
                 // This prevents double-rendering (once here, once when frontend calls set_button_state)
                 
-                Some(ButtonPressEvent::FxPressed { fx_id, is_playing: new_state })
+                Some(ButtonPressEvent::FxPressed { fx_id, is_playing: new_state, item_type })
             }
             ButtonType::TvMonitorControl => {
                 Some(ButtonPressEvent::TvMonitorToggle)

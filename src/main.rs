@@ -1934,6 +1934,7 @@ async fn streamdeck_sync_mappings(
                     image_url: if mapping.image_url.is_empty() { None } else { Some(mapping.image_url) },
                     is_global: mapping.item_type == "battle_fx",
                     position: button_index,
+                    item_type: mapping.item_type.clone(),
                 }
             ));
         }
@@ -2154,21 +2155,23 @@ fn start_streamdeck_watcher(app: tauri::AppHandle) {
                                     use crate::streamdeck_manager::ButtonPressEvent;
                                     
                                     match event {
-                                        ButtonPressEvent::FxPressed { fx_id, is_playing } => {
+                                        ButtonPressEvent::FxPressed { fx_id, is_playing, item_type } => {
                                             // PERFORMANCE: Minimal logging in hot path
-                                            println!("[SD] BTN{}: {} {}", button_idx, fx_id, if is_playing { "▶" } else { "⏹" });
+                                            println!("[SD] BTN{}: {} {} [{}]", button_idx, fx_id, if is_playing { "▶" } else { "⏹" }, item_type);
                                             
                                             #[derive(Clone, serde::Serialize)]
                                             struct FxButtonPressEvent {
                                                 fx_id: String,
                                                 is_playing: bool,
                                                 button_idx: u8,
+                                                item_type: String,
                                             }
                                             
                                             let event_payload = FxButtonPressEvent {
                                                 fx_id: fx_id.clone(),
                                                 is_playing,
                                                 button_idx,
+                                                item_type: item_type.clone(),
                                             };
                                             
                                             // Fire and forget - no logging for performance
