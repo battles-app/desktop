@@ -837,21 +837,26 @@ async fn create_monitor_window(
     let parsed_url = url.parse()
         .map_err(|e| format!("Failed to parse URL '{}': {}", url, e))?;
     
-    // Use WebviewWindowBuilder which supports URL in Tauri v2
-    crate::file_logger::log("[TV Monitor]   Building window...");
+    // 🔥 EMERGENCY FIX: Build window HIDDEN first, then show after it's ready
+    // This prevents the UI from freezing while the page loads
+    crate::file_logger::log("[TV Monitor]   Building window (hidden initially)...");
     
-    let window = tauri::webview::WebviewWindowBuilder::new(&app, "tv-monitor", tauri::WebviewUrl::External(parsed_url))
+    let window = tauri::webview::WebviewWindowBuilder::new(
+        &app, 
+        "tv-monitor", 
+        tauri::WebviewUrl::External(parsed_url)
+    )
         .title("TV Monitor - Battles.app")
-        .inner_size(physical_width, physical_height) // Use physical pixels for correct fullscreen on high-DPI
-        .position(physical_x, physical_y) // Use physical pixels for reliable Windows positioning
-        .decorations(false) // Borderless
-        .resizable(false)   // Fixed size
-        .always_on_top(true) // Above all other windows
-        .visible(true)      // ✅ Start VISIBLE (was false)
-        .fullscreen(false)   // Use borderless window (not true fullscreen)
-        .skip_taskbar(false) // Show in taskbar for easy access
-        .transparent(false)  // 🚀 NO transparency = massive GPU savings
-        .shadow(false)       // 🔧 NO shadow = pixel-perfect positioning!
+        .inner_size(physical_width, physical_height)
+        .position(physical_x, physical_y)
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .visible(false)  // 🔥 Start HIDDEN to prevent freeze!
+        .fullscreen(false)
+        .skip_taskbar(false)
+        .transparent(false)
+        .shadow(false)
         .build()
         .map_err(|e| {
             let error_msg = format!("Failed to build monitor window: {}", e);
@@ -859,7 +864,22 @@ async fn create_monitor_window(
             error_msg
         })?;
     
-    crate::file_logger::log("[TV Monitor]   ✅ Window built successfully");
+    crate::file_logger::log("[TV Monitor]   ✅ Window built successfully (hidden)");
+    
+    // Show window in a separate task to avoid blocking
+    let window_clone = window.clone();
+    tauri::async_runtime::spawn(async move {
+        // Wait a moment for webview to initialize
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        
+        crate::file_logger::log("[TV Monitor]   📺 Showing window now...");
+        
+        // Show the window
+        let _ = window_clone.show();
+        let _ = window_clone.set_focus();
+        
+        crate::file_logger::log("[TV Monitor]   ✅ Window shown");
+    });
     
     // CRITICAL: Wait for window to be registered in Tauri's window manager
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -878,27 +898,9 @@ async fn create_monitor_window(
         }
     });
 
-    // Window was created with visible(true), now just ensure it's on top and focused
-    // Verify initial visibility
-    if let Ok(false) = window.is_visible() {
-        window.show().map_err(|e| format!("Failed to show window: {}", e))?;
-    }
-    
-    // Unminimize if somehow minimized
-    if let Ok(is_minimized) = window.is_minimized() {
-        if is_minimized {
-            window.unminimize().map_err(|e| format!("Failed to unminimize: {}", e))?;
-        }
-    }
-    
-    // Set focus to bring window to front
-    window.set_focus().map_err(|e| format!("Failed to focus window: {}", e))?;
-    
-    // Final visibility check
-    if let Ok(false) = window.is_visible() {
-        window.show().map_err(|e| format!("Failed to show window (final): {}", e))?;
-    }
-
+    // 🔥 CRITICAL: Return immediately! Window will show itself asynchronously
+    // This prevents the entire app from freezing while waiting for the webview to load
+    crate::file_logger::log("[TV Monitor]   ✅ Returning (window will show in background)");
     Ok(())
 }
 
