@@ -1,11 +1,11 @@
 {
-  "version": "0.0.63",
+  "version": "0.0.67",
   "notes": "### 🚀 Improvements  • Bug fixes and performance improvements...",
-  "pub_date": "2025-10-28T21:04:03.774Z",
+  "pub_date": "2025-10-29T20:22:33.901Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT3JLTlo1aHJLZWJybFA3T0pxczF3SDZTOTNndDFtS0hYNEZMRGFlUEVXSnV3MXJZd2l6SWRTUlRKallRdnhQbklaWmkxd3VhclNpRXFjV1dPYUJWRXc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYxNjg1NDQxCWZpbGU6QmF0dGxlc0Rlc2t0b3BfMC4wLjYzX3g2NC1zZXR1cC5leGUKMWZ1MFE5YWNWL1BGZnY3MUE5ODQxa0ZhUXBlN0Z3bmlSLzNJSkNKUTBmR1FPa3lCaVpwcHZUNlp0bGUyVVFTRkh0QTBBb1J6bFp3UVdmS3hHUGlNQ3c9PQo=",
-      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.63/BattlesDesktop_0.0.63_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSTzlBMUNicmVuT3BPczZJYng2S28xajJBUm5FeXB6N1hJTkt3SHEvSlAvenVMandPb2ZlSmx1cnc4R1NSSTRQUmVxeFM1YWk1RitLRmpoTEMrbExJR1hDNUdlbWpUTndBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzYxNzY5MzM2CWZpbGU6QmF0dGxlc0Rlc2t0b3BfMC4wLjY3X3g2NC1zZXR1cC5leGUKRWxpcHZIRzQvUUFleHVNcVpDT3RWcTcrK29veXRsYU5Pc0lNYUg0bGNRVnB1M1JiUGtRVmZKZzJiUWlLRWk0L084ZXlRSnNGaklEcnZkTnhFaHYyRFE9PQo=",
+      "url": "https://github.com/battles-app/desktop/releases/download/v0.0.67/BattlesDesktop_0.0.67_x64-setup.exe"
     }
   }
 }

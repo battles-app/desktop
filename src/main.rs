@@ -708,9 +708,43 @@ async fn check_tv_monitor_window(app: tauri::AppHandle) -> Result<serde_json::Va
 // Close TV monitor window (completely destroy it)
 #[command]
 async fn close_tv_monitor_window(app: tauri::AppHandle) -> Result<(), String> {
+    crate::file_logger::log("[TV Monitor] 🔴 close_tv_monitor_window() called");
+    
     if let Some(window) = app.get_webview_window("tv-monitor") {
-        window.close().map_err(|e| format!("Failed to close window: {}", e))?;
+        crate::file_logger::log("[TV Monitor]   ✅ Found TV monitor window, attempting to close...");
+        
+        // Try close first
+        match window.close() {
+            Ok(_) => {
+                crate::file_logger::log("[TV Monitor]   ✅ Window closed successfully");
+            }
+            Err(e) => {
+                crate::file_logger::log(&format!("[TV Monitor]   ⚠️ Close failed: {}, trying destroy...", e));
+                // If close fails, force destroy
+                window.destroy().map_err(|e2| {
+                    let error_msg = format!("Failed to destroy window: {}", e2);
+                    crate::file_logger::log(&format!("[TV Monitor]   ❌ {}", error_msg));
+                    error_msg
+                })?;
+                crate::file_logger::log("[TV Monitor]   ✅ Window destroyed successfully");
+            }
+        }
+        
+        // Wait a bit to ensure window is fully destroyed
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        
+        // Verify window is gone
+        if app.get_webview_window("tv-monitor").is_some() {
+            let error_msg = "Window still exists after close/destroy attempt".to_string();
+            crate::file_logger::log(&format!("[TV Monitor]   ❌ {}", error_msg));
+            return Err(error_msg);
+        }
+        
+        crate::file_logger::log("[TV Monitor]   ✅ Verified: Window successfully removed");
+    } else {
+        crate::file_logger::log("[TV Monitor]   ℹ️ No TV monitor window found (already closed?)");
     }
+    
     Ok(())
 }
 
