@@ -33,7 +33,7 @@
         "titleBarStyle": "Visible",
         "dragDropEnabled": false,
         "transparent": false,
-        "url": "https://battles.app",
+        "url": "https://battles.app/",
         "visible": true,
         "center": true,
         "devtools": true,
@@ -44,7 +44,7 @@
     "withGlobalTauri": true
   },
   "build": {
-    "devUrl": "https://battles.app",
+    "devUrl": "https://battles.app/",
     "frontendDist": "../battles.app/dist"
   },
   "bundle": {
@@ -275,5 +275,5 @@
       ]
     }
   },
-  "version": "0.0.77"
+  "version": "0.0.80"
 }
