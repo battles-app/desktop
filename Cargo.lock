@@ -228,7 +228,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "battles-desktop"
-version = "0.0.81"
+version = "0.0.82"
 dependencies = [
  "ab_glyph",
  "artnet_protocol",
@@ -250,6 +250,7 @@ dependencies = [
  "image",
  "imageproc",
  "lazy_static",
+ "md5",
  "mdns-sd",
  "parking_lot",
  "pollster",
@@ -268,6 +269,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "ureq",
+ "url",
  "urlencoding",
  "wgpu",
  "windows 0.58.0",
@@ -3021,6 +3023,12 @@ dependencies = [
  "cfg-if 1.0.3",
  "rayon",
 ]
+
+[[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "mdns-sd"

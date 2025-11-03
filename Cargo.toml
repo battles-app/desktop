@@ -1,6 +1,6 @@
 [package]
 name = "battles-desktop"
-version = "0.0.81"
+version = "0.0.82"
 description = "Professional TikTok Live streaming tools with Elgato Stream Deck integration"
 authors = ["BATTLES.app™"]
 license = "BSL-1.1"
@@ -31,6 +31,8 @@ shared_memory = "0.12"
 chrono = "0.4"
 ureq = { version = "2.10", features = ["native-tls"] }
 reqwest = { version = "0.12", features = ["blocking"] }
+md5 = "0.7"
+url = "2.5"
 image = "0.25"
 elgato-streamdeck = "0.11.1"
 imageproc = "0.25"
