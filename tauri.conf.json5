@@ -34,7 +34,7 @@
         "dragDropEnabled": false,
         "transparent": false,
         "url": "https://battles.app",
-        "visible": true,
+        "visible": false,
         "center": true,
         "devtools": true,
         "zoomHotkeysEnabled": true,
@@ -275,5 +275,5 @@
       ]
     }
   },
-  "version": "0.0.87"
+  "version": "0.0.88"
 }
