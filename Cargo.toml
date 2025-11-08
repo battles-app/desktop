@@ -1,6 +1,6 @@
 [package]
 name = "battles-desktop"
-version = "0.0.90"
+version = "0.0.91"
 description = "Professional TikTok Live streaming tools with Elgato Stream Deck integration"
 authors = ["BATTLES.app™"]
 license = "BSL-1.1"
